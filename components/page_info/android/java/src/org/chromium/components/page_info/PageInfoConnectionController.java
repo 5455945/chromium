@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,36 +14,43 @@ import android.widget.FrameLayout;
 
 import androidx.annotation.ColorRes;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
+import org.chromium.components.browser_ui.styles.SemanticColorUtils;
 import org.chromium.components.omnibox.SecurityStatusIcon;
+import org.chromium.components.security_state.ConnectionMaliciousContentStatus;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
 import org.chromium.components.security_state.SecurityStateModel;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.ui.text.ChromeClickableSpan;
+import org.chromium.ui.text.SpanApplier;
+import org.chromium.ui.text.SpanApplier.SpanInfo;
 
-/**
- * Class for controlling the page info connection section.
- */
+/** Class for controlling the page info connection section. */
+@NullMarked
 public class PageInfoConnectionController
         implements PageInfoSubpageController, ConnectionInfoView.ConnectionInfoDelegate {
-    private PageInfoMainController mMainController;
+    private final PageInfoMainController mMainController;
     private final WebContents mWebContents;
     private final PageInfoRowView mRowView;
     private final PageInfoControllerDelegate mDelegate;
-    private final VrHandler mVrHandler;
-    private final String mContentPublisher;
+    private final @Nullable String mContentPublisher;
     private final boolean mIsInternalPage;
-    private String mTitle;
-    private ConnectionInfoView mInfoView;
-    private ViewGroup mContainer;
+    private @Nullable String mTitle;
+    private @Nullable ConnectionInfoView mInfoView;
+    private @Nullable ViewGroup mContainer;
 
-    public PageInfoConnectionController(PageInfoMainController mainController, PageInfoRowView view,
-            WebContents webContents, PageInfoControllerDelegate delegate, String publisher,
+    public PageInfoConnectionController(
+            PageInfoMainController mainController,
+            PageInfoRowView view,
+            WebContents webContents,
+            PageInfoControllerDelegate delegate,
+            @Nullable String publisher,
             boolean isInternalPage) {
         mMainController = mainController;
         mRowView = view;
         mWebContents = webContents;
         mDelegate = delegate;
-        mVrHandler = mDelegate.getVrHandler();
         mContentPublisher = publisher;
         mIsInternalPage = isInternalPage;
     }
@@ -54,22 +61,29 @@ public class PageInfoConnectionController
     }
 
     @Override
-    public String getSubpageTitle() {
+    public @Nullable String getSubpageTitle() {
         return mTitle;
     }
 
     @Override
     public View createViewForSubpage(ViewGroup parent) {
         mContainer = new FrameLayout(mRowView.getContext());
-        mInfoView =
-                ConnectionInfoView.create(mRowView.getContext(), mWebContents, this, mVrHandler);
+        mInfoView = ConnectionInfoView.create(mRowView.getContext(), mWebContents, this);
+        return mContainer;
+    }
+
+    @Override
+    public @Nullable View getCurrentSubpageView() {
         return mContainer;
     }
 
     @Override
     public void onSubpageRemoved() {
         mContainer = null;
-        mInfoView.onDismiss();
+        if (mInfoView != null) {
+            mInfoView.onDismiss();
+            mInfoView = null;
+        }
     }
 
     private static @ColorRes int getSecurityIconColor(@ConnectionSecurityLevel int securityLevel) {
@@ -79,7 +93,6 @@ public class PageInfoConnectionController
             case ConnectionSecurityLevel.WARNING:
                 return R.color.default_text_color_error;
             case ConnectionSecurityLevel.NONE:
-            case ConnectionSecurityLevel.SECURE_WITH_POLICY_INSTALLED_CERT:
             case ConnectionSecurityLevel.SECURE:
                 return 0;
             default:
@@ -88,49 +101,82 @@ public class PageInfoConnectionController
         }
     }
 
-    /**
-     * Whether to show a 'Details' link to the connection info popup.
-     */
+    /** Whether to show a 'Details' link to the connection info popup. */
     private boolean isConnectionDetailsLinkVisible() {
         // If Paint Preview is being shown, it completely obstructs the WebContents and users
         // cannot interact with it. Hence, showing connection details is not relevant.
-        return mContentPublisher == null && !mDelegate.isShowingOfflinePage()
-                && !mDelegate.isShowingPaintPreviewPage() && !mIsInternalPage;
+        return mContentPublisher == null
+                && !mDelegate.isShowingOfflinePage()
+                && !mDelegate.isShowingPaintPreviewPage()
+                && mDelegate.getPdfPageType() == 0
+                && !mIsInternalPage;
     }
 
     /**
-     * Sets the connection security summary and detailed description strings. These strings may be
-     * overridden based on the state of the Android UI.
+     * Sets the connection security summary and detailed description strings.
+     *
+     * @param summary Security summary message.
+     * @param details Security details message.
+     * @param isSuspiciousSite Whether this security description is for a suspicious site warning.
      */
-    public void setSecurityDescription(String summary, String details) {
+    public void setSecurityDescription(String summary, String details, boolean isSuspiciousSite) {
         // Display the appropriate connection message.
         SpannableStringBuilder messageBuilder = new SpannableStringBuilder();
         CharSequence title = null;
         CharSequence subtitle = null;
         boolean hasClickCallback;
+        boolean hasLinkTags = details.contains("<link>") && details.contains("</link>");
 
         assert mRowView.getContext() != null;
         if (mContentPublisher != null) {
-            messageBuilder.append(mRowView.getContext().getString(
-                    R.string.page_info_domain_hidden, mContentPublisher));
+            messageBuilder.append(
+                    mRowView.getContext()
+                            .getString(R.string.page_info_domain_hidden, mContentPublisher));
         } else if (mDelegate.isShowingPaintPreviewPage()) {
             messageBuilder.append(mDelegate.getPaintPreviewPageConnectionMessage());
         } else if (mDelegate.getOfflinePageConnectionMessage() != null) {
             messageBuilder.append(mDelegate.getOfflinePageConnectionMessage());
+        } else if (mDelegate.getPdfPageType() != 0) {
+            messageBuilder.append(mDelegate.getPdfPageConnectionMessage());
         } else {
             if (!summary.isEmpty()) {
                 title = summary;
             }
-            messageBuilder.append(details);
+            if (hasLinkTags) {
+                CharSequence textWithSpans = null;
+                if (isSuspiciousSite) {
+                    SpanInfo spanInfo =
+                            new SpanInfo(
+                                    "<link>",
+                                    "</link>",
+                                    new ChromeClickableSpan(
+                                            mRowView.getContext(),
+                                            (view) ->
+                                                    mMainController.openSafeBrowsingHelpCenter()));
+                    try {
+                        textWithSpans = SpanApplier.applySpans(details, spanInfo);
+                    } catch (IllegalArgumentException e) {
+                        textWithSpans = null;
+                    }
+                }
+                if (textWithSpans != null) {
+                    messageBuilder.append(textWithSpans);
+                } else {
+                    messageBuilder.append(details.replace("<link>", "").replace("</link>", ""));
+                }
+            } else {
+                messageBuilder.append(details);
+            }
         }
 
-        if (isConnectionDetailsLinkVisible() && messageBuilder.length() > 0) {
+        boolean hasDetailsLink = hasLinkTags && isSuspiciousSite;
+        if (!hasDetailsLink && isConnectionDetailsLinkVisible() && messageBuilder.length() > 0) {
             messageBuilder.append(" ");
             SpannableString detailsText =
                     new SpannableString(mRowView.getContext().getString(R.string.details_link));
             final ForegroundColorSpan blueSpan =
-                    new ForegroundColorSpan(ApiCompatibilityUtils.getColor(
-                            mRowView.getContext().getResources(), R.color.default_text_color_link));
+                    new ForegroundColorSpan(
+                            SemanticColorUtils.getDefaultTextColorLink(mRowView.getContext()));
             detailsText.setSpan(
                     blueSpan, 0, detailsText.length(), Spannable.SPAN_INCLUSIVE_EXCLUSIVE);
             messageBuilder.append(detailsText);
@@ -147,21 +193,40 @@ public class PageInfoConnectionController
     }
 
     private void setConnectionInfo(
-            CharSequence title, CharSequence subtitle, boolean hasClickCallback) {
+            @Nullable CharSequence title,
+            @Nullable CharSequence subtitle,
+            boolean hasClickCallback) {
         PageInfoRowView.ViewParams rowParams = new PageInfoRowView.ViewParams();
         mTitle = title != null ? title.toString() : null;
         rowParams.title = mTitle;
         rowParams.subtitle = subtitle;
         rowParams.visible = rowParams.title != null || rowParams.subtitle != null;
         int securityLevel = SecurityStateModel.getSecurityLevelForWebContents(mWebContents);
-        // Page info should always show lock icon as the connection security indicator.
-        rowParams.iconResId = SecurityStatusIcon.getSecurityIconResource(securityLevel,
-                /*isSmallDevice=*/false,
-                /*skipIconForNeutralState=*/false,
-                /*useUpdatedConnectionSecurityIndicators=*/false);
-        rowParams.iconTint = getSecurityIconColor(securityLevel);
+        boolean isShowingHttpsFirstWarning =
+                mDelegate.isHttpsFirstDialogUiEnabled()
+                        && SecurityStateModel.isHttpsOnlyModeUpgradedForWebContents(mWebContents);
+
+        int maliciousContentStatus =
+                SecurityStateModel.getMaliciousContentStatusForWebContents(mWebContents);
+        if (maliciousContentStatus == ConnectionMaliciousContentStatus.WARNABLE_SUSPICIOUS_SITE) {
+            rowParams.iconResId = R.drawable.page_info_shield_question;
+            rowParams.iconTint = R.color.default_text_color_error;
+            rowParams.titleTint = R.color.default_text_color_error;
+        } else {
+            rowParams.iconResId =
+                    SecurityStatusIcon.getSecurityIconResource(
+                            securityLevel,
+                            () -> maliciousContentStatus,
+                            /* isSmallDevice= */ false,
+                            /* skipIconForNeutralState= */ false,
+                            /* useLockIconForSecureState= */ true,
+                            isShowingHttpsFirstWarning);
+            rowParams.iconTint = getSecurityIconColor(securityLevel);
+            rowParams.titleTint = 0;
+        }
         if (hasClickCallback) rowParams.clickCallback = this::launchSubpage;
         mRowView.setParams(rowParams);
+        mMainController.updateConnectionWrapperVisibility();
     }
 
     @Override
@@ -178,4 +243,10 @@ public class PageInfoConnectionController
 
     @Override
     public void clearData() {}
+
+    @Override
+    public void updateRowIfNeeded() {}
+
+    @Override
+    public void updateSubpageIfNeeded() {}
 }

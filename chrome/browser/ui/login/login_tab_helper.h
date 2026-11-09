@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,16 +6,14 @@
 #define CHROME_BROWSER_UI_LOGIN_LOGIN_TAB_HELPER_H_
 
 #include "base/memory/weak_ptr.h"
-#include "content/public/browser/content_browser_client.h"
+#include "content/public/browser/login_delegate.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "net/base/auth.h"
-#include "net/base/network_isolation_key.h"
-#include "url/gurl.h"
+#include "net/base/network_anonymization_key.h"
 
 namespace content {
-class LoginDelegate;
 class NavigationHandle;
 class WebContents;
 }  // namespace content
@@ -28,15 +26,10 @@ class LoginHandler;
 class LoginTabHelper : public content::WebContentsObserver,
                        public content::WebContentsUserData<LoginTabHelper> {
  public:
-  ~LoginTabHelper() override;
+  LoginTabHelper(const LoginTabHelper&) = delete;
+  LoginTabHelper& operator=(const LoginTabHelper&) = delete;
 
-  std::unique_ptr<content::LoginDelegate> CreateAndStartMainFrameLoginDelegate(
-      const net::AuthChallengeInfo& auth_info,
-      content::WebContents* web_contents,
-      const content::GlobalRequestID& request_id,
-      const GURL& url,
-      scoped_refptr<net::HttpResponseHeaders> response_headers,
-      LoginAuthRequiredCallback auth_required_callback);
+  ~LoginTabHelper() override;
 
   // content::WebContentsObserver:
   void DidStartNavigation(
@@ -67,16 +60,21 @@ class LoginTabHelper : public content::WebContentsObserver,
   WillProcessMainFrameUnauthorizedResponse(
       content::NavigationHandle* navigation_handle);
 
+  void RegisterExtensionCancelledNavigation(
+      const content::GlobalRequestID& request_id);
+
+ protected:
+  explicit LoginTabHelper(content::WebContents* web_contents);
+  virtual std::unique_ptr<LoginHandler> CreateLoginHandler(
+      const net::AuthChallengeInfo& auth_info,
+      content::WebContents* web_contents,
+      content::LoginDelegate::LoginAuthRequiredCallback auth_required_callback);
+
  private:
   friend class content::WebContentsUserData<LoginTabHelper>;
 
-  explicit LoginTabHelper(content::WebContents* web_contents);
-
   void HandleCredentials(
-      const absl::optional<net::AuthCredentials>& credentials);
-
-  void RegisterExtensionCancelledNavigation(
-      const content::GlobalRequestID& request_id);
+      const std::optional<net::AuthCredentials>& credentials);
 
   // When the user enters credentials into the login prompt, they are populated
   // in the auth cache and then page is reloaded to re-send the request with the
@@ -85,10 +83,9 @@ class LoginTabHelper : public content::WebContentsObserver,
   void Reload();
 
   std::unique_ptr<LoginHandler> login_handler_;
-  GURL url_for_login_handler_;
 
   net::AuthChallengeInfo challenge_;
-  net::NetworkIsolationKey network_isolation_key_;
+  net::NetworkAnonymizationKey network_anonymization_key_;
 
   // Stores the navigation entry ID for a pending refresh due to a user
   // cancelling a login prompt. This is set to the visible navigation entry ID
@@ -120,8 +117,6 @@ class LoginTabHelper : public content::WebContentsObserver,
   base::WeakPtrFactory<LoginTabHelper> weak_ptr_factory_{this};
 
   WEB_CONTENTS_USER_DATA_KEY_DECL();
-
-  DISALLOW_COPY_AND_ASSIGN(LoginTabHelper);
 };
 
 #endif  // CHROME_BROWSER_UI_LOGIN_LOGIN_TAB_HELPER_H_

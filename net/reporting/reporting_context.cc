@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/observer_list.h"
 #include "base/rand_util.h"
 #include "base/time/clock.h"
@@ -34,14 +34,18 @@ class ReportingContextImpl : public ReportingContext {
  public:
   ReportingContextImpl(const ReportingPolicy& policy,
                        URLRequestContext* request_context,
-                       ReportingCache::PersistentReportingStore* store)
-      : ReportingContext(policy,
-                         base::DefaultClock::GetInstance(),
-                         base::DefaultTickClock::GetInstance(),
-                         base::BindRepeating(&base::RandInt),
-                         ReportingUploader::Create(request_context),
-                         ReportingDelegate::Create(request_context),
-                         store) {}
+                       ReportingCache::PersistentReportingStore* store,
+                       ReportingUploader::PrepareUploadRequestCallback
+                           prepare_upload_request_callback)
+      : ReportingContext(
+            policy,
+            base::DefaultClock::GetInstance(),
+            base::DefaultTickClock::GetInstance(),
+            base::BindRepeating(&base::RandIntInclusive),
+            ReportingUploader::Create(request_context,
+                                      prepare_upload_request_callback),
+            ReportingDelegate::Create(request_context),
+            store) {}
 };
 
 }  // namespace
@@ -50,8 +54,11 @@ class ReportingContextImpl : public ReportingContext {
 std::unique_ptr<ReportingContext> ReportingContext::Create(
     const ReportingPolicy& policy,
     URLRequestContext* request_context,
-    ReportingCache::PersistentReportingStore* store) {
-  return std::make_unique<ReportingContextImpl>(policy, request_context, store);
+    ReportingCache::PersistentReportingStore* store,
+    ReportingUploader::PrepareUploadRequestCallback
+        prepare_upload_request_callback) {
+  return std::make_unique<ReportingContextImpl>(
+      policy, request_context, store, prepare_upload_request_callback);
 }
 
 ReportingContext::~ReportingContext() = default;
@@ -71,9 +78,25 @@ void ReportingContext::NotifyCachedReportsUpdated() {
     observer.OnReportsUpdated();
 }
 
+void ReportingContext::NotifyReportAdded(const ReportingReport* report) {
+  for (auto& observer : cache_observers_)
+    observer.OnReportAdded(report);
+}
+
+void ReportingContext::NotifyReportUpdated(const ReportingReport* report) {
+  for (auto& observer : cache_observers_)
+    observer.OnReportUpdated(report);
+}
+
 void ReportingContext::NotifyCachedClientsUpdated() {
   for (auto& observer : cache_observers_)
     observer.OnClientsUpdated();
+}
+
+void ReportingContext::NotifyEndpointsUpdatedForOrigin(
+    const std::vector<ReportingEndpoint>& endpoints) {
+  for (auto& observer : cache_observers_)
+    observer.OnEndpointsUpdatedForOrigin(endpoints);
 }
 
 bool ReportingContext::IsReportDataPersisted() const {

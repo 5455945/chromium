@@ -27,13 +27,17 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_HISTORY_ITEM_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_LOADER_HISTORY_ITEM_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include <optional>
+#include <string>
+
+#include "base/containers/flat_set.h"
 #include "third_party/blink/public/mojom/page_state/page_state.mojom-blink.h"
 #include "third_party/blink/public/platform/web_scroll_anchor_data.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/loader/frame_loader_types.h"
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/weborigin/referrer.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
@@ -42,7 +46,9 @@ namespace blink {
 class DocumentState;
 class EncodedFormData;
 class KURL;
+class PageState;
 class ResourceRequest;
+class SecurityOrigin;
 class SerializedScriptValue;
 
 namespace mojom {
@@ -51,15 +57,21 @@ enum class FetchCacheMode : int32_t;
 
 class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
  public:
+  static HistoryItem* Create(const PageState&);
+
   HistoryItem();
   ~HistoryItem();
 
   const String& UrlString() const;
   KURL Url() const;
 
-  const Referrer& GetReferrer() const;
+  const String& GetReferrer() const;
+  network::mojom::ReferrerPolicy GetReferrerPolicy() const;
 
-  EncodedFormData* FormData();
+  const String& Target() const { return target_; }
+
+  // TODO(dcheng): Try to make this const.
+  EncodedFormData* FormData() const;
   const AtomicString& FormContentType() const;
 
   class ViewState {
@@ -68,6 +80,7 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
    public:
     ViewState() = default;
     ViewState(const ViewState&) = default;
+    ViewState& operator=(const ViewState&) = default;
 
     ScrollOffset visual_viewport_scroll_offset_;
     ScrollOffset scroll_offset_;
@@ -75,7 +88,7 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
     ScrollAnchorData scroll_anchor_data_;
   };
 
-  const absl::optional<ViewState>& GetViewState() const { return view_state_; }
+  const std::optional<ViewState>& GetViewState() const { return view_state_; }
   void ClearViewState() { view_state_.reset(); }
   void CopyViewStateFrom(HistoryItem* other) {
     view_state_ = other->GetViewState();
@@ -85,15 +98,18 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
   void SetScrollOffset(const ScrollOffset&);
   void SetPageScaleFactor(float);
 
-  Vector<String> GetReferencedFilePaths();
-  const Vector<String>& GetDocumentState();
+  Vector<String> GetReferencedFilePaths() const;
+  const Vector<String>& GetDocumentState() const;
   void SetDocumentState(const Vector<String>&);
   void SetDocumentState(DocumentState*);
   void ClearDocumentState();
 
   void SetURL(const KURL&);
   void SetURLString(const String&);
-  void SetReferrer(const Referrer&);
+  void SetReferrer(const String&);
+  void SetRequestorOrigin(const scoped_refptr<const SecurityOrigin>&);
+  void SetReferrerPolicy(network::mojom::ReferrerPolicy);
+  void SetTarget(const String& target) { target_ = target; }
 
   void SetStateObject(scoped_refptr<SerializedScriptValue>);
   SerializedScriptValue* StateObject() const { return state_object_.get(); }
@@ -109,7 +125,7 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
   void SetScrollRestorationType(mojom::blink::ScrollRestorationType type) {
     scroll_restoration_type_ = type;
   }
-  mojom::blink::ScrollRestorationType ScrollRestorationType() {
+  mojom::blink::ScrollRestorationType ScrollRestorationType() const {
     return scroll_restoration_type_;
   }
 
@@ -120,27 +136,46 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
 
   ResourceRequest GenerateResourceRequest(mojom::FetchCacheMode);
 
-  const String& GetAppHistoryKey() const { return app_history_key_; }
-  void SetAppHistoryKey(const String& key) { app_history_key_ = key; }
+  const String& GetNavigationApiKey() const { return navigation_api_key_; }
+  void SetNavigationApiKey(const String& key) { navigation_api_key_ = key; }
 
-  const String& GetAppHistoryId() const { return app_history_id_; }
-  void SetAppHistoryId(const String& id) { app_history_id_ = id; }
+  const String& GetNavigationApiId() const { return navigation_api_id_; }
+  void SetNavigationApiId(const String& id) { navigation_api_id_ = id; }
 
-  void SetAppHistoryState(scoped_refptr<SerializedScriptValue>);
-  SerializedScriptValue* GetAppHistoryState() {
-    return app_history_state_.get();
+  void SetNavigationApiState(scoped_refptr<SerializedScriptValue>);
+  // TODO(dcheng): Try to make this const.
+  SerializedScriptValue* GetNavigationApiState() const {
+    return navigation_api_state_.get();
   }
+
+  PageState ToPageState() const;
 
   void Trace(Visitor*) const;
 
  private:
-  String url_string_;
-  Referrer referrer_;
+  base::flat_set<std::optional<std::u16string>>
+  GetReferencedFilePathsForSerialization() const;
 
-  Vector<String> document_state_vector_;
+  ViewState& GetOrCreateViewState();
+
+  String url_string_;
+
+  // The referrer provided when this item was originally requested.
+  String referrer_;
+
+  // The `Origin` provided when this item was originally requested.
+  scoped_refptr<const SecurityOrigin> requestor_origin_;
+
+  // The referrer policy of the document this item represents.
+  network::mojom::ReferrerPolicy referrer_policy_ =
+      network::mojom::ReferrerPolicy::kDefault;
+
+  String target_;
+
+  mutable Vector<String> document_state_vector_;
   Member<DocumentState> document_state_;
 
-  absl::optional<ViewState> view_state_;
+  std::optional<ViewState> view_state_;
 
   // If two HistoryItems have the same item sequence number, then they are
   // clones of one another. Traversing history from one such HistoryItem to
@@ -165,9 +200,9 @@ class CORE_EXPORT HistoryItem final : public GarbageCollected<HistoryItem> {
   scoped_refptr<EncodedFormData> form_data_;
   AtomicString form_content_type_;
 
-  String app_history_key_;
-  String app_history_id_;
-  scoped_refptr<SerializedScriptValue> app_history_state_;
+  String navigation_api_key_;
+  String navigation_api_id_;
+  scoped_refptr<SerializedScriptValue> navigation_api_state_;
 };  // class HistoryItem
 
 }  // namespace blink

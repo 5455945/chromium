@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,11 +21,9 @@ namespace history {
 std::unique_ptr<HistoryService> CreateHistoryService(
     const base::FilePath& history_dir,
     bool create_db) {
-  std::unique_ptr<HistoryService> history_service(new HistoryService());
-  if (!history_service->Init(
-          !create_db, history::TestHistoryDatabaseParamsForPath(history_dir))) {
-    return nullptr;
-  }
+  auto history_service = std::make_unique<HistoryService>();
+  history_service->Init(!create_db,
+                        history::TestHistoryDatabaseParamsForPath(history_dir));
 
   if (create_db)
     BlockUntilHistoryProcessesPendingRequests(history_service.get());

@@ -30,10 +30,14 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_OVERLAY_AGENT_H_
 
 #include <v8-inspector.h>
+
 #include <memory>
-#include "base/memory/scoped_refptr.h"
+
+#include "base/memory/raw_ptr.h"
+#include "third_party/blink/public/common/dom/dom_node_id.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
 #include "third_party/blink/public/platform/web_input_event_result.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_value.h"
 #include "third_party/blink/renderer/core/accessibility/ax_context.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -42,13 +46,13 @@
 #include "third_party/blink/renderer/core/inspector/inspector_dom_agent.h"
 #include "third_party/blink/renderer/core/inspector/inspector_highlight.h"
 #include "third_party/blink/renderer/core/inspector/inspector_overlay_host.h"
-#include "third_party/blink/renderer/core/inspector/protocol/Overlay.h"
-#include "third_party/blink/renderer/platform/geometry/float_quad.h"
-#include "third_party/blink/renderer/platform/geometry/layout_rect.h"
+#include "third_party/blink/renderer/core/inspector/protocol/overlay.h"
 #include "third_party/blink/renderer/platform/graphics/color.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/timer.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
+#include "ui/gfx/geometry/quad_f.h"
 
 namespace cc {
 class Layer;
@@ -86,6 +90,7 @@ class OverlayNames {
   static const char* OVERLAY_VIEWPORT_SIZE;
   static const char* OVERLAY_SCREENSHOT;
   static const char* OVERLAY_PAUSED;
+  static const char* OVERLAY_WINDOW_CONTROLS_OVERLAY;
 };
 
 class CORE_EXPORT InspectTool : public GarbageCollected<InspectTool> {
@@ -110,19 +115,22 @@ class CORE_EXPORT InspectTool : public GarbageCollected<InspectTool> {
   virtual bool ForwardEventsToOverlay();
   virtual bool SupportsPersistentOverlays();
   virtual void Draw(float scale) {}
-  virtual void Dispatch(const String& message) {}
+  virtual void Dispatch(const ScriptValue& message,
+                        ExceptionState& exception_state) {}
   virtual void Trace(Visitor* visitor) const;
   virtual bool HideOnHideHighlight();
   virtual bool HideOnMouseMove();
+  virtual void Dispose() {}
 
  protected:
   Member<InspectorOverlayAgent> overlay_;
-  OverlayFrontend* frontend_ = nullptr;
+  raw_ptr<OverlayFrontend, UnprotectedInRelease | DanglingUntriaged> frontend_ =
+      nullptr;
 };
 
 class CORE_EXPORT Hinge final : public GarbageCollected<Hinge> {
  public:
-  Hinge(FloatQuad quad,
+  Hinge(gfx::QuadF quad,
         Color color,
         Color outline_color,
         InspectorOverlayAgent* overlay);
@@ -134,9 +142,41 @@ class CORE_EXPORT Hinge final : public GarbageCollected<Hinge> {
   void Trace(Visitor* visitor) const;
 
  private:
-  FloatQuad quad_;
+  gfx::QuadF quad_;
   Color content_color_;
   Color outline_color_;
+  Member<InspectorOverlayAgent> overlay_;
+};
+
+enum class DisplayCutoutShape { kPill, kNotch, kCircle, kRectangle };
+
+class CORE_EXPORT DisplayCutout final : public GarbageCollected<DisplayCutout> {
+ public:
+  DisplayCutout(gfx::QuadF quad,
+                DisplayCutoutShape shape,
+                int upper_radius,
+                int lower_radius,
+                int center_x,
+                int center_y,
+                int radius,
+                Color color,
+                InspectorOverlayAgent* overlay);
+  DisplayCutout(const DisplayCutout&) = delete;
+  DisplayCutout& operator=(const DisplayCutout&) = delete;
+  ~DisplayCutout() = default;
+  String GetOverlayName();
+  void Draw(float scale);
+  void Trace(Visitor* visitor) const;
+
+ private:
+  gfx::QuadF quad_;
+  DisplayCutoutShape shape_;
+  int upper_radius_;
+  int lower_radius_;
+  int center_x_;
+  int center_y_;
+  int radius_;
+  Color content_color_;
   Member<InspectorOverlayAgent> overlay_;
 };
 
@@ -152,15 +192,23 @@ class CORE_EXPORT InspectorOverlayAgent final
   static std::unique_ptr<InspectorScrollSnapContainerHighlightConfig>
   ToScrollSnapContainerHighlightConfig(
       protocol::Overlay::ScrollSnapContainerHighlightConfig*);
+  static std::unique_ptr<InspectorContainerQueryContainerHighlightConfig>
+  ToContainerQueryContainerHighlightConfig(
+      protocol::Overlay::ContainerQueryContainerHighlightConfig*);
+  static std::unique_ptr<InspectorImcbHighlightConfig> ToImcbHighlightConfig(
+      protocol::Overlay::ImcbHighlightConfig*);
   static std::unique_ptr<InspectorFlexItemHighlightConfig>
   ToFlexItemHighlightConfig(protocol::Overlay::FlexItemHighlightConfig*);
-  static absl::optional<LineStyle> ToLineStyle(protocol::Overlay::LineStyle*);
-  static absl::optional<BoxStyle> ToBoxStyle(protocol::Overlay::BoxStyle*);
+  static std::unique_ptr<InspectorIsolationModeHighlightConfig>
+  ToIsolationModeHighlightConfig(
+      protocol::Overlay::IsolationModeHighlightConfig*,
+      int highlight_index);
+  static std::optional<LineStyle> ToLineStyle(protocol::Overlay::LineStyle*);
+  static std::optional<BoxStyle> ToBoxStyle(protocol::Overlay::BoxStyle*);
   static std::unique_ptr<InspectorHighlightConfig> ToHighlightConfig(
       protocol::Overlay::HighlightConfig*);
   InspectorOverlayAgent(WebLocalFrameImpl*,
                         InspectedFrames*,
-                        v8_inspector::V8InspectorSession*,
                         InspectorDOMAgent*);
   InspectorOverlayAgent(const InspectorOverlayAgent&) = delete;
   InspectorOverlayAgent& operator=(const InspectorOverlayAgent&) = delete;
@@ -179,44 +227,43 @@ class CORE_EXPORT InspectorOverlayAgent final
   protocol::Response setShowHitTestBorders(bool) override;
   protocol::Response setShowWebVitals(bool) override;
   protocol::Response setShowViewportSizeOnResize(bool) override;
-  protocol::Response setPausedInDebuggerMessage(
-      protocol::Maybe<String>) override;
+  protocol::Response setPausedInDebuggerMessage(std::optional<String>) override;
   protocol::Response setInspectMode(
       const String& mode,
-      protocol::Maybe<protocol::Overlay::HighlightConfig>) override;
+      std::unique_ptr<protocol::Overlay::HighlightConfig>) override;
   protocol::Response highlightRect(
       int x,
       int y,
       int width,
       int height,
-      protocol::Maybe<protocol::DOM::RGBA> color,
-      protocol::Maybe<protocol::DOM::RGBA> outline_color) override;
+      std::unique_ptr<protocol::DOM::RGBA> color,
+      std::unique_ptr<protocol::DOM::RGBA> outline_color) override;
   protocol::Response highlightQuad(
       std::unique_ptr<protocol::Array<double>> quad,
-      protocol::Maybe<protocol::DOM::RGBA> color,
-      protocol::Maybe<protocol::DOM::RGBA> outline_color) override;
+      std::unique_ptr<protocol::DOM::RGBA> color,
+      std::unique_ptr<protocol::DOM::RGBA> outline_color) override;
   protocol::Response highlightNode(
       std::unique_ptr<protocol::Overlay::HighlightConfig>,
-      protocol::Maybe<int> node_id,
-      protocol::Maybe<int> backend_node_id,
-      protocol::Maybe<String> object_id,
-      protocol::Maybe<String> selector_list) override;
+      std::optional<int> node_id,
+      std::optional<int> backend_node_id,
+      std::optional<String> object_id,
+      std::optional<String> selector_list) override;
   protocol::Response highlightSourceOrder(
       std::unique_ptr<protocol::Overlay::SourceOrderConfig>,
-      protocol::Maybe<int> node_id,
-      protocol::Maybe<int> backend_node_id,
-      protocol::Maybe<String> object_id) override;
+      std::optional<int> node_id,
+      std::optional<int> backend_node_id,
+      std::optional<String> object_id) override;
   protocol::Response hideHighlight() override;
   protocol::Response highlightFrame(
       const String& frame_id,
-      protocol::Maybe<protocol::DOM::RGBA> content_color,
-      protocol::Maybe<protocol::DOM::RGBA> content_outline_color) override;
+      std::unique_ptr<protocol::DOM::RGBA> content_color,
+      std::unique_ptr<protocol::DOM::RGBA> content_outline_color) override;
   protocol::Response getHighlightObjectForTest(
       int node_id,
-      protocol::Maybe<bool> include_distance,
-      protocol::Maybe<bool> include_style,
-      protocol::Maybe<String> color_format,
-      protocol::Maybe<bool> show_accessibility_info,
+      std::optional<bool> include_distance,
+      std::optional<bool> include_style,
+      std::optional<String> color_format,
+      std::optional<bool> show_accessibility_info,
       std::unique_ptr<protocol::DictionaryValue>* highlight) override;
   protocol::Response getGridHighlightObjectsForTest(
       std::unique_ptr<protocol::Array<int>> node_ids,
@@ -225,7 +272,13 @@ class CORE_EXPORT InspectorOverlayAgent final
       int node_id,
       std::unique_ptr<protocol::DictionaryValue>* highlights) override;
   protocol::Response setShowHinge(
-      protocol::Maybe<protocol::Overlay::HingeConfig> hinge_config) override;
+      std::unique_ptr<protocol::Overlay::HingeConfig> hinge_config) override;
+  protocol::Response setShowDisplayCutout(
+      std::unique_ptr<protocol::Overlay::DisplayCutoutConfig>
+          display_cutout_config) override;
+  protocol::Response setShowWindowControlsOverlay(
+      std::unique_ptr<protocol::Overlay::WindowControlsOverlayConfig>
+          wco_config) override;
   protocol::Response setShowGridOverlays(
       std::unique_ptr<
           protocol::Array<protocol::Overlay::GridNodeHighlightConfig>>
@@ -238,13 +291,31 @@ class CORE_EXPORT InspectorOverlayAgent final
       std::unique_ptr<
           protocol::Array<protocol::Overlay::ScrollSnapHighlightConfig>>
           scroll_snap_highlight_configs) override;
+  protocol::Response setShowContainerQueryOverlays(
+      std::unique_ptr<
+          protocol::Array<protocol::Overlay::ContainerQueryHighlightConfig>>
+          container_query_highlight_configs) override;
+  protocol::Response setShowIsolatedElements(
+      std::unique_ptr<
+          protocol::Array<protocol::Overlay::IsolatedElementHighlightConfig>>
+          isolated_element_highlight_configs) override;
+  protocol::Response setShowInspectedElementAnchor(
+      std::unique_ptr<protocol::Overlay::InspectedElementAnchorConfig>
+          inspected_element_anchor_config) override;
 
   // InspectorBaseAgent overrides.
+  void Init(CoreProbeSink*,
+            protocol::UberDispatcher*,
+            InspectorSessionState*,
+            V8SessionHolder,
+            ClientIsTrusted) override;
   void Restore() override;
   void Dispose() override;
 
   void Inspect(Node*);
+  bool HasAXContext(Node*);
   void EnsureAXContext(Node*);
+  void EnsureAXContext(Document&);
   void DispatchBufferedTouchEvents();
   void SetPageIsScrolling(bool is_scrolling);
   WebInputEventResult HandleInputEvent(const WebInputEvent&);
@@ -256,7 +327,6 @@ class CORE_EXPORT InspectorOverlayAgent final
   String EvaluateInOverlayForTest(const String&);
 
   void UpdatePrePaint();
-  // For CompositeAfterPaint.
   void PaintOverlay(GraphicsContext&);
 
   bool IsInspectorLayer(const cc::Layer*) const;
@@ -265,24 +335,30 @@ class CORE_EXPORT InspectorOverlayAgent final
   float WindowToViewportScale() const;
   void ScheduleUpdate();
 
+  float EmulationScaleFactor() const;
+
+  void DidInitializeFrameWidget();
+
  private:
   class InspectorOverlayChromeClient;
   class InspectorPageOverlayDelegate;
 
   // InspectorOverlayHost::Delegate implementation.
-  void Dispatch(const String& message) override;
+  void Dispatch(const ScriptValue& message,
+                ExceptionState& exception_state) override;
 
   bool IsEmpty();
+  bool FrameWidgetInitialized() const;
 
   LocalFrame* OverlayMainFrame();
-  void Reset(const IntSize& viewport_size,
-             const DoubleSize& visual_viewport_size);
+  void Reset(const gfx::Size& viewport_size,
+             const gfx::SizeF& visual_viewport_size);
   void OnResizeTimer(TimerBase*);
   void PaintOverlayPage();
 
   protocol::Response CompositingEnabled();
 
-  bool IsVisible() const { return inspect_tool_ || hinge_; }
+  bool IsVisible() const { return inspect_tool_ || hinge_ || display_cutout_; }
   bool InSomeInspectMode();
   void SetNeedsUnbufferedInput(bool unbuffered);
   void PickTheRightTool();
@@ -296,7 +372,7 @@ class CORE_EXPORT InspectorOverlayAgent final
       std::unique_ptr<protocol::Overlay::SourceOrderConfig>
           source_order_inspector_object);
   protocol::Response HighlightConfigFromInspectorObject(
-      protocol::Maybe<protocol::Overlay::HighlightConfig>
+      std::unique_ptr<protocol::Overlay::HighlightConfig>
           highlight_inspector_object,
       std::unique_ptr<InspectorHighlightConfig>*);
   Member<WebLocalFrameImpl> frame_impl_;
@@ -306,13 +382,12 @@ class CORE_EXPORT InspectorOverlayAgent final
   Member<InspectorOverlayHost> overlay_host_;
   bool resize_timer_active_;
   HeapTaskRunnerTimer<InspectorOverlayAgent> resize_timer_;
-  bool disposed_;
-  v8_inspector::V8InspectorSession* v8_session_;
   Member<InspectorDOMAgent> dom_agent_;
-  std::unique_ptr<FrameOverlay> frame_overlay_;
+  Member<FrameOverlay> frame_overlay_;
   Member<InspectTool> inspect_tool_;
   Member<PersistentTool> persistent_tool_;
   Member<Hinge> hinge_;
+  Member<DisplayCutout> display_cutout_;
   // The agent needs to keep AXContext because it enables caching of
   // a11y attributes shown in the inspector overlay.
   HeapHashMap<WeakMember<Document>, std::unique_ptr<AXContext>>
@@ -321,8 +396,8 @@ class CORE_EXPORT InspectorOverlayAgent final
   bool is_page_scrolling_ = false;
   std::unique_ptr<cc::LayerTreeDebugState> original_layer_tree_debug_state_;
 
-  DOMNodeId backend_node_id_to_inspect_;
-  InspectorAgentState::Boolean enabled_;
+  DOMNodeIdType backend_node_id_to_inspect_;
+  bool enabled_ = false;
   InspectorAgentState::Boolean show_ad_highlights_;
   InspectorAgentState::Boolean show_debug_borders_;
   InspectorAgentState::Boolean show_fps_counter_;
@@ -332,7 +407,7 @@ class CORE_EXPORT InspectorOverlayAgent final
   InspectorAgentState::Boolean show_hit_test_borders_;
   InspectorAgentState::Boolean show_web_vitals_;
   InspectorAgentState::Boolean show_size_on_resize_;
-  InspectorAgentState::String paused_in_debugger_message_;
+  String paused_in_debugger_message_;
   InspectorAgentState::String inspect_mode_;
   InspectorAgentState::Bytes inspect_mode_protocol_config_;
 };

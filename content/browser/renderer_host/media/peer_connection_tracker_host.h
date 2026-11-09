@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,24 @@
 #include <set>
 #include <string>
 
-#include "base/macros.h"
 #include "base/power_monitor/power_observer.h"
+#include "build/build_config.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/screen_state_receiver.h"
+#endif
 #include "base/process/process_handle.h"
 #include "base/types/pass_key.h"
+#include "content/public/browser/document_user_data.h"
 #include "content/public/browser/global_routing_id.h"
 #include "content/public/browser/peer_connection_tracker_host_observer.h"
-#include "content/public/browser/render_document_host_user_data.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/peerconnection/peer_connection_tracker.mojom.h"
 
 namespace base {
-class Value;
+class ListValue;
 }  // namespace base
 
 namespace content {
@@ -35,12 +39,19 @@ class RenderFrameHost;
 //
 // Note: This class and all of its methods are meant to only be used on the UI
 //       thread.
-class PeerConnectionTrackerHost
-    : public RenderDocumentHostUserData<PeerConnectionTrackerHost>,
+class CONTENT_EXPORT PeerConnectionTrackerHost
+    : public DocumentUserData<PeerConnectionTrackerHost>,
       public base::PowerSuspendObserver,
       public base::PowerThermalObserver,
+#if BUILDFLAG(IS_ANDROID)
+      public base::android::ScreenStateReceiver::Observer,
+#endif
       public blink::mojom::PeerConnectionTrackerHost {
  public:
+  PeerConnectionTrackerHost(const PeerConnectionTrackerHost&) = delete;
+  PeerConnectionTrackerHost& operator=(const PeerConnectionTrackerHost&) =
+      delete;
+
   ~PeerConnectionTrackerHost() override;
 
   // Adds/removes a PeerConnectionTrackerHostObserver.
@@ -53,25 +64,31 @@ class PeerConnectionTrackerHost
 
   // base::PowerSuspendObserver override.
   void OnSuspend() override;
+#if BUILDFLAG(IS_ANDROID)
+  void OnScreenOff() override;
+#endif
   // base::PowerThermalObserver override.
   void OnThermalStateChange(
       base::PowerThermalObserver::DeviceThermalState new_state) override;
+  void OnSpeedLimitChange(int) override {}  // This signal is not forwarded.
 
   // These methods call out to blink::mojom::PeerConnectionManager on renderer
   // side.
   void StartEventLog(int peer_connection_local_id, int output_period_ms);
   void StopEventLog(int lid);
+  void StartDataChannelLog(int peer_connection_local_id);
+  void StopDataChannelLog(int lid);
   void GetStandardStats();
-  void GetLegacyStats();
+  void GetCurrentState();
 
   void BindReceiver(
       mojo::PendingReceiver<blink::mojom::PeerConnectionTrackerHost>
           pending_receiver);
 
  private:
-  friend class RenderDocumentHostUserData<PeerConnectionTrackerHost>;
+  friend class DocumentUserData<PeerConnectionTrackerHost>;
   explicit PeerConnectionTrackerHost(RenderFrameHost* rfh);
-  RENDER_DOCUMENT_HOST_USER_DATA_KEY_DECL();
+  DOCUMENT_USER_DATA_KEY_DECL();
 
   // blink::mojom::PeerConnectionTrackerHost implementation.
   void AddPeerConnection(blink::mojom::PeerConnectionInfoPtr info) override;
@@ -80,23 +97,45 @@ class PeerConnectionTrackerHost
                             const std::string& type,
                             const std::string& value) override;
   void OnPeerConnectionSessionIdSet(int lid,
-                                    const std::string& session_id) override;
-  void GetUserMedia(const std::string& origin,
+                                    const std::string& session_id,
+                                    base::OnceClosure callback) override;
+  void GetUserMedia(int request_id,
                     bool audio,
                     bool video,
                     const std::string& audio_constraints,
                     const std::string& video_constraints) override;
+  void GetUserMediaSuccess(int request_id,
+                           const std::string& stream_id,
+                           const std::string& audio_track_info,
+                           const std::string& video_track_info) override;
+  void GetUserMediaFailure(int request_id,
+                           const std::string& error,
+                           const std::string& error_message) override;
+  void GetDisplayMedia(int request_id,
+                       bool audio,
+                       bool video,
+                       const std::string& audio_constraints,
+                       const std::string& video_constraints) override;
+  void GetDisplayMediaSuccess(int request_id,
+                              const std::string& stream_id,
+                              const std::string& audio_track_info,
+                              const std::string& video_track_info) override;
+  void GetDisplayMediaFailure(int request_id,
+                              const std::string& error,
+                              const std::string& error_message) override;
   void WebRtcEventLogWrite(int lid,
                            const std::vector<uint8_t>& output) override;
-  void AddStandardStats(int lid, base::Value value) override;
-  void AddLegacyStats(int lid, base::Value value) override;
+  void WebRtcDataChannelLogWrite(int lid,
+                                 const std::vector<uint8_t>& output) override;
+  void AddStandardStats(int lid, base::ListValue value) override;
 
   GlobalRenderFrameHostId frame_id_;
   base::ProcessId peer_pid_;
   mojo::Receiver<blink::mojom::PeerConnectionTrackerHost> receiver_{this};
   mojo::Remote<blink::mojom::PeerConnectionManager> tracker_;
 
-  DISALLOW_COPY_AND_ASSIGN(PeerConnectionTrackerHost);
+  // A set of local peer connection IDs that belong to this host.
+  std::set<int> peer_connection_lids_;
 };
 
 }  // namespace content

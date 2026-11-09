@@ -1,15 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_HUD_DISPLAY_FPS_GRAPH_PAGE_VIEW_H_
 #define ASH_HUD_DISPLAY_FPS_GRAPH_PAGE_VIEW_H_
 
-#include "time.h"
+#include "base/memory/raw_ptr.h"
 
 #include "ash/hud_display/graph.h"
 #include "ash/hud_display/graph_page_view_base.h"
 #include "base/containers/circular_deque.h"
+#include "base/time/time.h"
 #include "ui/aura/window_observer.h"
 #include "ui/compositor/compositor_observer.h"
 #include "ui/views/widget/widget_observer.h"
@@ -21,7 +22,7 @@ struct PresentationFeedback;
 namespace ash {
 namespace hud_display {
 
-class Grid;
+class ReferenceLines;
 
 // Draws several graphs per UI compositor frame.  Every time
 // OnDidPresentCompositorFrame() is called a new value is appended to the end
@@ -30,9 +31,9 @@ class FPSGraphPageView : public GraphPageViewBase,
                          public ui::CompositorObserver,
                          public views::WidgetObserver,
                          public aura::WindowObserver {
- public:
-  METADATA_HEADER(FPSGraphPageView);
+  METADATA_HEADER(FPSGraphPageView, GraphPageViewBase)
 
+ public:
   explicit FPSGraphPageView(const base::TimeDelta refresh_interval);
   FPSGraphPageView(const FPSGraphPageView&) = delete;
   FPSGraphPageView& operator=(const FPSGraphPageView&) = delete;
@@ -46,6 +47,7 @@ class FPSGraphPageView : public GraphPageViewBase,
 
   // ui::CompositorObserver:
   void OnDidPresentCompositorFrame(
+      ui::Compositor* compositor,
       uint32_t frame_token,
       const gfx::PresentationFeedback& feedback) override;
 
@@ -64,7 +66,7 @@ class FPSGraphPageView : public GraphPageViewBase,
     return frame_rate_for_last_half_second_;
   }
 
-  // Sets grid top label to the maximum of the observed refresh rate.
+  // Sets top reference line label to the maximum of the observed refresh rate.
   void UpdateTopLabel(float f_refresh_rate);
 
   // Updates the stats with |feedback|.
@@ -77,7 +79,7 @@ class FPSGraphPageView : public GraphPageViewBase,
   // Active display refresh rate.
   Graph refresh_rate_;
 
-  Grid* grid_;  // not owned
+  raw_ptr<ReferenceLines> reference_lines_;  // not owned
 
   float frame_rate_for_last_half_second_;
 

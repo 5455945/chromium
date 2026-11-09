@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,41 +15,49 @@
 // unmanaged user case and the managed user with/without network policy cases.
 
 #include "ash/public/cpp/login_screen_test_api.h"
-#include "base/bind.h"
-#include "base/bind_internal.h"
+#include "base/check_deref.h"
+#include "base/functional/bind.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
+#include "base/test/protobuf_matchers.h"
 #include "chrome/browser/ash/login/login_manager_test.h"
+#include "chrome/browser/ash/login/startup_utils.h"
 #include "chrome/browser/ash/login/test/login_manager_mixin.h"
+#include "chrome/browser/ash/login/test/oobe_screens_utils.h"
 #include "chrome/browser/ash/login/test/user_policy_mixin.h"
-#include "chrome/browser/ash/login/ui/user_adding_screen.h"
+#include "chrome/browser/browser_process.h"
+#include "chrome/browser/ui/ash/login/user_adding_screen.h"
 #include "chrome/test/base/in_process_browser_test.h"
-#include "chromeos/cryptohome/cryptohome_parameters.h"
-#include "chromeos/dbus/cryptohome/rpc.pb.h"
-#include "chromeos/dbus/session_manager/fake_session_manager_client.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
-#include "chromeos/dbus/shill/fake_shill_profile_client.h"
-#include "chromeos/login/auth/user_context.h"
+#include "chromeos/ash/components/cryptohome/cryptohome_parameters.h"
+#include "chromeos/ash/components/dbus/cryptohome/rpc.pb.h"
+#include "chromeos/ash/components/dbus/session_manager/fake_session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/shill/fake_shill_profile_client.h"
+#include "chromeos/ash/components/login/auth/public/user_context.h"
 #include "components/account_id/account_id.h"
 #include "components/policy/proto/chrome_settings.pb.h"
+#include "components/user_manager/test_helper.h"
 #include "components/user_manager/user_names.h"
 #include "content/public/test/browser_test.h"
+#include "google_apis/gaia/gaia_id.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
-using testing::ElementsAre;
-
-namespace chromeos {
-
-namespace em = enterprise_management;
+namespace ash {
 
 namespace {
 
+namespace em = ::enterprise_management;
+
+using base::test::EqualsProto;
+using ::testing::ElementsAre;
+
 constexpr char kUnmanagedUser[] = "unmanaged@gmail.com";
-constexpr char kUnmanagedGaiaID[] = "33333";
+constexpr GaiaId::Literal kUnmanagedGaiaID("33333");
 constexpr char kSecondaryUnmanagedUser[] = "secondaryunmanaged@gmail.com";
-constexpr char kSecondaryUnmanagedGaiaID[] = "44444";
+constexpr GaiaId::Literal kSecondaryUnmanagedGaiaID("44444");
 constexpr char kManagedUser[] = "user@example.com";
-constexpr char kManagedGaiaID[] = "55555";
+constexpr GaiaId::Literal kManagedGaiaID("55555");
 
 // Implements waiting for the LoadShillProfile call to SessionManagerClient and
 // counting how many LoadShillProfile calls were performed.
@@ -79,19 +87,10 @@ class LoadShillProfileWaiter {
     run_loop_.Quit();
   }
 
-  FakeSessionManagerClient* const fake_session_manager_client_;
+  const raw_ptr<FakeSessionManagerClient> fake_session_manager_client_;
   base::RunLoop run_loop_;
   std::vector<cryptohome::AccountIdentifier> invocations_;
 };
-
-MATCHER_P(EqualsProto,
-          message,
-          "Match a proto Message equal to the matcher's argument.") {
-  std::string expected_serialized, actual_serialized;
-  message.SerializeToString(&expected_serialized);
-  arg.SerializeToString(&actual_serialized);
-  return expected_serialized == actual_serialized;
-}
 
 }  // namespace
 
@@ -101,24 +100,35 @@ class ShillProfileLoadingTest : public LoginManagerTest {
   ~ShillProfileLoadingTest() override = default;
 
   // LoginManagerTest:
+  void SetUpLocalStatePrefService(PrefService* local_state) override {
+    LoginManagerTest::SetUpLocalStatePrefService(local_state);
+
+    // Register a persisted user.
+    user_manager::TestHelper::RegisterPersistedUser(*local_state,
+                                                    unmanaged_user_.account_id);
+    user_manager::TestHelper::RegisterPersistedUser(
+        *local_state, secondary_unmanaged_user_.account_id);
+    user_manager::TestHelper::RegisterPersistedUser(*local_state,
+                                                    managed_user_.account_id);
+  }
+
   void SetUpInProcessBrowserTestFixture() override {
     LoginManagerTest::SetUpInProcessBrowserTestFixture();
 
-    chromeos::SessionManagerClient::InitializeFakeInMemory();
+    SessionManagerClient::InitializeFakeInMemory();
   }
 
-  const chromeos::LoginManagerMixin::TestUserInfo unmanaged_user_{
+  const LoginManagerMixin::TestUserInfo unmanaged_user_{
       AccountId::FromUserEmailGaiaId(kUnmanagedUser, kUnmanagedGaiaID)};
-  const chromeos::LoginManagerMixin::TestUserInfo secondary_unmanaged_user_{
+  const LoginManagerMixin::TestUserInfo secondary_unmanaged_user_{
       AccountId::FromUserEmailGaiaId(kSecondaryUnmanagedUser,
                                      kSecondaryUnmanagedGaiaID)};
-  const chromeos::LoginManagerMixin::TestUserInfo managed_user_{
+  const LoginManagerMixin::TestUserInfo managed_user_{
       AccountId::FromUserEmailGaiaId(kManagedUser, kManagedGaiaID)};
 
-  chromeos::UserPolicyMixin user_policy_mixin_{&mixin_host_,
-                                               managed_user_.account_id};
-  chromeos::LoginManagerMixin login_manager_{&mixin_host_,
-                                             {managed_user_, unmanaged_user_}};
+  UserPolicyMixin user_policy_mixin_{&mixin_host_, managed_user_.account_id};
+  LoginManagerMixin login_manager_{&mixin_host_,
+                                   {managed_user_, unmanaged_user_}};
 };
 
 // Verifies that the LoadShillProfile method call is invoked on
@@ -133,7 +143,7 @@ IN_PROC_BROWSER_TEST_F(ShillProfileLoadingTest, UnmanagedUser) {
           unmanaged_user_.account_id))));
 
   // Adding a secondary user does not re-trigger loading the shill profile.
-  chromeos::UserAddingScreen::Get()->Start();
+  UserAddingScreen::Get()->Start();
   AddUser(secondary_unmanaged_user_.account_id);
   EXPECT_THAT(
       waiter.invocations(),
@@ -235,7 +245,15 @@ IN_PROC_BROWSER_TEST_F(ShillProfileLoadingGuestLoginTest, GuestLogin) {
 
   LoadShillProfileWaiter load_shill_profile_waiter(
       FakeSessionManagerClient::Get());
-  ASSERT_TRUE(ash::LoginScreenTestApi::ClickGuestButton());
+
+  // The ToS screen is shown to guest users regardless of EULA being accepted
+  // previously by the device owner.
+  StartupUtils::MarkEulaAccepted(CHECK_DEREF(g_browser_process->local_state()));
+  ASSERT_TRUE(LoginScreenTestApi::ClickGuestButton());
+
+  // Accept guest ToS consent screen.
+  ash::test::WaitForGuestTosScreen();
+  ash::test::TapGuestTosAccept();
 
   restart_job_waiter.Run();
 
@@ -247,4 +265,4 @@ IN_PROC_BROWSER_TEST_F(ShillProfileLoadingGuestLoginTest, GuestLogin) {
           user_manager::GuestAccountId()))));
 }
 
-}  // namespace chromeos
+}  // namespace ash

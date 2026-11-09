@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,19 +6,14 @@
 
 #include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_util.h"
-#include "services/network/first_party_sets/first_party_sets.h"
 #include "services/network/public/cpp/is_potentially_trustworthy.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace network {
 
 CookieAccessDelegateImpl::CookieAccessDelegateImpl(
     mojom::CookieAccessDelegateType type,
-    const FirstPartySets* first_party_sets,
     const CookieSettings* cookie_settings)
-    : type_(type),
-      cookie_settings_(cookie_settings),
-      first_party_sets_(first_party_sets) {
+    : type_(type), cookie_settings_(cookie_settings) {
   if (type == mojom::CookieAccessDelegateType::USE_CONTENT_SETTINGS) {
     DCHECK(cookie_settings);
   }
@@ -44,45 +39,23 @@ net::CookieAccessSemantics CookieAccessDelegateImpl::GetAccessSemantics(
   }
 }
 
+net::CookieScopeSemantics CookieAccessDelegateImpl::GetScopeSemantics(
+    const std::string_view domain) const {
+  if (!cookie_settings_) {
+    return net::CookieScopeSemantics::UNKNOWN;
+  }
+  return cookie_settings_->GetCookieScopeSemanticsForDomain(domain);
+}
+
 bool CookieAccessDelegateImpl::ShouldIgnoreSameSiteRestrictions(
     const GURL& url,
-    const net::SiteForCookies& site_for_cookies) const {
+    const net::SiteForCookies& site_for_cookies,
+    const url::Origin& top_level_origin) const {
   if (cookie_settings_) {
     return cookie_settings_->ShouldIgnoreSameSiteRestrictions(
-        url, site_for_cookies.RepresentativeUrl());
+        url, site_for_cookies, top_level_origin);
   }
   return false;
-}
-
-bool CookieAccessDelegateImpl::IsContextSamePartyWithSite(
-    const net::SchemefulSite& site,
-    const absl::optional<net::SchemefulSite>& top_frame_site,
-    const std::set<net::SchemefulSite>& party_context) const {
-  return first_party_sets_ && first_party_sets_->IsContextSamePartyWithSite(
-                                  site, top_frame_site, party_context);
-}
-
-net::FirstPartySetsContextType
-CookieAccessDelegateImpl::ComputeFirstPartySetsContextType(
-    const net::SchemefulSite& site,
-    const absl::optional<net::SchemefulSite>& top_frame_site,
-    const std::set<net::SchemefulSite>& party_context) const {
-  return first_party_sets_ ? first_party_sets_->ComputeContextType(
-                                 site, top_frame_site, party_context)
-                           : net::FirstPartySetsContextType::kUnknown;
-}
-
-bool CookieAccessDelegateImpl::IsInNontrivialFirstPartySet(
-    const net::SchemefulSite& site) const {
-  return first_party_sets_ &&
-         first_party_sets_->IsInNontrivialFirstPartySet(site);
-}
-
-base::flat_map<net::SchemefulSite, std::set<net::SchemefulSite>>
-CookieAccessDelegateImpl::RetrieveFirstPartySets() const {
-  if (!first_party_sets_)
-    return {};
-  return first_party_sets_->Sets();
 }
 
 }  // namespace network

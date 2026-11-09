@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 
 #include "ash/public/cpp/ash_public_export.h"
 #include "ash/public/cpp/shelf_types.h"
-#include "base/callback.h"
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_forward.h"
 #include "base/memory/weak_ptr.h"
+#include "base/types/expected.h"
 #include "ui/events/event.h"
 #include "ui/gfx/image/image_skia.h"
 
@@ -22,10 +22,6 @@ class AppWindowShelfItemController;
 namespace aura {
 class Window;
 }  // namespace aura
-
-namespace gfx {
-class ImageSkia;
-}
 
 namespace ui {
 class SimpleMenuModel;
@@ -38,6 +34,10 @@ namespace ash {
 class ASH_PUBLIC_EXPORT ShelfItemDelegate {
  public:
   explicit ShelfItemDelegate(const ShelfID& shelf_id);
+
+  ShelfItemDelegate(const ShelfItemDelegate&) = delete;
+  ShelfItemDelegate& operator=(const ShelfItemDelegate&) = delete;
+
   virtual ~ShelfItemDelegate();
 
   const ShelfID& shelf_id() const { return shelf_id_; }
@@ -64,7 +64,7 @@ class ASH_PUBLIC_EXPORT ShelfItemDelegate {
     // The ID that will be used by ShelfApplicationMenuModel to represent this
     // item in the shelf app menu. This ID will be used when ExecuteCommand() is
     // called when this item is selected from the menu.
-    int command_id;
+    int command_id = 0;
     // The title and icon shown for this item in the app menu.
     std::u16string title;
     gfx::ImageSkia icon;
@@ -77,6 +77,12 @@ class ASH_PUBLIC_EXPORT ShelfItemDelegate {
                             ShelfLaunchSource source,
                             ItemSelectedCallback callback,
                             const ItemFilterPredicate& filter_predicate);
+
+  // Returns the window to preview for the application menu item for
+  // |command_id|. If there is no window to preview, returns the tooltip to show
+  // for the item instead, or an empty string to show neither.
+  virtual base::expected<aura::Window*, std::u16string> GetAppMenuItemWindow(
+      int command_id);
 
   // Returns items for the application menu; used for convenience and testing.
   // |filter_predicate| is used to filter items out of the menu based on their
@@ -94,9 +100,6 @@ class ASH_PUBLIC_EXPORT ShelfItemDelegate {
   // Returns nullptr if class is not AppWindowShelfItemController.
   virtual AppWindowShelfItemController* AsAppWindowShelfItemController();
 
-  // Attempts to execute a context menu command; returns true if it was run.
-  bool ExecuteContextMenuCommand(int64_t command_id, int32_t event_flags);
-
   // Called on invocation of a shelf item's context or application menu command.
   // |from_context_menu| is true if the command came from a context menu, or
   // false if the command came from an application menu. If the |display_id| is
@@ -109,6 +112,10 @@ class ASH_PUBLIC_EXPORT ShelfItemDelegate {
   // Closes all windows associated with this shelf item.
   virtual void Close() = 0;
 
+  base::WeakPtr<ShelfItemDelegate> GetWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
+
  private:
   // The shelf id; empty if there is no app associated with the item.
   // Besides the application id, ShelfID also contains a launch id, which is an
@@ -120,12 +127,7 @@ class ASH_PUBLIC_EXPORT ShelfItemDelegate {
   // Set to true if the launcher item image has been set by the controller.
   bool image_set_by_controller_ = false;
 
-  // The context menu model that was last shown for the associated shelf item.
-  std::unique_ptr<ui::SimpleMenuModel> context_menu_;
-
   base::WeakPtrFactory<ShelfItemDelegate> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfItemDelegate);
 };
 
 }  // namespace ash

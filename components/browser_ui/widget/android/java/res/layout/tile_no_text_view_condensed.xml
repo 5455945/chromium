@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Copyright 2015 The Chromium Authors. All rights reserved.
-     Use of this source code is governed by a BSD-style license that can be
-     found in the LICENSE file. -->
+<!--
+Copyright 2015 The Chromium Authors
+Use of this source code is governed by a BSD-style license that can be
+found in the LICENSE file.
+-->
 
 <!-- An icon tile. -->
 <merge
@@ -16,7 +18,7 @@
         android:layout_height="@dimen/tile_view_icon_size"
         android:layout_gravity="center_horizontal"
         android:layout_marginTop="@dimen/tile_view_icon_background_margin_top_modern"
-        android:background="@drawable/tile_view_icon_background_modern" />
+        android:background="@drawable/tile_view_icon_background_modern"/>
 
     <!-- The main icon. -->
     <ImageView
@@ -46,5 +48,6 @@
         android:layout_marginEnd="@dimen/tile_view_offline_badge_margin_end_modern_condensed"
         android:visibility="gone"
         android:contentDescription="@string/accessibility_ntp_offline_badge"
-        app:srcCompat="@drawable/ic_offline_pin_blue_white" />
+        app:srcCompat="@drawable/ic_offline_pin_fill_24dp"
+        app:tint="@macro/default_icon_color_accent1"/>
 </merge>

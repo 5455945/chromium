@@ -1,18 +1,19 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/loader/modulescript/module_script_fetcher.h"
 
+#include "services/network/public/cpp/header_util.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
 #include "third_party/blink/renderer/core/loader/resource/script_resource.h"
-#include "third_party/blink/renderer/core/loader/subresource_integrity_helper.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/loader/cors/cors.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/network/mime/mime_type_registry.h"
-#include "third_party/blink/renderer/platform/runtime_enabled_features.h"
+#include "third_party/blink/renderer/platform/wtf/text/strcat.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
@@ -34,30 +35,33 @@ void ModuleScriptFetcher::Trace(Visitor* visitor) const {
 }
 
 // <specdef href="https://html.spec.whatwg.org/C/#fetch-a-single-module-script">
-bool ModuleScriptFetcher::WasModuleLoadSuccessful(
+std::optional<ResolvedModuleType> ModuleScriptFetcher::WasModuleLoadSuccessful(
     ScriptResource* resource,
     ModuleType expected_module_type,
     HeapVector<Member<ConsoleMessage>>* error_messages) {
   DCHECK(error_messages);
   if (resource) {
-    SubresourceIntegrityHelper::GetConsoleMessages(
-        resource->IntegrityReportInfo(), error_messages);
+    for (const auto& message : resource->IntegrityReport().Messages()) {
+      error_messages->push_back(MakeGarbageCollected<ConsoleMessage>(
+          mojom::blink::ConsoleMessageSource::kSecurity,
+          mojom::blink::ConsoleMessageLevel::kError, message));
+    }
   }
 
-  // <spec step="9">... response's type is "error" ...</spec>
+  // <spec step="13.1">... bodyBytes is null or failure ...</spec>
   if (!resource || resource->ErrorOccurred() ||
-      resource->IntegrityDisposition() !=
-          ResourceIntegrityDisposition::kPassed) {
-    return false;
+      !resource->PassedIntegrityChecks()) {
+    return std::nullopt;
   }
 
   const auto& response = resource->GetResponse();
-  // <spec step="9">... response's status is not an ok status</spec>
-  if (response.IsHTTP() && !cors::IsOkStatus(response.HttpStatusCode())) {
-    return false;
+  // <spec step="13.1">... response's status is not an ok status</spec>
+  if (response.IsHTTP() &&
+      !network::IsSuccessfulStatus(response.HttpStatusCode())) {
+    return std::nullopt;
   }
 
-  // <spec step="10">Let type be the result of extracting a MIME type from
+  // <spec step="13.2">Let mimeType be the result of extracting a MIME type from
   // response's header list.</spec>
   //
   // Note: For historical reasons, fetching a classic script does not include
@@ -65,53 +69,49 @@ bool ModuleScriptFetcher::WasModuleLoadSuccessful(
   // are not of a correct MIME type.
   // We use ResourceResponse::HttpContentType() instead of MimeType(), as
   // MimeType() may be rewritten by mime sniffer.
-  //
-  // <spec step="12">If type is a JavaScript MIME type, then:</spec>
-  if (expected_module_type == ModuleType::kJavaScript &&
+
+  if (base::FeatureList::IsEnabled(
+          blink::features::kJavaScriptSourcePhaseImports) &&
+      expected_module_type == ModuleType::kJavaScriptOrWasm &&
+      MIMETypeRegistry::IsWasmMIMEType(response.HttpContentType())) {
+    return ResolvedModuleType::kWasm;
+  }
+
+  if (expected_module_type == ModuleType::kJavaScriptOrWasm &&
       MIMETypeRegistry::IsSupportedJavaScriptMIMEType(
           response.HttpContentType())) {
-    return true;
-  }
-  // <spec step="13">If type is a JSON MIME type, then:</spec>
-  if (base::FeatureList::IsEnabled(blink::features::kJSONModules) &&
-      expected_module_type == ModuleType::kJSON &&
-      MIMETypeRegistry::IsJSONMimeType(response.HttpContentType())) {
-    return true;
+    return ResolvedModuleType::kJavaScript;
   }
 
-  if (RuntimeEnabledFeatures::CSSModulesEnabled() &&
-      expected_module_type == ModuleType::kCSS &&
+  if (expected_module_type == ModuleType::kJSON &&
+      MIMETypeRegistry::IsJSONMimeType(response.HttpContentType())) {
+    return ResolvedModuleType::kJSON;
+  }
+
+  if (expected_module_type == ModuleType::kCSS &&
       MIMETypeRegistry::IsSupportedStyleSheetMIMEType(
           response.HttpContentType())) {
-    return true;
+    return ResolvedModuleType::kCSS;
   }
 
-  String message;
-  if (base::FeatureList::IsEnabled(blink::features::kJSONModules) ||
-      RuntimeEnabledFeatures::CSSModulesEnabled()) {
-    message =
-        "Failed to load module script: Expected a " +
-        ModuleScriptCreationParams::ModuleTypeToString(expected_module_type) +
-        " module script but the server responded with a MIME type of \"" +
-        resource->GetResponse().HttpContentType() +
-        "\". Strict MIME type checking is enforced for module scripts per HTML "
-        "spec.";
-  } else {
-    message =
-        "Failed to load module script: The server responded with a "
-        "non-JavaScript "
-        "MIME type of \"" +
-        resource->GetResponse().HttpContentType() +
-        "\". Strict MIME type checking is enforced for module scripts per HTML "
-        "spec.";
+  if (expected_module_type == ModuleType::kTEXT) {
+    return ResolvedModuleType::kTEXT;
   }
+
+  String message = StrCat(
+      {"Failed to load module script: Expected a ",
+       ModuleScriptCreationParams::ModuleTypeToString(expected_module_type),
+       " module script but the server responded with a MIME type of \"",
+       resource->GetResponse().HttpContentType(),
+       "\". Strict MIME type checking is enforced for module scripts per HTML "
+       "spec."});
 
   error_messages->push_back(MakeGarbageCollected<ConsoleMessage>(
       mojom::ConsoleMessageSource::kJavaScript,
       mojom::ConsoleMessageLevel::kError, message,
-      response.CurrentRequestUrl().GetString(), /*loader=*/nullptr,
+      response.ResponseUrl().GetString(), /*loader=*/nullptr,
       resource->InspectorId()));
-  return false;
+  return std::nullopt;
 }
 
 }  // namespace blink

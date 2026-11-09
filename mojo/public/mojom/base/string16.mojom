@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@ module mojo_base.mojom;
 import "mojo/public/mojom/base/big_buffer.mojom";
 
 // Corresponds to |std::u16string| in <string>.
-// Corresponds to |WTF::String| in
-// third_party/WebKit/Source/platform/wtf/text/WTFString.h.
+// Corresponds to |blink::String| in
+// third_party/blink/renderer/platform/wtf/text/wtf_string.h.
 [Stable]
 struct String16 {
   array<uint16> data;

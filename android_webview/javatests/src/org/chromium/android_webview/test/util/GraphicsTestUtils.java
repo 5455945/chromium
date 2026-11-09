@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,24 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.view.View;
 
+import org.junit.Assert;
+
 import org.chromium.android_webview.AwContents;
 import org.chromium.android_webview.test.AwActivityTestRule;
 import org.chromium.android_webview.test.AwTestContainerView;
-import org.chromium.content_public.browser.test.util.TestThreadUtils;
+import org.chromium.base.ThreadUtils;
+import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.ui.display.DisplayAndroid;
 
-/**
- * Graphics-related test utils.
- */
+import java.util.concurrent.TimeoutException;
+
+/** Graphics-related test utils. */
 public class GraphicsTestUtils {
     public static float dipScaleForContext(Context context) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> { return DisplayAndroid.getNonMultiDisplay(context).getDipScale(); });
+        return ThreadUtils.runOnUiThreadBlocking(
+                () -> {
+                    return DisplayAndroid.getNonMultiDisplay(context).getDipScale();
+                });
     }
 
     /**
@@ -37,8 +42,7 @@ public class GraphicsTestUtils {
 
     public static Bitmap drawAwContentsOnUiThread(
             final AwContents awContents, final int width, final int height) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> drawAwContents(awContents, width, height));
+        return ThreadUtils.runOnUiThreadBlocking(() -> drawAwContents(awContents, width, height));
     }
 
     /**
@@ -72,18 +76,22 @@ public class GraphicsTestUtils {
 
     public static int sampleBackgroundColorOnUiThread(final AwContents awContents)
             throws Exception {
-        return TestThreadUtils.runOnUiThreadBlocking(
+        return ThreadUtils.runOnUiThreadBlocking(
                 () -> drawAwContents(awContents, 10, 10, 0, 0).getPixel(0, 0));
     }
 
     // Gets the pixel color at the center of AwContents.
     public static int getPixelColorAtCenterOfView(
             final AwContents awContents, final AwTestContainerView testContainerView) {
-        return TestThreadUtils.runOnUiThreadBlockingNoException(
-                () -> drawAwContents(awContents, 2, 2,
-                                -(float) testContainerView.getWidth() / 2,
-                                -(float) testContainerView.getHeight() / 2)
-                                   .getPixel(0, 0));
+        return ThreadUtils.runOnUiThreadBlocking(
+                () ->
+                        drawAwContents(
+                                        awContents,
+                                        2,
+                                        2,
+                                        -(float) testContainerView.getWidth() / 2,
+                                        -(float) testContainerView.getHeight() / 2)
+                                .getPixel(0, 0));
     }
 
     public static void pollForBackgroundColor(final AwContents awContents, final int c) {
@@ -98,7 +106,48 @@ public class GraphicsTestUtils {
         if (dx != null && dy != null) {
             canvas.translate(dx, dy);
         }
-        awContents.onDraw(canvas);
+        awContents.getViewMethods().onDraw(canvas);
         return bitmap;
+    }
+
+    public static void pollForQuadrantColors(
+            AwTestContainerView testView, int[] expectedQuadrantColors) throws Throwable {
+        int[] lastQuadrantColors = null;
+        // Poll for 10s in case raster is slow.
+        for (int i = 0; i < 100; ++i) {
+            final CallbackHelper callbackHelper = new CallbackHelper();
+            final Object[] resultHolder = new Object[1];
+            ThreadUtils.runOnUiThreadBlocking(
+                    () -> {
+                        testView.readbackQuadrantColors(
+                                (int[] result) -> {
+                                    resultHolder[0] = result;
+                                    callbackHelper.notifyCalled();
+                                });
+                    });
+            try {
+                callbackHelper.waitForOnly();
+            } catch (TimeoutException e) {
+                continue;
+            }
+            int[] quadrantColors = (int[]) resultHolder[0];
+            lastQuadrantColors = quadrantColors;
+            if (quadrantColors != null
+                    && expectedQuadrantColors[0] == quadrantColors[0]
+                    && expectedQuadrantColors[1] == quadrantColors[1]
+                    && expectedQuadrantColors[2] == quadrantColors[2]
+                    && expectedQuadrantColors[3] == quadrantColors[3]) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        Assert.assertNotNull(lastQuadrantColors);
+        // If this test is failing for your CL, then chances are your change is breaking Android
+        // WebView hardware rendering. Please build the "real" webview and check if this is the
+        // case and if so, fix your CL.
+        Assert.assertEquals(expectedQuadrantColors[0], lastQuadrantColors[0]);
+        Assert.assertEquals(expectedQuadrantColors[1], lastQuadrantColors[1]);
+        Assert.assertEquals(expectedQuadrantColors[2], lastQuadrantColors[2]);
+        Assert.assertEquals(expectedQuadrantColors[3], lastQuadrantColors[3]);
     }
 }

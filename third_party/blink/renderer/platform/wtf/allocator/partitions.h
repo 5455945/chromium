@@ -31,13 +31,20 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_ALLOCATOR_PARTITIONS_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_ALLOCATOR_PARTITIONS_H_
 
-#include "base/allocator/partition_allocator/partition_alloc.h"
 #include "base/check.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/numerics/checked_math.h"
 #include "third_party/blink/renderer/platform/wtf/wtf_export.h"
 
-namespace WTF {
+namespace base {
+class SequencedTaskRunner;
+}
+
+namespace partition_alloc {
+class PartitionRoot;
+}
+
+namespace blink {
 
 class WTF_EXPORT Partitions {
  public:
@@ -47,67 +54,70 @@ class WTF_EXPORT Partitions {
 
   // Should be called on the thread which is or will become the main one.
   static void Initialize();
-  static void StartPeriodicReclaim(
+  static void InitializeArrayBufferPartition();
+  static void StartMemoryReclaimer(
       scoped_refptr<base::SequencedTaskRunner> task_runner);
 
-  ALWAYS_INLINE static base::ThreadSafePartitionRoot* ArrayBufferPartition() {
+  // The ArrayBufferPartition is initialized separately from the other
+  // partitions and so may not always be available. This function can be used to
+  // determine whether the partition has been initialized.
+  ALWAYS_INLINE static bool ArrayBufferPartitionInitialized() {
+    return array_buffer_root_ != nullptr;
+  }
+
+  ALWAYS_INLINE static partition_alloc::PartitionRoot* ArrayBufferPartition() {
     DCHECK(initialized_);
+    DCHECK(ArrayBufferPartitionInitialized());
     return array_buffer_root_;
   }
 
-  ALWAYS_INLINE static base::ThreadSafePartitionRoot* BufferPartition() {
+  ALWAYS_INLINE static partition_alloc::PartitionRoot* BufferPartition() {
     DCHECK(initialized_);
     return buffer_root_;
-  }
-
-  ALWAYS_INLINE static base::ThreadUnsafePartitionRoot* LayoutPartition() {
-    DCHECK(initialized_);
-    return layout_root_;
-  }
-
-  ALWAYS_INLINE static size_t ComputeAllocationSize(size_t count, size_t size) {
-    base::CheckedNumeric<size_t> total = count;
-    total *= size;
-    return total.ValueOrDie();
   }
 
   static size_t TotalSizeOfCommittedPages();
 
   static size_t TotalActiveBytes();
 
-  static void DumpMemoryStats(bool is_light_dump, base::PartitionStatsDumper*);
+  static void DumpMemoryStats(bool is_light_dump,
+                              partition_alloc::PartitionStatsDumper*);
 
-  static void* BufferMalloc(size_t n, const char* type_name);
+  static void* PA_MALLOC_FN BufferMalloc(size_t n, const char* type_name);
   static void* BufferTryRealloc(void* p, size_t n, const char* type_name);
+  static void* PA_MALLOC_FN BufferTryAlignedZeroedMalloc(size_t n,
+                                                         size_t alignment,
+                                                         const char* type_name);
   static void BufferFree(void* p);
+  static void BufferAlignedFree(void* p);
+  static void BufferFreeWithSize(void* p, size_t size);
   static size_t BufferPotentialCapacity(size_t n);
 
-  static void* FastMalloc(size_t n, const char* type_name);
-  static void* FastZeroedMalloc(size_t n, const char* type_name);
+  static void* PA_MALLOC_FN FastMalloc(size_t n, const char* type_name);
+  static void* PA_MALLOC_FN FastZeroedMalloc(size_t n, const char* type_name);
   static void FastFree(void* p);
 
   static void HandleOutOfMemory(size_t size);
 
+  // Adjusts the size of the partitions based on process state.
+  static void AdjustPartitionsForForeground();
+  static void AdjustPartitionsForBackground();
+
  private:
-#if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  ALWAYS_INLINE static base::ThreadSafePartitionRoot* FastMallocPartition() {
+  ALWAYS_INLINE static partition_alloc::PartitionRoot* FastMallocPartition() {
     DCHECK(initialized_);
     return fast_malloc_root_;
   }
-#endif  // !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
 
   static bool InitializeOnce();
 
   static bool initialized_;
   // See Allocator.md for a description of these partitions.
-#if !BUILDFLAG(USE_PARTITION_ALLOC_AS_MALLOC)
-  static base::ThreadSafePartitionRoot* fast_malloc_root_;
-#endif
-  static base::ThreadSafePartitionRoot* array_buffer_root_;
-  static base::ThreadSafePartitionRoot* buffer_root_;
-  static base::ThreadUnsafePartitionRoot* layout_root_;
+  static partition_alloc::PartitionRoot* fast_malloc_root_;
+  static partition_alloc::PartitionRoot* array_buffer_root_;
+  static partition_alloc::PartitionRoot* buffer_root_;
 };
 
-}  // namespace WTF
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_WTF_ALLOCATOR_PARTITIONS_H_

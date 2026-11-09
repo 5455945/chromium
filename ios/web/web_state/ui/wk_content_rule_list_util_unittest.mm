@@ -1,20 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #import "ios/web/web_state/ui/wk_content_rule_list_util.h"
 
-#include "ios/web/public/browsing_data/cookie_blocking_mode.h"
 #import "ios/web/public/test/fakes/fake_web_client.h"
-#include "ios/web/public/test/scoped_testing_web_client.h"
-#include "ios/web/test/test_url_constants.h"
-#include "testing/gtest/include/gtest/gtest.h"
+#import "ios/web/public/test/scoped_testing_web_client.h"
+#import "ios/web/test/test_url_constants.h"
+#import "testing/gtest/include/gtest/gtest.h"
 #import "testing/gtest_mac.h"
-#include "testing/platform_test.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "testing/platform_test.h"
 
 namespace web {
 namespace {
@@ -22,47 +17,9 @@ namespace {
 using WKContentRuleListUtilTest = PlatformTest;
 
 // Tests that the JSON created for block mode contains the correct keys.
-TEST_F(WKContentRuleListUtilTest, JSONBlock) {
-  NSString* rules_string =
-      CreateCookieBlockingJsonRuleList(CookieBlockingMode::kBlock);
-  NSData* rules_data = [rules_string dataUsingEncoding:NSUTF8StringEncoding];
-  id json = [NSJSONSerialization JSONObjectWithData:rules_data
-                                            options:0
-                                              error:nil];
-
-  // The Apple API says Content Blocker rules must be an array of rules.
-  ASSERT_TRUE([json isKindOfClass:[NSArray class]]);
-
-  id block_rule = json[0];
-  ASSERT_TRUE([block_rule isKindOfClass:[NSDictionary class]]);
-  ASSERT_NSEQ(@".*", block_rule[@"trigger"][@"url-filter"]);
-  ASSERT_NSEQ(@"block-cookies", block_rule[@"action"][@"type"]);
-}
-
-// Tests that the JSON created for block third party mode contains the correct
-// keys.
-TEST_F(WKContentRuleListUtilTest, JSONBlockThirdParty) {
-  NSString* rules_string =
-      CreateCookieBlockingJsonRuleList(CookieBlockingMode::kBlockThirdParty);
-  NSData* rules_data = [rules_string dataUsingEncoding:NSUTF8StringEncoding];
-  id json = [NSJSONSerialization JSONObjectWithData:rules_data
-                                            options:0
-                                              error:nil];
-
-  // The Apple API says Content Blocker rules must be an array of rules.
-  ASSERT_TRUE([json isKindOfClass:[NSArray class]]);
-
-  id block_rule = json[0];
-  ASSERT_TRUE([block_rule isKindOfClass:[NSDictionary class]]);
-  ASSERT_NSEQ(@".*", block_rule[@"trigger"][@"url-filter"]);
-  ASSERT_NSEQ(@"third-party", block_rule[@"trigger"][@"load-type"][0]);
-  ASSERT_NSEQ(@"block-cookies", block_rule[@"action"][@"type"]);
-}
-
-// Tests that the JSON created for block mode contains the correct keys.
 TEST_F(WKContentRuleListUtilTest, LocalResourceJSONBlock) {
   ScopedTestingWebClient web_client(std::make_unique<FakeWebClient>());
-  NSString* rules_string = CreateLocalBlockingJsonRuleList();
+  NSString* rules_string = CreateAppSpecificURLsJsonRuleList();
   NSData* rules_data = [rules_string dataUsingEncoding:NSUTF8StringEncoding];
   id json = [NSJSONSerialization JSONObjectWithData:rules_data
                                             options:0
@@ -74,17 +31,51 @@ TEST_F(WKContentRuleListUtilTest, LocalResourceJSONBlock) {
   id block_rule = json[0];
   ASSERT_TRUE([block_rule isKindOfClass:[NSDictionary class]]);
   NSArray* filtered_schemes = @[
-    @"file://.*", [@(kTestWebUIScheme) stringByAppendingString:@"://.*"],
-    [@(kTestAppSpecificScheme) stringByAppendingString:@"://.*"]
+    [@"^" stringByAppendingString:[@(kTestWebUIScheme)
+                                      stringByAppendingString:@"://.*"]],
+    [@"^" stringByAppendingString:[@(kTestAppSpecificScheme)
+                                      stringByAppendingString:@"://.*"]]
   ];
   ASSERT_NSEQ(filtered_schemes, block_rule[@"trigger"][@"if-top-url"]);
-  ASSERT_NSEQ(@"https?://.*", block_rule[@"trigger"][@"url-filter"]);
+  ASSERT_NSEQ(@"^https?://.*", block_rule[@"trigger"][@"url-filter"]);
   NSArray* filtered_types = @[
     @"image", @"style-sheet", @"script", @"font", @"raw", @"svg-document",
-    @"media", @"popup", @"ping"
+    @"media", @"popup", @"ping", @"document"
   ];
   ASSERT_NSEQ(filtered_types, block_rule[@"trigger"][@"resource-type"]);
   ASSERT_NSEQ(@"block", block_rule[@"action"][@"type"]);
+
+  id websocket_block_rule = json[1];
+  ASSERT_TRUE([websocket_block_rule isKindOfClass:[NSDictionary class]]);
+  ASSERT_NSEQ(filtered_schemes,
+              websocket_block_rule[@"trigger"][@"if-top-url"]);
+  ASSERT_NSEQ(@"^wss?://.*", websocket_block_rule[@"trigger"][@"url-filter"]);
+  ASSERT_NSEQ(@[ @"websocket" ],
+              websocket_block_rule[@"trigger"][@"resource-type"]);
+  ASSERT_NSEQ(@"block", websocket_block_rule[@"action"][@"type"]);
+}
+
+// Tests that the JSON created for mixed content auto-upgrading contains the
+// correct keys.
+TEST_F(WKContentRuleListUtilTest, AutoUpgradeMixedContent) {
+  ScopedTestingWebClient web_client(std::make_unique<FakeWebClient>());
+  NSString* rules_string = CreateMixedContentAutoUpgradeJsonRuleList();
+  NSData* rules_data = [rules_string dataUsingEncoding:NSUTF8StringEncoding];
+  id json = [NSJSONSerialization JSONObjectWithData:rules_data
+                                            options:0
+                                              error:nil];
+
+  // The Apple API says Content Blocker rules must be an array of rules.
+  ASSERT_TRUE([json isKindOfClass:[NSArray class]]);
+  id block_rule = json[0];
+  ASSERT_TRUE([block_rule isKindOfClass:[NSDictionary class]]);
+  NSArray* filtered_schemes = @[ @"^https://.*" ];
+  ASSERT_NSEQ(filtered_schemes, block_rule[@"trigger"][@"if-top-url"]);
+
+  ASSERT_NSEQ(@"^http://.*", block_rule[@"trigger"][@"url-filter"]);
+  NSArray* filtered_types = @[ @"image", @"media" ];
+  ASSERT_NSEQ(filtered_types, block_rule[@"trigger"][@"resource-type"]);
+  ASSERT_NSEQ(@"make-https", block_rule[@"action"][@"type"]);
 }
 
 }  // namespace

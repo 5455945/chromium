@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,34 +7,36 @@
 #include <math.h>
 
 #include <memory>
+#include <string_view>
 #include <vector>
 
-#include "base/bind.h"
+#include "base/byte_size.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/ref_counted_memory.h"
 #include "base/memory/singleton.h"
 #include "base/metrics/user_metrics_action.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
-#include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/lock.h"
 #include "base/system/sys_info.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
+#include "base/task/thread_pool.h"
 #include "base/time/time.h"
 #include "base/trace_event/memory_allocator_dump_guid.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "content/app/resources/grit/content_resources.h"
 #include "content/child/child_thread_impl.h"
-#include "content/common/appcache_interfaces.h"
 #include "content/common/child_process.mojom.h"
-#include "content/common/service_worker/service_worker_utils.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_features.h"
 #include "content/public/common/content_switches.h"
@@ -42,6 +44,7 @@
 #include "mojo/public/cpp/bindings/shared_remote.h"
 #include "net/base/net_errors.h"
 #include "services/network/public/cpp/features.h"
+#include "third_party/blink/public/common/features.h"
 #include "third_party/blink/public/common/thread_safe_browser_interface_broker_proxy.h"
 #include "third_party/blink/public/platform/user_metrics_action.h"
 #include "third_party/blink/public/platform/web_data.h"
@@ -51,8 +54,7 @@
 #include "third_party/blink/public/resources/grit/blink_image_resources.h"
 #include "third_party/blink/public/resources/grit/blink_resources.h"
 #include "third_party/blink/public/strings/grit/blink_strings.h"
-#include "third_party/zlib/google/compression_utils.h"
-#include "ui/base/layout.h"
+#include "ui/base/resource/resource_scale_factor.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/events/gestures/blink/web_gesture_curve_impl.h"
 
@@ -62,7 +64,6 @@ using blink::WebURL;
 using blink::WebURLError;
 
 namespace content {
-
 namespace {
 
 // This must match third_party/WebKit/public/blink_resources.grd.
@@ -97,7 +98,7 @@ class NestedMessageLoopRunnerImpl
   }
 
  private:
-  base::RunLoop* run_loop_ = nullptr;
+  raw_ptr<base::RunLoop> run_loop_ = nullptr;
 
   SEQUENCE_CHECKER(sequence_checker_);
 };
@@ -117,6 +118,11 @@ class ThreadSafeBrowserInterfaceBrokerProxyImpl
   ThreadSafeBrowserInterfaceBrokerProxyImpl()
       : process_host_(GetChildProcessHost()) {}
 
+  ThreadSafeBrowserInterfaceBrokerProxyImpl(
+      const ThreadSafeBrowserInterfaceBrokerProxyImpl&) = delete;
+  ThreadSafeBrowserInterfaceBrokerProxyImpl& operator=(
+      const ThreadSafeBrowserInterfaceBrokerProxyImpl&) = delete;
+
   // blink::ThreadSafeBrowserInterfaceBrokerProxy implementation:
   void GetInterfaceImpl(mojo::GenericPendingReceiver receiver) override {
     if (process_host_)
@@ -127,8 +133,6 @@ class ThreadSafeBrowserInterfaceBrokerProxyImpl
   ~ThreadSafeBrowserInterfaceBrokerProxyImpl() override = default;
 
   const mojo::SharedRemote<mojom::ChildProcessHost> process_host_;
-
-  DISALLOW_COPY_AND_ASSIGN(ThreadSafeBrowserInterfaceBrokerProxyImpl);
 };
 
 }  // namespace
@@ -150,28 +154,31 @@ void BlinkPlatformImpl::RecordAction(const blink::UserMetricsAction& name) {
     child_thread->RecordComputedAction(name.Action());
 }
 
+bool BlinkPlatformImpl::HasDataResource(int resource_id) const {
+  return GetContentClient()->HasDataResource(resource_id);
+}
+
 WebData BlinkPlatformImpl::GetDataResource(
     int resource_id,
     ui::ResourceScaleFactor scale_factor) {
-  base::StringPiece resource =
+  std::string_view resource =
       GetContentClient()->GetDataResource(resource_id, scale_factor);
-  return WebData(resource.data(), resource.size());
+  return WebData(base::as_byte_span(resource));
 }
 
-WebData BlinkPlatformImpl::UncompressDataResource(int resource_id) {
-  base::StringPiece resource =
-      GetContentClient()->GetDataResource(resource_id, ui::SCALE_FACTOR_NONE);
-  if (resource.empty())
-    return WebData(resource.data(), resource.size());
-  std::string uncompressed;
-  CHECK(compression::GzipUncompress(std::string(resource), &uncompressed));
-  return WebData(uncompressed.data(), uncompressed.size());
+std::string BlinkPlatformImpl::GetDataResourceString(int resource_id) {
+  return GetContentClient()->GetDataResourceString(resource_id);
+}
+
+scoped_refptr<base::RefCountedMemory> BlinkPlatformImpl::GetDataResourceBytes(
+    int resource_id) {
+  return GetContentClient()->GetDataResourceBytes(resource_id);
 }
 
 WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id) {
   if (resource_id < 0)
     return WebString();
-  return WebString::FromUTF16(
+  return WebString::FromUtf16(
       GetContentClient()->GetLocalizedString(resource_id));
 }
 
@@ -193,7 +200,7 @@ WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id,
   if (format_string.empty())
     return WebString();
 
-  return WebString::FromUTF16(
+  return WebString::FromUtf16(
       base::ReplaceStringPlaceholders(format_string, value.Utf16(), nullptr));
 }
 
@@ -206,7 +213,7 @@ WebString BlinkPlatformImpl::QueryLocalizedString(int resource_id,
   values.reserve(2);
   values.push_back(value1.Utf16());
   values.push_back(value2.Utf16());
-  return WebString::FromUTF16(base::ReplaceStringPlaceholders(
+  return WebString::FromUtf16(base::ReplaceStringPlaceholders(
       GetContentClient()->GetLocalizedString(resource_id), values, nullptr));
 }
 
@@ -219,10 +226,6 @@ BlinkPlatformImpl::GetBrowserInterfaceBroker() {
   return browser_interface_broker_proxy_.get();
 }
 
-bool BlinkPlatformImpl::IsURLSupportedForAppCache(const blink::WebURL& url) {
-  return IsSchemeSupportedForAppCache(url);
-}
-
 bool BlinkPlatformImpl::IsURLSavableForSavableResource(
     const blink::WebURL& url) {
   return IsSavableURL(url);
@@ -231,7 +234,7 @@ bool BlinkPlatformImpl::IsURLSavableForSavableResource(
 size_t BlinkPlatformImpl::MaxDecodedImageBytes() {
   const int kMB = 1024 * 1024;
   const int kMaxNumberOfBytesPerPixel = 4;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   if (base::SysInfo::IsLowEndDevice()) {
     // Limit image decoded size to 3M pixels on low end devices.
     // 4 is maximum number of bytes per pixel.
@@ -244,7 +247,7 @@ size_t BlinkPlatformImpl::MaxDecodedImageBytes() {
   // that 1.6GB of reported physical memory on a 2GB device is enough to set the
   // limit at 16M pixels, which is a desirable value since 4K*4K is a relatively
   // common texture size.
-  return base::SysInfo::AmountOfPhysicalMemory() / 25;
+  return base::SysInfo::AmountOfTotalPhysicalMemory().InBytes() / 25;
 #else
   size_t max_decoded_image_byte_limit = kNoDecodedImageByteLimit;
   base::CommandLine& command_line = *base::CommandLine::ForCurrentProcess();
@@ -267,6 +270,11 @@ bool BlinkPlatformImpl::IsLowEndDevice() {
 
 scoped_refptr<base::SingleThreadTaskRunner> BlinkPlatformImpl::GetIOTaskRunner()
     const {
+  return io_thread_task_runner_;
+}
+
+scoped_refptr<base::SequencedTaskRunner>
+BlinkPlatformImpl::GetMediaStreamVideoSourceVideoTaskRunner() const {
   return io_thread_task_runner_;
 }
 

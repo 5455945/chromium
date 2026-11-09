@@ -1,14 +1,15 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_WORKLET_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_WORKLET_H_
 
-#include "base/macros.h"
+#include "base/gtest_prod_util.h"
+#include "third_party/blink/public/common/messaging/message_port_channel.h"
 #include "third_party/blink/renderer/core/workers/worklet.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -16,7 +17,7 @@ class AudioWorkletHandler;
 class AudioWorkletMessagingProxy;
 class BaseAudioContext;
 class CrossThreadAudioParamInfo;
-class MessagePortChannel;
+class MessagePort;
 class SerializedScriptValue;
 
 class MODULES_EXPORT AudioWorklet final : public Worklet {
@@ -24,13 +25,19 @@ class MODULES_EXPORT AudioWorklet final : public Worklet {
 
  public:
   explicit AudioWorklet(BaseAudioContext*);
+
+  AudioWorklet(const AudioWorklet&) = delete;
+  AudioWorklet& operator=(const AudioWorklet&) = delete;
+
   ~AudioWorklet() override = default;
 
   void CreateProcessor(scoped_refptr<AudioWorkletHandler>,
                        MessagePortChannel,
                        scoped_refptr<SerializedScriptValue> node_options);
+  MessagePort* port() const;
+  MessagePortChannel GetGlobalScopePortChannel() const;
 
-  // Invoked by AudioWorkletMessagingProxy. Notifies |context_| when
+  // Invoked by AudioWorkletMessagingProxy. Notifies `context_` when
   // AudioWorkletGlobalScope finishes the first script evaluation and is ready
   // for the worklet operation. Can be used for other post-evaluation tasks
   // in AudioWorklet or BaseAudioContext.
@@ -38,21 +45,28 @@ class MODULES_EXPORT AudioWorklet final : public Worklet {
 
   BaseAudioContext* GetBaseAudioContext() const;
 
-  // Returns |nullptr| if there is no active WorkletGlobalScope().
+  // Returns `nullptr` if there is no active `WorkletGlobalScope()`.
   AudioWorkletMessagingProxy* GetMessagingProxy();
 
-  const Vector<CrossThreadAudioParamInfo> GetParamInfoListForProcessor(
+  // Terminate all messaging proxies to break reference cycles.
+  void TerminateProxies();
+
+  Vector<CrossThreadAudioParamInfo> GetParamInfoListForProcessor(
       const String& name);
 
   bool IsProcessorRegistered(const String& name);
 
-  // Returns |true| when a AudioWorkletMessagingProxy and a WorkletBackingThread
+  // Returns `true` when a AudioWorkletMessagingProxy and a WorkletBackingThread
   // are ready.
   bool IsReady();
 
   void Trace(Visitor*) const override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(AudioContextTest, AudioWorkletTerminatedOnClose);
+  FRIEND_TEST_ALL_PREFIXES(AudioContextTest,
+                           AudioWorkletCreateProcessorTeardownOnMainThread);
+
   // Implements Worklet
   bool NeedsToCreateGlobalScope() final;
   WorkletGlobalScopeProxy* CreateGlobalScope() final;
@@ -61,8 +75,8 @@ class MODULES_EXPORT AudioWorklet final : public Worklet {
   bool worklet_started_ = false;
 
   Member<BaseAudioContext> context_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioWorklet);
+  Member<MessagePort> port_;
+  MessagePortChannel global_scope_port_channel_;
 };
 
 }  // namespace blink

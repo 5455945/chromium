@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,12 @@
 
 #include <string>
 
+#include "mojo/public/cpp/bindings/optional_as_pointer.h"
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "services/tracing/public/mojom/perfetto_service.mojom-shared.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/chrome_config.h"
 #include "third_party/perfetto/include/perfetto/tracing/core/data_source_config.h"
+#include "third_party/perfetto/protos/perfetto/config/interceptor_config.gen.h"
 
 namespace mojo {
 template <>
@@ -39,6 +41,37 @@ class StructTraits<tracing::mojom::DataSourceConfigDataView,
   static const std::string& legacy_config(
       const perfetto::DataSourceConfig& src) {
     return src.legacy_config();
+  }
+  static const std::string& track_event_config_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.track_event_config_raw();
+  }
+  static const std::string& etw_config_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.etw_config_raw();
+  }
+  static const std::string& system_metrics_config_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.chromium_system_metrics_raw();
+  }
+  static const std::string& histogram_samples_config_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.chromium_histogram_samples_raw();
+  }
+  static const std::string& chromium_sampling_heap_profiler_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.chromium_sampling_heap_profiler_raw();
+  }
+  static const std::string& chromium_stack_sampling_profiler_raw(
+      const perfetto::DataSourceConfig& src) {
+    return src.chromium_stack_sampling_profiler_raw();
+  }
+
+  static mojo::OptionalAsPointer<const perfetto::protos::gen::InterceptorConfig>
+  interceptor_config(const perfetto::DataSourceConfig& src) {
+    return src.has_interceptor_config()
+               ? mojo::OptionalAsPointer(&src.interceptor_config())
+               : nullptr;
   }
 
   static bool Read(tracing::mojom::DataSourceConfigDataView data,

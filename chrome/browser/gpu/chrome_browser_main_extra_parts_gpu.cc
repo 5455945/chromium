@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,21 +6,32 @@
 
 #include "base/check.h"
 #include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
-#include "components/viz/common/features.h"
 #include "content/public/browser/gpu_data_manager.h"
 #include "gpu/config/gpu_info.h"
+#include "gpu/config/gpu_preferences.h"
 
 namespace {
-const char kTrialName[] = "SkiaBackend";
-const char kGL[] = "GL";
-const char kVulkan[] = "Vulkan";
+const char kSkiaTrialName[] = "SkiaBackend";
+const char kEGLTrialName[] = "EGLDisplayType";
+
+// Synthetic trial group names. Groups added here should be added to finch
+// service side as well.
+const char kGroupNone[] = "None";
+const char kGroupGaneshGL[] = "GL";
+const char kGroupGaneshVulkan[] = "Vulkan";
+const char kGroupGraphiteDawnVulkan[] = "GraphiteDawnVulkan";
+const char kGroupGraphiteDawnMetal[] = "GraphiteDawnMetal";
+const char kGroupGraphiteDawnD3D11[] = "GraphiteDawnD3D11";
+const char kGroupGraphiteDawnD3D12[] = "GraphiteDawnD3D12";
+const char kGroupGraphiteDawnOpenGLES[] = "GraphiteDawnOpenGLES";
+const char kGroupGraphiteVulkan[] = "GraphiteVulkan";
+
 }  // namespace
 
 ChromeBrowserMainExtraPartsGpu::ChromeBrowserMainExtraPartsGpu() = default;
 
 ChromeBrowserMainExtraPartsGpu::~ChromeBrowserMainExtraPartsGpu() {
-  if (features::IsUsingSkiaRenderer())
-    content::GpuDataManager::GetInstance()->RemoveObserver(this);
+  content::GpuDataManager::GetInstance()->RemoveObserver(this);
 }
 
 void ChromeBrowserMainExtraPartsGpu::PreCreateThreads() {
@@ -30,28 +41,52 @@ void ChromeBrowserMainExtraPartsGpu::PreCreateThreads() {
   // It's unsafe to append the gpu command line switches to the global
   // CommandLine::ForCurrentProcess object after threads are created.
   // 2) Must be after other parts' PreCreateThreads to pick up chrome://flags.
-  DCHECK(!content::GpuDataManager::Initialized());
+  CHECK(!content::GpuDataManager::Initialized(), base::NotFatalUntil::M161);
   content::GpuDataManager* manager = content::GpuDataManager::GetInstance();
-  if (features::IsUsingSkiaRenderer())
-    manager->AddObserver(this);
+  manager->AddObserver(this);
 }
 
 void ChromeBrowserMainExtraPartsGpu::OnGpuInfoUpdate() {
-  DCHECK(features::IsUsingSkiaRenderer());
   const auto* backend_name = GetSkiaBackendName();
   if (backend_name) {
-    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(
-        kTrialName, backend_name);
+    ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(kSkiaTrialName,
+                                                              backend_name);
+  }
+  auto* manager = content::GpuDataManager::GetInstance();
+  if (manager->IsEssentialGpuInfoAvailable()) {
+    const std::string& display_type = manager->GetGPUInfo().display_type;
+    if (!display_type.empty()) {
+      ChromeMetricsServiceAccessor::RegisterSyntheticFieldTrial(kEGLTrialName,
+                                                                display_type);
+    }
   }
 }
 
 const char* ChromeBrowserMainExtraPartsGpu::GetSkiaBackendName() const {
   auto* manager = content::GpuDataManager::GetInstance();
-  if (!manager->IsEssentialGpuInfoAvailable())
+  if (!manager->IsEssentialGpuInfoAvailable()) {
     return nullptr;
-  if (manager->GetFeatureStatus(gpu::GpuFeatureType::GPU_FEATURE_TYPE_VULKAN) ==
-      gpu::GpuFeatureStatus::kGpuFeatureStatusEnabled) {
-    return kVulkan;
   }
-  return kGL;
+  switch (manager->GetGPUInfo().skia_backend_type) {
+    case gpu::SkiaBackendType::kNone:
+      return kGroupNone;
+    case gpu::SkiaBackendType::kGaneshGL:
+      return kGroupGaneshGL;
+    case gpu::SkiaBackendType::kGaneshVulkan:
+      return kGroupGaneshVulkan;
+    case gpu::SkiaBackendType::kGraphiteDawnVulkan:
+      return kGroupGraphiteDawnVulkan;
+    case gpu::SkiaBackendType::kGraphiteDawnMetal:
+      return kGroupGraphiteDawnMetal;
+    case gpu::SkiaBackendType::kGraphiteDawnD3D11:
+      return kGroupGraphiteDawnD3D11;
+    case gpu::SkiaBackendType::kGraphiteDawnD3D12:
+      return kGroupGraphiteDawnD3D12;
+    case gpu::SkiaBackendType::kGraphiteDawnOpenGLES:
+      return kGroupGraphiteDawnOpenGLES;
+    case gpu::SkiaBackendType::kGraphiteVulkan:
+      return kGroupGraphiteVulkan;
+    case gpu::SkiaBackendType::kUnknown:
+      return nullptr;
+  }
 }

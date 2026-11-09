@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,11 +18,7 @@
 #endif  // defined(WM_PUBLIC_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(WM_PUBLIC_IMPLEMENTATION)
 #define WM_PUBLIC_EXPORT __attribute__((visibility("default")))
-#else
-#define WM_PUBLIC_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

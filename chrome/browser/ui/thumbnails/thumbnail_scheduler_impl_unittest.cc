@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,19 +43,22 @@ class ThumbnailSchedulerImplTest : public ::testing::Test {
 
  protected:
   void AddTabsToScheduler() {
-    for (FakeTabCapturer& tab : tabs_)
+    for (FakeTabCapturer& tab : tabs_) {
       scheduler_.AddTab(&tab);
+    }
   }
 
   void RemoveTabsFromScheduler() {
-    for (FakeTabCapturer& tab : tabs_)
+    for (FakeTabCapturer& tab : tabs_) {
       scheduler_.RemoveTab(&tab);
+    }
   }
 
   std::vector<bool> TabScheduledStates() {
     std::vector<bool> states;
-    for (const auto& tab : tabs_)
+    for (const auto& tab : tabs_) {
       states.push_back(tab.capture_permitted());
+    }
     return states;
   }
 
@@ -190,4 +193,20 @@ TEST_F(ThumbnailSchedulerImplTest, CaptureStopsOnPriorityNone) {
   scheduler_.SetTabCapturePriority(
       &tabs_[1], ThumbnailSchedulerImpl::TabCapturePriority::kNone);
   EXPECT_THAT(TabScheduledStates(), ElementsAre(false, false, false, false));
+}
+
+TEST_F(ThumbnailSchedulerImplTest, RemoveTabWhileCapturing) {
+  FakeTabCapturer removed_tab;
+  scheduler_.AddTab(&removed_tab);
+  scheduler_.SetTabCapturePriority(
+      &removed_tab, ThumbnailSchedulerImpl::TabCapturePriority::kHigh);
+  EXPECT_TRUE(removed_tab.capture_permitted());
+
+  scheduler_.RemoveTab(&removed_tab);
+
+  scheduler_.SetTabCapturePriority(
+      &tabs_[0], ThumbnailSchedulerImpl::TabCapturePriority::kHigh);
+  scheduler_.SetTabCapturePriority(
+      &tabs_[1], ThumbnailSchedulerImpl::TabCapturePriority::kHigh);
+  EXPECT_THAT(TabScheduledStates(), ElementsAre(true, true, false, false));
 }

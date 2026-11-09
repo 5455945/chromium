@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -68,12 +68,16 @@ class SignalKey {
   // format.
   std::string ToBinary() const;
   // Parses a machine readable representation of a SignalKeyInternal into
-  // a SignalKey. Use IsValid() to check that the resulting SignalKey is valid.
-  static void FromBinary(const std::string& input, SignalKey* output);
+  // a SignalKey. Returns whether the conversion succeeded.
+  [[nodiscard]] static bool FromBinary(const std::string& input,
+                                       SignalKey* output);
   // The SignalKey prefix in binary format.
   std::string GetPrefixInBinary() const;
   // Returns a human readable representation of the SignalKey.
   std::string ToDebugString() const;
+
+  // Allow SignalKey to be a key in STL containers.
+  bool operator<(const SignalKey& other) const;
 
  private:
   // The type of record this key refers to.

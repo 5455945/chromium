@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <memory>
 #include <utility>
 
-#include "base/metrics/histogram_functions.h"
+#include "base/notreached.h"
 #include "components/schema_org/common/metadata.mojom-blink.h"
 #include "third_party/blink/public/mojom/document_metadata/document_metadata.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
@@ -55,100 +55,112 @@ constexpr wtf_size_t kMaxRepeatedSize = 100;
 constexpr char kJSONLDKeyType[] = "@type";
 constexpr char kJSONLDKeyGraph[] = "@graph";
 bool IsSupportedType(AtomicString type) {
-  DEFINE_STATIC_LOCAL(HashSet<AtomicString>, elements,
-                      ({// Common types that include addresses.
-                        "AutoDealer", "Hotel", "LocalBusiness", "Organization",
-                        "Person", "Place", "PostalAddress", "Product",
-                        "Residence", "Restaurant", "SingleFamilyResidence",
-                        // Common types including phone numbers
-                        "Store", "ContactPoint", "LodgingBusiness"}));
+  DEFINE_STATIC_LOCAL(
+      HashSet<AtomicString>, elements,
+      ({// Common types that include addresses.
+        AtomicString("AutoDealer"), AtomicString("Hotel"),
+        AtomicString("LocalBusiness"), AtomicString("Organization"),
+        AtomicString("Person"), AtomicString("Place"),
+        AtomicString("PostalAddress"), AtomicString("Product"),
+        AtomicString("ProductGroup"), AtomicString("Residence"),
+        AtomicString("Restaurant"), AtomicString("SingleFamilyResidence"),
+        // Common types including phone numbers
+        AtomicString("Store"), AtomicString("ContactPoint"),
+        AtomicString("LodgingBusiness"), AtomicString("LoginAction")}));
   return type && elements.Contains(type);
 }
 
-void ExtractEntity(const JSONObject&, Entity&, int recursionLevel);
+void ExtractEntity(const JSONObject&, int recursion_level, Entity&);
 
 bool ParseRepeatedValue(const JSONArray& arr,
-                        Values& values,
-                        int recursionLevel) {
+                        int recursion_level,
+                        ValuesPtr& values) {
   if (arr.size() < 1) {
     return false;
   }
 
   const JSONValue::ValueType type = arr.at(0)->GetType();
   switch (type) {
+    case JSONValue::ValueType::kTypeNull:
+      return false;
     case JSONValue::ValueType::kTypeBoolean:
-      values.set_bool_values(Vector<bool>());
+      values = Values::NewBoolValues({});
       break;
     case JSONValue::ValueType::kTypeInteger:
-      values.set_long_values(Vector<int64_t>());
+      values = Values::NewLongValues({});
       break;
+    // App Indexing doesn't support double type, so just encode its decimal
+    // value as a string instead.
     case JSONValue::ValueType::kTypeDouble:
-      // App Indexing doesn't support double type, so just encode its decimal
-      // value as a string instead.
-      values.set_string_values(Vector<String>());
-      break;
     case JSONValue::ValueType::kTypeString:
-      values.set_string_values(Vector<String>());
+      values = Values::NewStringValues({});
       break;
     case JSONValue::ValueType::kTypeObject:
-      if (recursionLevel + 1 >= kMaxDepth) {
+      if (recursion_level + 1 >= kMaxDepth) {
         return false;
       }
-      values.set_entity_values(Vector<EntityPtr>());
+      values = Values::NewEntityValues({});
       break;
-    case JSONArray::ValueType::kTypeArray:
+    case JSONValue::ValueType::kTypeArray:
       // App Indexing doesn't support nested arrays.
       return false;
-    default:
-      break;
   }
-  for (wtf_size_t j = 0; j < std::min(arr.size(), kMaxRepeatedSize); ++j) {
-    const JSONValue* innerVal = arr.at(j);
-    if (innerVal->GetType() != type) {
+
+  const wtf_size_t arr_size = std::min(arr.size(), kMaxRepeatedSize);
+  for (wtf_size_t i = 0; i < arr_size; ++i) {
+    const JSONValue* const element = arr.at(i);
+    if (element->GetType() != type) {
       // App Indexing doesn't support mixed types. If there are mixed
       // types in the parsed object, we will drop the property.
       return false;
     }
-    switch (innerVal->GetType()) {
+    switch (type) {
       case JSONValue::ValueType::kTypeBoolean: {
         bool v;
-        innerVal->AsBoolean(&v);
-        values.get_bool_values().push_back(v);
-      } break;
+        element->AsBoolean(&v);
+        values->get_bool_values().push_back(v);
+        continue;
+      }
       case JSONValue::ValueType::kTypeInteger: {
         int v;
-        innerVal->AsInteger(&v);
-        values.get_long_values().push_back(v);
-      } break;
+        element->AsInteger(&v);
+        values->get_long_values().push_back(v);
+        continue;
+      }
       case JSONValue::ValueType::kTypeDouble: {
         // App Indexing doesn't support double type, so just encode its decimal
         // value as a string instead.
         double v;
-        innerVal->AsDouble(&v);
+        element->AsDouble(&v);
         String s = String::Number(v);
-        s.Truncate(kMaxStringLength);
-        values.get_string_values().push_back(s);
-      } break;
+        s = s.substr(0, kMaxStringLength);
+        values->get_string_values().push_back(s);
+        continue;
+      }
       case JSONValue::ValueType::kTypeString: {
         String v;
-        innerVal->AsString(&v);
-        v.Truncate(kMaxStringLength);
-        values.get_string_values().push_back(v);
-      } break;
-      case JSONValue::ValueType::kTypeObject:
-        values.get_entity_values().push_back(Entity::New());
-        ExtractEntity(*(JSONObject::Cast(innerVal)),
-                      *(values.get_entity_values().at(j)), recursionLevel + 1);
-        break;
-      default:
-        break;
+        element->AsString(&v);
+        v = v.substr(0, kMaxStringLength);
+        values->get_string_values().push_back(v);
+        continue;
+      }
+      case JSONValue::ValueType::kTypeObject: {
+        auto entity = Entity::New();
+        ExtractEntity(*(JSONObject::Cast(element)), recursion_level + 1,
+                      *entity);
+        values->get_entity_values().push_back(std::move(entity));
+        continue;
+      }
+      case JSONValue::ValueType::kTypeNull:
+      case JSONValue::ValueType::kTypeArray:
+        NOTREACHED();
     }
   }
   return true;
 }
 
-void ExtractEntity(const JSONObject& val, Entity& entity, int recursionLevel) {
-  if (recursionLevel >= kMaxDepth) {
+void ExtractEntity(const JSONObject& val, int recursion_level, Entity& entity) {
+  if (recursion_level >= kMaxDepth) {
     return;
   }
 
@@ -165,54 +177,53 @@ void ExtractEntity(const JSONObject& val, Entity& entity, int recursionLevel) {
     if (property->name == kJSONLDKeyType) {
       continue;
     }
-    property->values = Values::New();
 
-    bool addProperty = true;
+    bool add_property = true;
 
     switch (entry.second->GetType()) {
       case JSONValue::ValueType::kTypeBoolean: {
         bool v;
         val.GetBoolean(entry.first, &v);
-        property->values->set_bool_values({v});
+        property->values = Values::NewBoolValues({v});
       } break;
       case JSONValue::ValueType::kTypeInteger: {
         int v;
         val.GetInteger(entry.first, &v);
-        property->values->set_long_values({v});
+        property->values = Values::NewLongValues({v});
       } break;
       case JSONValue::ValueType::kTypeDouble: {
         double v;
         val.GetDouble(entry.first, &v);
         String s = String::Number(v);
-        s.Truncate(kMaxStringLength);
-        property->values->set_string_values({s});
+        s = s.substr(0, kMaxStringLength);
+        property->values = Values::NewStringValues({s});
       } break;
       case JSONValue::ValueType::kTypeString: {
         String v;
         val.GetString(entry.first, &v);
-        v.Truncate(kMaxStringLength);
-        property->values->set_string_values({v});
+        v = v.substr(0, kMaxStringLength);
+        property->values = Values::NewStringValues({v});
       } break;
       case JSONValue::ValueType::kTypeObject: {
-        if (recursionLevel + 1 >= kMaxDepth) {
-          addProperty = false;
+        if (recursion_level + 1 >= kMaxDepth) {
+          add_property = false;
           break;
         }
-        property->values->set_entity_values(Vector<EntityPtr>());
-        property->values->get_entity_values().push_back(Entity::New());
-
-        ExtractEntity(*(val.GetJSONObject(entry.first)),
-                      *(property->values->get_entity_values().at(0)),
-                      recursionLevel + 1);
+        Vector<EntityPtr> entities;
+        entities.push_back(Entity::New());
+        ExtractEntity(*(val.GetJSONObject(entry.first)), recursion_level + 1,
+                      *entities[0]);
+        property->values = Values::NewEntityValues(std::move(entities));
       } break;
       case JSONValue::ValueType::kTypeArray:
-        addProperty = ParseRepeatedValue(*(val.GetArray(entry.first)),
-                                         *(property->values), recursionLevel);
+        add_property = ParseRepeatedValue(*(val.GetArray(entry.first)),
+                                          recursion_level, property->values);
         break;
-      default:
+      case JSONValue::ValueType::kTypeNull:
+        add_property = false;
         break;
     }
-    if (addProperty)
+    if (add_property)
       entity.properties.push_back(std::move(property));
   }
 }
@@ -226,16 +237,15 @@ void ExtractTopLevelEntity(const JSONObject& val, Vector<EntityPtr>& entities) {
   if (!IsSupportedType(AtomicString(type))) {
     return;
   }
-  ExtractEntity(val, *entity, 0);
+  ExtractEntity(val, 0, *entity);
   entities.push_back(std::move(entity));
 }
 
 void ExtractEntitiesFromArray(const JSONArray& arr,
                               Vector<EntityPtr>& entities) {
-  for (wtf_size_t i = 0; i < arr.size(); ++i) {
-    const JSONValue* val = arr.at(i);
-    if (val->GetType() == JSONValue::ValueType::kTypeObject) {
-      ExtractTopLevelEntity(*(JSONObject::Cast(val)), entities);
+  for (const JSONValue& val : arr) {
+    if (const JSONObject* obj = JSONObject::Cast(&val)) {
+      ExtractTopLevelEntity(*obj, entities);
     }
   }
 }
@@ -265,7 +275,9 @@ ExtractionStatus ExtractMetadata(const Element& root,
     if (element.HasTagName(html_names::kScriptTag) &&
         element.FastGetAttribute(html_names::kTypeAttr) ==
             "application/ld+json") {
-      std::unique_ptr<JSONValue> json = ParseJSON(element.textContent());
+      // TODO(crbug.com/1264024): Deprecate JSON comments here, if possible.
+      std::unique_ptr<JSONValue> json =
+          ParseJSONWithCommentsDeprecated(element.textContent());
       if (!json) {
         LOG(ERROR) << "Failed to parse json.";
         return ExtractionStatus::kParseFailure;
@@ -283,7 +295,7 @@ ExtractionStatus ExtractMetadata(const Element& root,
       }
     }
   }
-  if (entities.IsEmpty()) {
+  if (entities.empty()) {
     return ExtractionStatus::kEmpty;
   }
   return ExtractionStatus::kOK;
@@ -304,23 +316,10 @@ WebPagePtr DocumentMetadataExtractor::Extract(const Document& document) {
   WebPagePtr page = WebPage::New();
 
   // Traverse the DOM tree and extract the metadata.
-  base::TimeTicks start_time = base::TimeTicks::Now();
   ExtractionStatus status = ExtractMetadata(*html, page->entities);
-  base::TimeDelta elapsed_time = base::TimeTicks::Now() - start_time;
-
-  base::UmaHistogramEnumeration("CopylessPaste.ExtractionStatus", status);
-
   if (status != ExtractionStatus::kOK) {
-    base::UmaHistogramCustomMicrosecondsTimes(
-        "CopylessPaste.ExtractionFailedUs", elapsed_time,
-        base::TimeDelta::FromMicroseconds(1), base::TimeDelta::FromSeconds(1),
-        50);
     return nullptr;
   }
-  base::UmaHistogramCustomMicrosecondsTimes(
-      "CopylessPaste.ExtractionUs", elapsed_time,
-      base::TimeDelta::FromMicroseconds(1), base::TimeDelta::FromSeconds(1),
-      50);
 
   page->url = document.Url();
   page->title = document.title();

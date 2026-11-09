@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,15 +9,14 @@
 
 #include <iosfwd>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "media/base/encryption_pattern.h"
 #include "media/base/encryption_scheme.h"
 #include "media/base/media_export.h"
 #include "media/base/subsample_entry.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace media {
 
@@ -25,7 +24,7 @@ namespace media {
 class MEDIA_EXPORT DecryptConfig {
  public:
   // Keys are always 128 bits.
-  static const int kDecryptionKeySize = 16;
+  static constexpr int kDecryptionKeySize = 16;
 
   // |key_id| is the ID that references the decryption key for this sample.
   // |iv| is the initialization vector defined by the encrypted format.
@@ -47,20 +46,23 @@ class MEDIA_EXPORT DecryptConfig {
       const std::string& key_id,
       const std::string& iv,
       const std::vector<SubsampleEntry>& subsamples,
-      absl::optional<EncryptionPattern> encryption_pattern);
+      std::optional<EncryptionPattern> encryption_pattern);
 
   DecryptConfig(EncryptionScheme encryption_scheme,
                 const std::string& key_id,
                 const std::string& iv,
                 const std::vector<SubsampleEntry>& subsamples,
-                absl::optional<EncryptionPattern> encryption_pattern);
+                std::optional<EncryptionPattern> encryption_pattern);
+
+  DecryptConfig& operator=(const DecryptConfig&) = delete;
+
   ~DecryptConfig();
 
   const std::string& key_id() const { return key_id_; }
   const std::string& iv() const { return iv_; }
   const std::vector<SubsampleEntry>& subsamples() const { return subsamples_; }
   EncryptionScheme encryption_scheme() const { return encryption_scheme_; }
-  const absl::optional<EncryptionPattern>& encryption_pattern() const {
+  const std::optional<EncryptionPattern>& encryption_pattern() const {
     return encryption_pattern_;
   }
 
@@ -70,7 +72,7 @@ class MEDIA_EXPORT DecryptConfig {
   // while providing a new vector of subsamples and initialization vector.
   std::unique_ptr<DecryptConfig> CopyNewSubsamplesIV(
       const std::vector<SubsampleEntry>& subsamples,
-      const std::string& iv);
+      const std::string& iv) const;
 
   // Returns whether this config has EncryptionPattern set or not.
   bool HasPattern() const;
@@ -95,9 +97,7 @@ class MEDIA_EXPORT DecryptConfig {
   const std::vector<SubsampleEntry> subsamples_;
 
   // Only specified if |encryption_mode_| requires a pattern.
-  absl::optional<EncryptionPattern> encryption_pattern_;
-
-  DISALLOW_ASSIGN(DecryptConfig);
+  std::optional<EncryptionPattern> encryption_pattern_;
 };
 
 inline std::ostream& operator<<(std::ostream& os,

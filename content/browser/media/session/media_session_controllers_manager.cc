@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/session/media_session_controllers_manager.h"
 
-#include "base/containers/cxx20_erase.h"
+#include <map>
+
 #include "content/browser/media/session/media_session_controller.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "media/base/media_switches.h"
@@ -33,7 +34,7 @@ void MediaSessionControllersManager::RenderFrameDeleted(
   if (!IsMediaSessionEnabled())
     return;
 
-  base::EraseIf(
+  std::erase_if(
       controllers_map_,
       [render_frame_host](const ControllersMap::value_type& id_and_controller) {
         return render_frame_host->GetGlobalId() ==
@@ -88,12 +89,22 @@ void MediaSessionControllersManager::OnMediaPositionStateChanged(
 }
 
 void MediaSessionControllersManager::PictureInPictureStateChanged(
+    const MediaPlayerId& id,
     bool is_picture_in_picture) {
-  if (!IsMediaSessionEnabled())
+  if (!IsMediaSessionEnabled()) {
     return;
+  }
 
-  for (auto& entry : controllers_map_)
-    entry.second->PictureInPictureStateChanged(is_picture_in_picture);
+  if (!is_picture_in_picture) {
+    auto it = controllers_map_.find(id);
+    if (it != controllers_map_.end()) {
+      it->second->PictureInPictureStateChanged(false);
+    }
+    return;
+  }
+
+  MediaSessionController* const controller = FindOrCreateController(id);
+  controller->PictureInPictureStateChanged(true);
 }
 
 void MediaSessionControllersManager::WebContentsMutedStateChanged(bool muted) {
@@ -102,6 +113,16 @@ void MediaSessionControllersManager::WebContentsMutedStateChanged(bool muted) {
 
   for (auto& entry : controllers_map_)
     entry.second->WebContentsMutedStateChanged(muted);
+}
+
+void MediaSessionControllersManager::OnMediaMutedStatusChanged(
+    const MediaPlayerId& id,
+    bool mute) {
+  if (!IsMediaSessionEnabled())
+    return;
+
+  MediaSessionController* const controller = FindOrCreateController(id);
+  controller->OnMediaMutedStatusChanged(mute);
 }
 
 void MediaSessionControllersManager::OnPictureInPictureAvailabilityChanged(
@@ -131,6 +152,36 @@ void MediaSessionControllersManager::OnAudioOutputSinkChangingDisabled(
 
   MediaSessionController* const controller = FindOrCreateController(id);
   controller->OnAudioOutputSinkChangingDisabled();
+}
+
+void MediaSessionControllersManager::OnRemotePlaybackMetadataChange(
+    const MediaPlayerId& id,
+    media_session::mojom::RemotePlaybackMetadataPtr remote_playback_metadata) {
+  MediaSessionController* const controller = FindOrCreateController(id);
+  controller->OnRemotePlaybackMetadataChanged(
+      std::move(remote_playback_metadata));
+}
+
+void MediaSessionControllersManager::OnVideoVisibilityChanged(
+    const MediaPlayerId& id,
+    bool meets_visibility_threshold) {
+  if (!IsMediaSessionEnabled()) {
+    return;
+  }
+
+  MediaSessionController* const controller = FindOrCreateController(id);
+  controller->OnVideoVisibilityChanged(meets_visibility_threshold);
+}
+
+void MediaSessionControllersManager::OnVideoFrameAvailabilityChanged(
+    const MediaPlayerId& id,
+    bool available) {
+  if (!IsMediaSessionEnabled()) {
+    return;
+  }
+
+  MediaSessionController* const controller = FindOrCreateController(id);
+  controller->OnVideoFrameAvailabilityChanged(available);
 }
 
 MediaSessionController* MediaSessionControllersManager::FindOrCreateController(

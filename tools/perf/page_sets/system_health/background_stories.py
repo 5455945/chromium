@@ -1,4 +1,4 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -10,12 +10,14 @@ from page_sets.system_health import browsing_stories
 
 _WAIT_FOR_VIDEO_SECONDS = 5
 
+
 class _BackgroundStory(system_health_story.SystemHealthStory):
   """Abstract base class for background stories
 
   As in _LoadingStory except it puts the browser into the
   background before measuring.
   """
+
   ABSTRACT_STORY = True
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
 
@@ -71,6 +73,7 @@ class BackgroundGmailMobileStory2019(loading_stories.LoadGmailStory2019):
   NAME = 'background:tools:gmail:2019'
   SUPPORTED_PLATFORMS = platforms.MOBILE_ONLY
   TAGS = [story_tags.HEALTH_CHECK, story_tags.YEAR_2019]
+  EXTRA_BROWSER_ARGUMENTS = []
 
   def _Measure(self, action_runner):
     action_runner.tab.browser.Background()

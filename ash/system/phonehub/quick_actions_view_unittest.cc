@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,23 +8,21 @@
 #include "ash/system/phonehub/quick_action_item.h"
 #include "ash/test/ash_test_base.h"
 #include "base/test/scoped_feature_list.h"
-#include "chromeos/components/phonehub/fake_phone_hub_manager.h"
+#include "chromeos/ash/components/phonehub/fake_phone_hub_manager.h"
+#include "ui/chromeos/styles/cros_tokens_color_mappings.h"
+#include "ui/events/test/test_event.h"
+#include "ui/views/controls/label.h"
 #include "ui/views/test/button_test_api.h"
+#include "ui/views/widget/widget.h"
 
 namespace ash {
 
-using TetherController = chromeos::phonehub::TetherController;
-using FindMyDeviceController = chromeos::phonehub::FindMyDeviceController;
-
 namespace {
 
-class DummyEvent : public ui::Event {
- public:
-  DummyEvent() : Event(ui::ET_UNKNOWN, base::TimeTicks(), 0) {}
-};
+using FindMyDeviceController = phonehub::FindMyDeviceController;
+using TetherController = phonehub::TetherController;
 
-constexpr base::TimeDelta kWaitForRequestTimeout =
-    base::TimeDelta::FromSeconds(10);
+constexpr base::TimeDelta kWaitForRequestTimeout = base::Seconds(10);
 
 }  // namespace
 
@@ -36,7 +34,7 @@ class QuickActionsViewTest : public AshTestBase {
 
   // AshTestBase:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(chromeos::features::kPhoneHub);
+    feature_list_.InitAndEnableFeature(features::kPhoneHub);
     AshTestBase::SetUp();
 
     quick_actions_view_ =
@@ -50,19 +48,22 @@ class QuickActionsViewTest : public AshTestBase {
 
  protected:
   QuickActionsView* actions_view() { return quick_actions_view_.get(); }
-  chromeos::phonehub::FakeTetherController* tether_controller() {
+  std::unique_ptr<QuickActionsView> take_actions_view() {
+    return std::move(quick_actions_view_);
+  }
+  phonehub::FakeTetherController* tether_controller() {
     return phone_hub_manager_.fake_tether_controller();
   }
-  chromeos::phonehub::FakeDoNotDisturbController* dnd_controller() {
+  phonehub::FakeDoNotDisturbController* dnd_controller() {
     return phone_hub_manager_.fake_do_not_disturb_controller();
   }
-  chromeos::phonehub::FakeFindMyDeviceController* find_my_device_controller() {
+  phonehub::FakeFindMyDeviceController* find_my_device_controller() {
     return phone_hub_manager_.fake_find_my_device_controller();
   }
 
  private:
   std::unique_ptr<QuickActionsView> quick_actions_view_;
-  chromeos::phonehub::FakePhoneHubManager phone_hub_manager_;
+  phonehub::FakePhoneHubManager phone_hub_manager_;
   base::test::ScopedFeatureList feature_list_;
 };
 
@@ -71,12 +72,12 @@ TEST_F(QuickActionsViewTest, EnableHotspotVisibility) {
       TetherController::Status::kIneligibleForFeature);
 
   // Enable Hotspot button should not be shown if the feature is ineligible.
-  EXPECT_FALSE(actions_view()->enable_hotspot_for_testing()->GetVisible());
+  EXPECT_FALSE(actions_view()->GetEnableHotspotQuickActionItem()->GetVisible());
 
   tether_controller()->SetStatus(
       TetherController::Status::kConnectionAvailable);
   // Enable Hotspot button should be shown if the feature is available.
-  EXPECT_TRUE(actions_view()->enable_hotspot_for_testing()->GetVisible());
+  EXPECT_TRUE(actions_view()->GetEnableHotspotQuickActionItem()->GetVisible());
 }
 
 TEST_F(QuickActionsViewTest, EnableHotspotToggle) {
@@ -85,14 +86,14 @@ TEST_F(QuickActionsViewTest, EnableHotspotToggle) {
 
   // Simulate a toggle press. Status should be connecting.
   views::test::ButtonTestApi test_api(
-      actions_view()->enable_hotspot_for_testing()->icon_button());
-  test_api.NotifyClick(DummyEvent());
+      actions_view()->GetEnableHotspotQuickActionItem()->icon_button());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_EQ(TetherController::Status::kConnecting,
             tether_controller()->GetStatus());
 
   tether_controller()->SetStatus(TetherController::Status::kConnected);
   // Toggling again will change the state.
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_EQ(TetherController::Status::kConnecting,
             tether_controller()->GetStatus());
 }
@@ -109,16 +110,16 @@ TEST_F(QuickActionsViewTest, SilencePhoneToggle) {
   // Toggling the button will enable the feature.
   views::test::ButtonTestApi test_api(
       actions_view()->silence_phone_for_testing()->icon_button());
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_TRUE(dnd_controller()->IsDndEnabled());
 
   // Toggle again to disable.
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_FALSE(dnd_controller()->IsDndEnabled());
 
   // Test the error state.
   dnd_controller()->SetShouldRequestFail(true);
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
 
   // In error state, do not disturb is disabled but the button should still be
   // on after being pressed.
@@ -140,18 +141,18 @@ TEST_F(QuickActionsViewTest, LocatePhoneToggle) {
   // Toggling the button will enable the feature.
   views::test::ButtonTestApi test_api(
       actions_view()->locate_phone_for_testing()->icon_button());
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_EQ(FindMyDeviceController::Status::kRingingOn,
             find_my_device_controller()->GetPhoneRingingStatus());
 
   // Toggle again to disable.
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
   EXPECT_EQ(FindMyDeviceController::Status::kRingingOff,
             find_my_device_controller()->GetPhoneRingingStatus());
 
   // Test the error state.
   find_my_device_controller()->SetShouldRequestFail(true);
-  test_api.NotifyClick(DummyEvent());
+  test_api.NotifyClick(ui::test::TestEvent());
 
   // In error state, find my device is disabled but the button should still be
   // on after being pressed.
@@ -164,6 +165,24 @@ TEST_F(QuickActionsViewTest, LocatePhoneToggle) {
   EXPECT_FALSE(actions_view()->locate_phone_for_testing()->IsToggled());
 
   find_my_device_controller()->SetShouldRequestFail(false);
+}
+
+TEST_F(QuickActionsViewTest, SubLabelColorWithColorId) {
+  std::unique_ptr<views::Widget> widget = CreateFramelessTestWidget();
+  widget->SetContentsView(take_actions_view());
+
+  QuickActionItem* item =
+      static_cast<QuickActionsView*>(widget->GetContentsView())
+          ->GetEnableHotspotQuickActionItem();
+  views::View* label_view = item->children()[1].get();
+  auto* sub_label = static_cast<views::Label*>(label_view->children()[1].get());
+
+  item->SetSubLabelColorId(cros_tokens::kCrosSysPositive);
+  item->SetEnabled(false);
+  item->SetEnabled(true);
+
+  EXPECT_EQ(sub_label->GetEnabledColor(), widget->GetColorProvider()->GetColor(
+                                              cros_tokens::kCrosSysPositive));
 }
 
 }  // namespace ash

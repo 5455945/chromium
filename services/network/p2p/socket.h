@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,8 +12,10 @@
 
 #include "base/component_export.h"
 #include "base/containers/span.h"
-#include "base/macros.h"
+#include "base/feature.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/unguessable_token.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/receiver.h"
@@ -26,13 +28,16 @@
 
 namespace net {
 class NetLog;
-class NetworkIsolationKey;
+class NetworkAnonymizationKey;
 }
 
 namespace network {
 
 class ProxyResolvingClientSocketFactory;
 class P2PMessageThrottler;
+
+COMPONENT_EXPORT(NETWORK_SERVICE)
+BASE_DECLARE_FEATURE(kEnforceP2PSocketPortRestrictions);
 
 // Base class for P2P sockets.
 class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
@@ -44,10 +49,6 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
 
     // Destroys |socket| and removes it from the list of sockets.
     virtual void DestroySocket(P2PSocket* socket) = 0;
-
-    // Called by P2PSocketTcpServer after a new socket is created for an
-    // incoming connection.
-    virtual void AddAcceptedConnection(std::unique_ptr<P2PSocket> socket) = 0;
 
     // Called for each incoming/outgoing packet.
     virtual void DumpPacket(base::span<const uint8_t> data, bool incoming) = 0;
@@ -65,9 +66,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
       mojo::PendingRemote<mojom::P2PSocketClient> client,
       mojo::PendingReceiver<mojom::P2PSocket> socket,
       P2PSocketType type,
+      const net::NetworkTrafficAnnotationTag& traffic_annotation,
       net::NetLog* net_log,
       ProxyResolvingClientSocketFactory* proxy_resolving_socket_factory,
-      P2PMessageThrottler* throttler);
+      P2PMessageThrottler* throttler,
+      std::optional<base::UnguessableToken> devtools_token);
+
+  P2PSocket(const P2PSocket&) = delete;
+  P2PSocket& operator=(const P2PSocket&) = delete;
 
   ~P2PSocket() override;
 
@@ -81,11 +87,17 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
   // If |local_address.port()| is nonzero and not in the valid range,
   // initialization will fail.
   // |network_isolation_key| specifies the network stack cache shard to used.
-  virtual void Init(const net::IPEndPoint& local_address,
-                    uint16_t min_port,
-                    uint16_t max_port,
-                    const P2PHostAndIPEndPoint& remote_address,
-                    const net::NetworkIsolationKey& network_isolation_key) = 0;
+  virtual void Init(
+      const net::IPEndPoint& local_address,
+      uint16_t min_port,
+      uint16_t max_port,
+      const P2PHostAndIPEndPoint& remote_address,
+      const net::NetworkAnonymizationKey& network_anonymization_key) = 0;
+
+  // Stops all calls to the delegate. The delegate calls this on each of its
+  // sockets before destroying them in its own destructor, because destroying
+  // one socket can synchronously fail other sockets.
+  void ClearDelegate() { delegate_ = nullptr; }
 
   mojo::PendingRemote<mojom::P2PSocketClient> ReleaseClientForTesting();
   mojo::PendingReceiver<mojom::P2PSocket> ReleaseReceiverForTesting();
@@ -135,8 +147,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
 
   // Verifies that the packet |data| has a valid STUN header. In case
   // of success stores type of the message in |type|.
-  static bool GetStunPacketType(const uint8_t* data,
-                                int data_size,
+  static bool GetStunPacketType(base::span<const uint8_t> data,
                                 StunMessageType* type);
   static bool IsRequestOrResponse(StunMessageType type);
 
@@ -147,32 +158,14 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) P2PSocket : public mojom::P2PSocket {
   // destroy the socket.
   void OnError();
 
-  // Used by subclasses to track the metrics of delayed bytes and packets.
-  void IncrementDelayedPackets();
-  void IncrementTotalSentPackets();
-  void IncrementDelayedBytes(uint32_t size);
-  void DecrementDelayedBytes(uint32_t size);
-
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
   mojo::Remote<mojom::P2PSocketClient> client_;
   mojo::Receiver<mojom::P2PSocket> receiver_;
 
   ProtocolType protocol_type_;
 
  private:
-  // Track total delayed packets for calculating how many packets are
-  // delayed by system at the end of call.
-  uint32_t send_packets_delayed_total_ = 0;
-  uint32_t send_packets_total_ = 0;
-
-  // Track the maximum of consecutive delayed bytes caused by system's
-  // EWOULDBLOCK.
-  int32_t send_bytes_delayed_max_ = 0;
-  int32_t send_bytes_delayed_cur_ = 0;
-
   base::WeakPtrFactory<P2PSocket> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(P2PSocket);
 };
 
 }  // namespace network

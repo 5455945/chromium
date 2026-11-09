@@ -1,10 +1,12 @@
-# Copyright 2016 The Chromium Authors. All rights reserved.
+# Copyright 2016 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("url_mojom_gurl") {
+  generate_rust = true
+  generate_blink = true
   generate_java = true
   sources = [ "url.mojom" ]
 
@@ -30,7 +32,6 @@ mojom("url_mojom_gurl") {
         {
           mojom = "url.mojom.Url"
           cpp = "::blink::KURL"
-          force_serialize = true
         },
       ]
       traits_headers = [
@@ -41,10 +42,27 @@ mojom("url_mojom_gurl") {
     },
   ]
 
+  ts_typemaps = [
+    {
+      source = "url_converter.ts"
+      types = [
+        {
+          converter = "UrlConverter"
+          mojom = "url.mojom.Url"
+          ts = "string"
+        },
+      ]
+    },
+  ]
+
   webui_module_path = "chrome://resources/mojo/url/mojom"
+
+  # Legacy JS bindings are needed for Blink regardless of platform.
+  generate_legacy_js_bindings = true
 }
 
 mojom("url_mojom_origin") {
+  generate_blink = true
   generate_java = true
   sources = [ "origin.mojom" ]
 
@@ -86,14 +104,38 @@ mojom("url_mojom_origin") {
   ]
 
   webui_module_path = "chrome://resources/mojo/url/mojom"
+  generate_legacy_js_bindings = true
+}
+
+mojom("url_mojom_scheme_host_port") {
+  generate_blink = true
+  generate_java = true
+  sources = [ "scheme_host_port.mojom" ]
+
+  cpp_typemaps = [
+    {
+      types = [
+        {
+          mojom = "url.mojom.SchemeHostPort"
+          cpp = "::url::SchemeHostPort"
+        },
+      ]
+      traits_headers = [ "//url/mojom/scheme_host_port_mojom_traits.h" ]
+      traits_public_deps = [ "//url" ]
+    },
+  ]
+
+  blink_cpp_typemaps = cpp_typemaps
 }
 
 mojom("test_url_mojom_gurl") {
+  generate_blink = true
   sources = [ "url_test.mojom" ]
 
   public_deps = [
     ":url_mojom_gurl",
     ":url_mojom_origin",
+    ":url_mojom_scheme_host_port",
   ]
 }
 
@@ -103,6 +145,8 @@ component("mojom_traits") {
   sources = [
     "origin_mojom_traits.cc",
     "origin_mojom_traits.h",
+    "scheme_host_port_mojom_traits.cc",
+    "scheme_host_port_mojom_traits.h",
     "url_gurl_mojom_traits.cc",
     "url_gurl_mojom_traits.h",
   ]
@@ -112,6 +156,7 @@ component("mojom_traits") {
   public_deps = [
     ":url_mojom_gurl_shared",
     ":url_mojom_origin_shared",
+    ":url_mojom_scheme_host_port",
     "//base",
     "//mojo/public/cpp/base:shared_typemap_traits",
     "//url",

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,19 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/metrics/histogram_macros.h"
-#include "components/javascript_dialogs/android/jni_headers/JavascriptTabModalDialog_jni.h"
+#include "base/functional/callback.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/window_android.h"
+
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "components/javascript_dialogs/android/jni_headers/JavascriptTabModalDialog_jni.h"
 
 using base::android::AttachCurrentThread;
 using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaParamRef;
+using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
 
@@ -34,12 +35,14 @@ base::WeakPtr<TabModalDialogViewAndroid> TabModalDialogViewAndroid::Create(
     content::JavaScriptDialogManager::DialogClosedCallback
         callback_on_button_clicked,
     base::OnceClosure callback_on_cancelled) {
-  return (new TabModalDialogViewAndroid(
-              parent_web_contents, alerting_web_contents, title, dialog_type,
-              message_text, default_prompt_text,
-              std::move(callback_on_button_clicked),
-              std::move(callback_on_cancelled)))
-      ->weak_factory_.GetWeakPtr();
+  TabModalDialogViewAndroid* dialog = new TabModalDialogViewAndroid(
+      parent_web_contents, alerting_web_contents, title, dialog_type,
+      message_text, default_prompt_text, std::move(callback_on_button_clicked),
+      std::move(callback_on_cancelled));
+  base::WeakPtr<TabModalDialogViewAndroid> weak_dialog =
+      dialog->weak_factory_.GetWeakPtr();
+  dialog->Show();
+  return weak_dialog;
 }
 
 // TabModalDialogViewAndroid:
@@ -65,8 +68,7 @@ std::u16string TabModalDialogViewAndroid::GetUserInput() {
 }
 
 void TabModalDialogViewAndroid::Accept(JNIEnv* env,
-                                       const JavaParamRef<jobject>&,
-                                       const JavaParamRef<jstring>& prompt) {
+                                       const JavaRef<jstring>& prompt) {
   if (callback_on_button_clicked_) {
     std::u16string prompt_text =
         base::android::ConvertJavaStringToUTF16(env, prompt);
@@ -75,9 +77,7 @@ void TabModalDialogViewAndroid::Accept(JNIEnv* env,
   delete this;
 }
 
-void TabModalDialogViewAndroid::Cancel(JNIEnv* env,
-                                       const JavaParamRef<jobject>&,
-                                       jboolean button_clicked) {
+void TabModalDialogViewAndroid::Cancel(JNIEnv* env, bool button_clicked) {
   if (button_clicked) {
     if (callback_on_button_clicked_) {
       std::move(callback_on_button_clicked_).Run(false, std::u16string());
@@ -104,12 +104,7 @@ TabModalDialogViewAndroid::TabModalDialogViewAndroid(
 
   JNIEnv* env = AttachCurrentThread();
   jwindow_weak_ref_ = JavaObjectWeakGlobalRef(
-      env,
-      parent_web_contents->GetTopLevelNativeWindow()->GetJavaObject().obj());
-
-  // Keep a strong ref to the parent window while we make the call to java to
-  // display the dialog.
-  ScopedJavaLocalRef<jobject> jwindow = jwindow_weak_ref_.get(env);
+      env, parent_web_contents->GetTopLevelNativeWindow()->GetJavaObject());
 
   ScopedJavaLocalRef<jobject> dialog_object;
   ScopedJavaLocalRef<jstring> title_ref = ConvertUTF16ToJavaString(env, title);
@@ -140,9 +135,17 @@ TabModalDialogViewAndroid::TabModalDialogViewAndroid(
 
   // Keep a ref to the java side object until we get accept or cancel.
   dialog_jobject_.Reset(dialog_object);
+}
 
-  Java_JavascriptTabModalDialog_showDialog(env, dialog_object, jwindow,
-                                           reinterpret_cast<intptr_t>(this));
+void TabModalDialogViewAndroid::Show() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> jwindow = jwindow_weak_ref_.get(env);
+  if (jwindow && !Java_JavascriptTabModalDialog_showDialog(
+                     env, dialog_jobject_, jwindow, jni_zero::MakeRaw(this))) {
+    Cancel(env, /*button_clicked=*/false);
+  }
 }
 
 }  // namespace javascript_dialogs
+
+DEFINE_JNI(JavascriptTabModalDialog)

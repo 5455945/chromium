@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,13 @@
 
 #include <map>
 
-#include "base/callback.h"
 #include "base/containers/circular_deque.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/ash/file_system_provider/abort_callback.h"
 #include "storage/browser/file_system/async_file_util.h"
 
-namespace ash {
-namespace file_system_provider {
+namespace ash::file_system_provider {
 
 // Queues arbitrary tasks. At most |max_in_parallel_| tasks will be running at
 // once.
@@ -41,6 +38,9 @@ class Queue {
 
   // Creates a queue with a maximum number of tasks running in parallel.
   explicit Queue(size_t max_in_parallel);
+
+  Queue(const Queue&) = delete;
+  Queue& operator=(const Queue&) = delete;
 
   virtual ~Queue();
 
@@ -88,10 +88,8 @@ class Queue {
   std::map<int, Task> executed_;
 
   base::WeakPtrFactory<Queue> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(Queue);
 };
 
-}  // namespace file_system_provider
-}  // namespace ash
+}  // namespace ash::file_system_provider
 
 #endif  // CHROME_BROWSER_ASH_FILE_SYSTEM_PROVIDER_QUEUE_H_

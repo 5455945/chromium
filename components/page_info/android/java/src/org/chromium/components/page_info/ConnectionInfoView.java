@@ -1,14 +1,18 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.components.page_info;
 
+import static org.chromium.build.NullUtil.assumeNonNull;
+
 import android.content.Context;
 import android.content.Intent;
-import android.content.res.ColorStateList;
 import android.provider.Browser;
+import android.text.SpannableString;
+import android.text.Spanned;
 import android.text.TextUtils;
+import android.text.method.LinkMovementMethod;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -19,10 +23,19 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import org.chromium.base.ApiCompatibilityUtils;
+import androidx.appcompat.widget.AppCompatTextView;
+import androidx.core.widget.ImageViewCompat;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
+import org.jni_zero.NativeMethods;
+
 import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.LoadCommittedDetails;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.content_public.browser.WebContentsObserver;
@@ -30,55 +43,52 @@ import org.chromium.ui.modaldialog.DialogDismissalCause;
 import org.chromium.ui.modaldialog.ModalDialogManager;
 import org.chromium.ui.modaldialog.ModalDialogProperties;
 import org.chromium.ui.modelutil.PropertyModel;
+import org.chromium.ui.text.ChromeClickableSpan;
 import org.chromium.ui.widget.ButtonCompat;
 
-/**
- * Java side of Android implementation of the page info UI.
- */
+/** Java side of Android implementation of the page info UI. */
+@NullMarked
 public class ConnectionInfoView implements OnClickListener {
+    @JniType("::ConnectionInfoViewAndroid")
+    interface NativeConnectionInfoViewAndroid extends JniTypeToken {}
+
     private static final String TAG = "ConnectionInfoView";
 
     private static final String HELP_URL =
             "https://support.google.com/chrome?p=android_connection_info";
 
     private final Context mContext;
-    private ConnectionInfoDelegate mDelegate;
+    private final ConnectionInfoDelegate mDelegate;
     private final LinearLayout mContainer;
     private final WebContents mWebContents;
     private final int mPaddingSides;
     private final int mPaddingVertical;
-    private final long mNativeConnectionInfoView;
+    private @Nullable JniUniquePtr<NativeConnectionInfoViewAndroid> mNativeConnectionInfoView;
     private final CertificateViewer mCertificateViewer;
-    private TextView mCertificateViewerTextView;
-    private TextView mMoreInfoLink;
-    private ViewGroup mCertificateLayout;
-    private ViewGroup mDescriptionLayout;
-    private Button mResetCertDecisionsButton;
-    private String mLinkUrl;
-    private VrHandler mVrHandler;
+    private @Nullable TextView mCertificateViewerTextView;
+    private @Nullable TextView mMoreInfoLink;
+    private @Nullable ViewGroup mCertificateLayout;
+    private @Nullable ViewGroup mDescriptionLayout;
+    private @Nullable Button mResetCertDecisionsButton;
+    private @Nullable String mLinkUrl;
 
     /**
-     * Delegate that embeds the ConnectionInfoView. Must call ConnectionInfoView::onDismiss when
-     * the embedding view is removed.
+     * Delegate that embeds the ConnectionInfoView. Must call ConnectionInfoView::onDismiss when the
+     * embedding view is removed.
      */
     interface ConnectionInfoDelegate {
-        /**
-         * Called when the ConnectionInfoView is initialized
-         */
+        /** Called when the ConnectionInfoView is initialized */
         void onReady(ConnectionInfoView popup);
 
-        /**
-         * Called in order to dismiss the dialog or page that is showing the ConnectionInfoView.
-         */
+        /** Called in order to dismiss the dialog or page that is showing the ConnectionInfoView. */
         void dismiss(int actionOnContent);
     }
 
-    private ConnectionInfoView(Context context, WebContents webContents,
-            ConnectionInfoDelegate delegate, VrHandler vrHandler) {
+    private ConnectionInfoView(
+            Context context, WebContents webContents, ConnectionInfoDelegate delegate) {
         mContext = context;
         mDelegate = delegate;
         mWebContents = webContents;
-        mVrHandler = vrHandler;
 
         mCertificateViewer = new CertificateViewer(mContext);
 
@@ -86,8 +96,9 @@ public class ConnectionInfoView implements OnClickListener {
         mContainer.setOrientation(LinearLayout.VERTICAL);
         mPaddingSides =
                 context.getResources().getDimensionPixelSize(R.dimen.page_info_popup_padding_sides);
-        mPaddingVertical = context.getResources().getDimensionPixelSize(
-                R.dimen.page_info_popup_padding_vertical);
+        mPaddingVertical =
+                context.getResources()
+                        .getDimensionPixelSize(R.dimen.page_info_popup_padding_vertical);
         mContainer.setPadding(mPaddingSides, mPaddingVertical, mPaddingSides, 0);
 
         // This needs to come after other member initialization.
@@ -95,13 +106,13 @@ public class ConnectionInfoView implements OnClickListener {
     }
 
     /**
-     * Adds certificate section, which contains an icon, a headline, a
-     * description and a label for certificate info link.
+     * Adds certificate section, which contains an icon, a description and a label for certificate
+     * info link.
      */
     @CalledByNative
     private void addCertificateSection(
-            int iconId, String headline, String description, String label, int iconColorId) {
-        View section = addSection(iconId, headline, description, iconColorId);
+            int iconId, String description, String label, int iconColorId) {
+        View section = addSection(iconId, description, iconColorId);
         assert mCertificateLayout == null;
         mCertificateLayout = (ViewGroup) section.findViewById(R.id.connection_info_text_layout);
         if (label != null && !label.isEmpty()) {
@@ -110,23 +121,26 @@ public class ConnectionInfoView implements OnClickListener {
     }
 
     /**
-     * Adds Description section, which contains an icon, a headline, and a
-     * description. Most likely headline for description is empty
+     * Adds Description section, which contains an icon, and a description. Most likely headline for
+     * description is empty
      */
     @CalledByNative
-    private void addDescriptionSection(
-            int iconId, String headline, String description, int iconColorId) {
-        View section = addSection(iconId, headline, description, iconColorId);
+    private void addDescriptionSection(int iconId, String description, int iconColorId) {
+        View section = addSection(iconId, description, iconColorId);
         assert mDescriptionLayout == null;
         mDescriptionLayout = section.findViewById(R.id.connection_info_text_layout);
     }
 
-    private View addSection(int iconId, String headline, String description, int iconColorId) {
+    private View addSection(int iconId, String description, int iconColorId) {
         View section = LayoutInflater.from(mContext).inflate(R.layout.connection_info, null);
         ImageView i = section.findViewById(R.id.connection_info_icon);
-        i.setImageResource(iconId);
-        ApiCompatibilityUtils.setImageTintList(
-                i, ColorStateList.valueOf(mContext.getResources().getColor(iconColorId)));
+        if (iconId == 0) {
+            assert iconColorId == 0;
+            i.setVisibility(View.INVISIBLE);
+        } else {
+            i.setImageResource(iconId);
+            ImageViewCompat.setImageTintList(i, mContext.getColorStateList(iconColorId));
+        }
 
         TextView d = section.findViewById(R.id.connection_info_description);
         d.setText(description);
@@ -138,12 +152,25 @@ public class ConnectionInfoView implements OnClickListener {
 
     private void setCertificateViewer(String label) {
         assert mCertificateViewerTextView == null;
-        mCertificateViewerTextView = new TextView(mContext);
-        mCertificateViewerTextView.setText(label);
-        ApiCompatibilityUtils.setTextAppearance(
-                mCertificateViewerTextView, R.style.TextAppearance_TextSmall_Blue);
-        mCertificateViewerTextView.setOnClickListener(this);
+        mCertificateViewerTextView = new AppCompatTextView(mContext);
+
+        SpannableString spannable = new SpannableString(label);
+        var clickableSpan =
+                new ChromeClickableSpan(
+                        mContext,
+                        (view) -> {
+                            var certChain =
+                                    CertificateChainHelper.getCertificateChain(mWebContents);
+                            if (certChain != null) {
+                                mCertificateViewer.showCertificateChain(certChain);
+                            }
+                        });
+        spannable.setSpan(clickableSpan, 0, spannable.length(), Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
+
+        mCertificateViewerTextView.setText(spannable);
+        mCertificateViewerTextView.setMovementMethod(LinkMovementMethod.getInstance());
         mCertificateViewerTextView.setPadding(0, mPaddingVertical, 0, 0);
+        assumeNonNull(mCertificateLayout);
         mCertificateLayout.addView(mCertificateViewerTextView);
     }
 
@@ -164,13 +191,22 @@ public class ConnectionInfoView implements OnClickListener {
 
     @CalledByNative
     private void addMoreInfoLink(String linkText) {
-        mMoreInfoLink = new TextView(mContext);
+        mMoreInfoLink = new AppCompatTextView(mContext);
         mLinkUrl = HELP_URL;
-        mMoreInfoLink.setText(linkText);
-        ApiCompatibilityUtils.setTextAppearance(
-                mMoreInfoLink, R.style.TextAppearance_TextSmall_Blue);
+
+        SpannableString spannable = new SpannableString(linkText);
+        ChromeClickableSpan clickableSpan =
+                new ChromeClickableSpan(
+                        mContext,
+                        (view) -> {
+                            showConnectionSecurityInfo();
+                        });
+        spannable.setSpan(clickableSpan, 0, spannable.length(), Spanned.SPAN_INCLUSIVE_EXCLUSIVE);
+
+        mMoreInfoLink.setText(spannable);
+        mMoreInfoLink.setMovementMethod(LinkMovementMethod.getInstance());
         mMoreInfoLink.setPadding(0, mPaddingVertical, 0, 0);
-        mMoreInfoLink.setOnClickListener(this);
+        assumeNonNull(mDescriptionLayout);
         mDescriptionLayout.addView(mMoreInfoLink);
     }
 
@@ -182,52 +218,30 @@ public class ConnectionInfoView implements OnClickListener {
 
     @Override
     public void onClick(View v) {
-        if (mResetCertDecisionsButton == v) {
-            ConnectionInfoViewJni.get().resetCertDecisions(
-                    mNativeConnectionInfoView, ConnectionInfoView.this, mWebContents);
+        if (mResetCertDecisionsButton == v && mNativeConnectionInfoView != null) {
+            ConnectionInfoViewJni.get().resetCertDecisions(mNativeConnectionInfoView, mWebContents);
             mDelegate.dismiss(DialogDismissalCause.ACTION_ON_CONTENT);
-        } else if (mCertificateViewerTextView == v) {
-            byte[][] certChain = CertificateChainHelper.getCertificateChain(mWebContents);
-            if (certChain == null) {
-                // The WebContents may have been destroyed/invalidated. If so,
-                // ignore this request.
-                return;
-            }
-            if (mVrHandler != null && mVrHandler.isInVr()) {
-                mVrHandler.exitVrAndRun(() -> {
-                    mCertificateViewer.showCertificateChain(certChain);
-                }, VrHandler.UiType.CERTIFICATE_INFO);
-                return;
-            }
-            mCertificateViewer.showCertificateChain(certChain);
-        } else if (mMoreInfoLink == v) {
-            if (mVrHandler != null && mVrHandler.isInVr()) {
-                mVrHandler.exitVrAndRun(this::showConnectionSecurityInfo,
-                        VrHandler.UiType.CONNECTION_SECURITY_INFO);
-                return;
-            }
-            showConnectionSecurityInfo();
         }
     }
 
-    /**
-     * @return The view containing connection info.
-     */
+    /** @return The view containing connection info. */
     public View getView() {
         return mContainer;
     }
 
-    /**
-     * Called when the embedding view is removed.
-     */
+    /** Called when the embedding view is removed. */
     public void onDismiss() {
-        assert mNativeConnectionInfoView != 0;
-        org.chromium.components.page_info.ConnectionInfoViewJni.get().destroy(
-                mNativeConnectionInfoView, ConnectionInfoView.this);
+        // Guard against double-free: onDismiss() can be called more than once if the dialog is
+        // dismissed while a WebContentsObserver callback (e.g. webContentsDestroyed) also triggers
+        // dismissal. Zero the pointer before calling destroy to prevent re-entrant calls.
+        if (mNativeConnectionInfoView == null) return;
+        JniUniquePtr<NativeConnectionInfoViewAndroid> nativePtr = mNativeConnectionInfoView;
+        mNativeConnectionInfoView = null;
+        nativePtr.destroy();
     }
 
     private void showConnectionSecurityInfo() {
-        // TODO(crbug.com/1077766): We probably don't want to dismiss the new PageInfo UI here?
+        // TODO(crbug.com/40129299): We probably don't want to dismiss the new PageInfo UI here?
         mDelegate.dismiss(DialogDismissalCause.ACTION_ON_CONTENT);
         try {
             Intent i = Intent.parseUri(mLinkUrl, Intent.URI_INTENT_SCHEME);
@@ -242,30 +256,30 @@ public class ConnectionInfoView implements OnClickListener {
 
     static class ConnectionInfoDialogDelegate
             implements ConnectionInfoDelegate, ModalDialogProperties.Controller {
-        private ConnectionInfoView mPopup;
-        private PropertyModel mDialogModel;
+        private @Nullable ConnectionInfoView mPopup;
+        private @Nullable PropertyModel mDialogModel;
         private final ModalDialogManager mModalDialogManager;
-        private WebContents mWebContents;
+        private final WebContents mWebContents;
         private final WebContentsObserver mWebContentsObserver;
 
         ConnectionInfoDialogDelegate(
                 ModalDialogManager modalDialogManager, WebContents webContents) {
             mModalDialogManager = modalDialogManager;
             mWebContents = webContents;
-            mWebContentsObserver = new WebContentsObserver(mWebContents) {
-                @Override
-                public void navigationEntryCommitted(LoadCommittedDetails details) {
-                    // If a navigation is committed (e.g. from in-page redirect), the data we're
-                    // showing is stale so dismiss the dialog.
-                    dismiss(DialogDismissalCause.UNKNOWN);
-                }
+            mWebContentsObserver =
+                    new WebContentsObserver(mWebContents) {
+                        @Override
+                        public void navigationEntryCommitted(LoadCommittedDetails details) {
+                            // If a navigation is committed (e.g. from in-page redirect), the data
+                            // we're showing is stale so dismiss the dialog.
+                            dismiss(DialogDismissalCause.UNKNOWN);
+                        }
 
-                @Override
-                public void destroy() {
-                    super.destroy();
-                    dismiss(DialogDismissalCause.UNKNOWN);
-                }
-            };
+                        @Override
+                        public void webContentsDestroyed() {
+                            dismiss(DialogDismissalCause.UNKNOWN);
+                        }
+                    };
         }
 
         @Override
@@ -278,8 +292,9 @@ public class ConnectionInfoView implements OnClickListener {
 
         @Override
         public void onDismiss(PropertyModel model, @DialogDismissalCause int dismissalCause) {
+            assumeNonNull(mPopup);
             mPopup.onDismiss();
-            mWebContentsObserver.destroy();
+            mWebContentsObserver.observe(null);
             mDialogModel = null;
         }
 
@@ -289,11 +304,12 @@ public class ConnectionInfoView implements OnClickListener {
             ScrollView scrollView = new ScrollView(popup.mContext);
             scrollView.addView(popup.getView());
 
-            mDialogModel = new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
-                                   .with(ModalDialogProperties.CONTROLLER, this)
-                                   .with(ModalDialogProperties.CUSTOM_VIEW, scrollView)
-                                   .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
-                                   .build();
+            mDialogModel =
+                    new PropertyModel.Builder(ModalDialogProperties.ALL_KEYS)
+                            .with(ModalDialogProperties.CONTROLLER, this)
+                            .with(ModalDialogProperties.CUSTOM_VIEW, scrollView)
+                            .with(ModalDialogProperties.CANCEL_ON_TOUCH_OUTSIDE, true)
+                            .build();
 
             mModalDialogManager.showDialog(
                     mDialogModel, ModalDialogManager.ModalDialogType.APP, true);
@@ -309,22 +325,25 @@ public class ConnectionInfoView implements OnClickListener {
      * @param context Context which is used for launching a dialog.
      * @param webContents The WebContents for which to show website information
      */
-    public static void show(Context context, WebContents webContents,
-            ModalDialogManager modalDialogManager, VrHandler vrHandler) {
-        new ConnectionInfoView(context, webContents,
-                new ConnectionInfoDialogDelegate(modalDialogManager, webContents), vrHandler);
+    public static void show(
+            Context context, WebContents webContents, ModalDialogManager modalDialogManager) {
+        new ConnectionInfoView(
+                context,
+                webContents,
+                new ConnectionInfoDialogDelegate(modalDialogManager, webContents));
     }
 
-    public static ConnectionInfoView create(Context context, WebContents webContents,
-            ConnectionInfoDelegate delegate, VrHandler vrHandler) {
-        return new ConnectionInfoView(context, webContents, delegate, vrHandler);
+    public static ConnectionInfoView create(
+            Context context, WebContents webContents, ConnectionInfoDelegate delegate) {
+        return new ConnectionInfoView(context, webContents, delegate);
     }
 
     @NativeMethods
     interface Natives {
-        long init(ConnectionInfoView popup, WebContents webContents);
-        void destroy(long nativeConnectionInfoViewAndroid, ConnectionInfoView caller);
-        void resetCertDecisions(long nativeConnectionInfoViewAndroid, ConnectionInfoView caller,
-                WebContents webContents);
+        JniUniquePtr<NativeConnectionInfoViewAndroid> init(
+                ConnectionInfoView popup, WebContents webContents);
+
+        void resetCertDecisions(
+                JniPtr<NativeConnectionInfoViewAndroid> self, WebContents webContents);
     }
 }

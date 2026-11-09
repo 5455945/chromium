@@ -1,16 +1,23 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ASH_SHELF_SHELF_TOOLTIP_MANAGER_H_
 #define ASH_SHELF_SHELF_TOOLTIP_MANAGER_H_
 
+#include <memory>
+
 #include "ash/ash_export.h"
+#include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_observer.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/timer/timer.h"
 #include "ui/events/event_handler.h"
+
+namespace aura {
+class Window;
+}
 
 namespace ui {
 class LocatedEvent;
@@ -22,14 +29,18 @@ class View;
 
 namespace ash {
 class ShelfBubble;
-class Shelf;
 class ShelfTooltipDelegate;
+class ShelfWindowPreviewBubble;
 
 // ShelfTooltipManager manages the tooltip bubble that appears for shelf items.
 class ASH_EXPORT ShelfTooltipManager : public ui::EventHandler,
                                        public ShelfObserver {
  public:
   explicit ShelfTooltipManager(Shelf* shelf);
+
+  ShelfTooltipManager(const ShelfTooltipManager&) = delete;
+  ShelfTooltipManager& operator=(const ShelfTooltipManager&) = delete;
+
   ~ShelfTooltipManager() override;
 
   // Closes the tooltip; uses an animation if |animate| is true.
@@ -55,6 +66,8 @@ class ASH_EXPORT ShelfTooltipManager : public ui::EventHandler,
     shelf_tooltip_delegate_ = shelf_tooltip_delegate;
   }
 
+  ShelfWindowPreviewBubble* preview_bubble() { return preview_bubble_.get(); }
+
  protected:
   // ui::EventHandler overrides:
   void OnMouseEvent(ui::MouseEvent* event) override;
@@ -63,7 +76,8 @@ class ASH_EXPORT ShelfTooltipManager : public ui::EventHandler,
   void OnKeyEvent(ui::KeyEvent* event) override;
 
   // ShelfObserver overrides:
-  void WillChangeVisibilityState(ShelfVisibilityState new_state) override;
+  void OnShelfShuttingDown() override;
+  void OnShelfVisibilityStateChanged(ShelfVisibilityState new_state) override;
   void OnAutoHideStateChanged(ShelfAutoHideState new_state) override;
 
  private:
@@ -73,19 +87,31 @@ class ASH_EXPORT ShelfTooltipManager : public ui::EventHandler,
   // A helper function to check for shelf visibility and view validity.
   bool ShouldShowTooltipForView(views::View* view);
 
+  void ShowTooltipInternal(views::View* view, bool show_app_menu);
+
   // A helper function to close the tooltip on mouse and touch press events.
   void ProcessPressedEvent(const ui::LocatedEvent& event);
 
+  // Shows the mirror preview bubble above the tooltip bubble.
+  void ShowPreviewBubble(aura::Window* window);
+
+  void OnPreviewBubbleClosing();
+
   int timer_delay_;
   base::OneShotTimer timer_;
-  Shelf* shelf_ = nullptr;
-  ShelfBubble* bubble_ = nullptr;
+  raw_ptr<Shelf> shelf_ = nullptr;
+  // TODO(oshima): Migrate to CLIENT_OWNS_WIDGET and own the widget via
+  // std::unique_ptr<views::Widget>.
+  raw_ptr<ShelfBubble> bubble_ = nullptr;
+  // TODO(oshima): Migrate to CLIENT_OWNS_WIDGET and own the widget via
+  // std::unique_ptr<views::Widget>.
+  raw_ptr<ShelfWindowPreviewBubble> preview_bubble_ = nullptr;
+  // Keeps the auto-hide shelf shown while `preview_bubble_` is open.
+  std::unique_ptr<Shelf::ScopedDisableAutoHide> disable_auto_hide_;
 
-  ShelfTooltipDelegate* shelf_tooltip_delegate_ = nullptr;
+  raw_ptr<ShelfTooltipDelegate> shelf_tooltip_delegate_ = nullptr;
 
   base::WeakPtrFactory<ShelfTooltipManager> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ShelfTooltipManager);
 };
 
 }  // namespace ash

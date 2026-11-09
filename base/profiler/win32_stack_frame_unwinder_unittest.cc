@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,11 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/profiler/stack_sampling_profiler_test_util.h"
+#include "base/profiler/suspendable_thread_delegate_win.h"
+#include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace base {
@@ -21,24 +24,12 @@ namespace {
 // incremented by the same value with each call.
 const uintptr_t kImageBaseIncrement = 1 << 20;
 
-// Stub module for testing.
-class TestModule : public ModuleCache::Module {
- public:
-  TestModule(uintptr_t base_address) : base_address_(base_address) {}
-
-  uintptr_t GetBaseAddress() const override { return base_address_; }
-  std::string GetId() const override { return ""; }
-  FilePath GetDebugBasename() const override { return FilePath(); }
-  size_t GetSize() const override { return 0; }
-  bool IsNative() const override { return true; }
-
- private:
-  const uintptr_t base_address_;
-};
-
 class TestUnwindFunctions : public Win32StackFrameUnwinder::UnwindFunctions {
  public:
   TestUnwindFunctions();
+
+  TestUnwindFunctions(const TestUnwindFunctions&) = delete;
+  TestUnwindFunctions& operator=(const TestUnwindFunctions&) = delete;
 
   PRUNTIME_FUNCTION LookupFunctionEntry(DWORD64 program_counter,
                                         PDWORD64 image_base) override;
@@ -57,10 +48,8 @@ class TestUnwindFunctions : public Win32StackFrameUnwinder::UnwindFunctions {
   DWORD64 expected_program_counter_;
   DWORD64 next_image_base_;
   DWORD64 expected_image_base_;
-  RUNTIME_FUNCTION* next_runtime_function_;
+  raw_ptr<RUNTIME_FUNCTION> next_runtime_function_;
   std::vector<RUNTIME_FUNCTION> runtime_functions_;
-
-  DISALLOW_COPY_AND_ASSIGN(TestUnwindFunctions);
 };
 
 RUNTIME_FUNCTION* const TestUnwindFunctions::kInvalidRuntimeFunction =
@@ -132,18 +121,20 @@ void TestUnwindFunctions::SetNoRuntimeFunction(CONTEXT* context) {
 }  // namespace
 
 class Win32StackFrameUnwinderTest : public testing::Test {
+ public:
+  Win32StackFrameUnwinderTest(const Win32StackFrameUnwinderTest&) = delete;
+  Win32StackFrameUnwinderTest& operator=(const Win32StackFrameUnwinderTest&) =
+      delete;
+
  protected:
-  Win32StackFrameUnwinderTest() {}
+  Win32StackFrameUnwinderTest() = default;
 
   // This exists so that Win32StackFrameUnwinder's constructor can be private
   // with a single friend declaration of this test fixture.
   std::unique_ptr<Win32StackFrameUnwinder> CreateUnwinder();
 
   // Weak pointer to the unwind functions used by last created unwinder.
-  TestUnwindFunctions* unwind_functions_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(Win32StackFrameUnwinderTest);
+  raw_ptr<TestUnwindFunctions, DanglingUntriaged> unwind_functions_;
 };
 
 std::unique_ptr<Win32StackFrameUnwinder>
@@ -151,8 +142,7 @@ Win32StackFrameUnwinderTest::CreateUnwinder() {
   std::unique_ptr<TestUnwindFunctions> unwind_functions(
       new TestUnwindFunctions);
   unwind_functions_ = unwind_functions.get();
-  return WrapUnique(
-      new Win32StackFrameUnwinder(std::move(unwind_functions)));
+  return WrapUnique(new Win32StackFrameUnwinder(std::move(unwind_functions)));
 }
 
 // Checks the case where all frames have unwind information.
@@ -211,6 +201,76 @@ TEST_F(Win32StackFrameUnwinderTest, FrameBelowTopWithoutUnwindInfo) {
     unwind_functions_->SetNoRuntimeFunction(&context);
     EXPECT_FALSE(unwinder->TryUnwind(false, &context, &stub_module));
   }
+}
+
+// Checks that SuspendableThreadDelegateWin::GetRegisters() and SetRegisters()
+// round-trip all platform non-volatile registers.
+TEST_F(Win32StackFrameUnwinderTest,
+       SuspendableThreadDelegateGetAndSetRegisters) {
+  SuspendableThreadDelegateWin delegate(
+      GetSamplingProfilerCurrentThreadToken());
+  CONTEXT context = {0};
+#if defined(ARCH_CPU_X86_64)
+  context.R12 = 1;
+  context.R13 = 2;
+  context.R14 = 3;
+  context.R15 = 4;
+  context.Rdi = 5;
+  context.Rsi = 6;
+  context.Rbx = 7;
+  context.Rbp = 8;
+  context.Rsp = 9;
+  std::vector<uintptr_t> registers = delegate.GetRegisters(&context);
+  ASSERT_EQ(registers.size(), 9u);
+  for (size_t i = 0; i < registers.size(); ++i) {
+    EXPECT_EQ(registers[i], i + 1);
+    registers[i] += 100;
+  }
+  delegate.SetRegisters(&context, registers);
+  EXPECT_EQ(context.R12, 101u);
+  EXPECT_EQ(context.R13, 102u);
+  EXPECT_EQ(context.R14, 103u);
+  EXPECT_EQ(context.R15, 104u);
+  EXPECT_EQ(context.Rdi, 105u);
+  EXPECT_EQ(context.Rsi, 106u);
+  EXPECT_EQ(context.Rbx, 107u);
+  EXPECT_EQ(context.Rbp, 108u);
+  EXPECT_EQ(context.Rsp, 109u);
+#elif defined(ARCH_CPU_ARM64)
+  context.X19 = 1;
+  context.X20 = 2;
+  context.X21 = 3;
+  context.X22 = 4;
+  context.X23 = 5;
+  context.X24 = 6;
+  context.X25 = 7;
+  context.X26 = 8;
+  context.X27 = 9;
+  context.X28 = 10;
+  context.Fp = 11;
+  context.Lr = 12;
+  context.Sp = 13;
+  std::vector<uintptr_t> registers = delegate.GetRegisters(&context);
+  ASSERT_EQ(registers.size(), 13u);
+  for (size_t i = 0; i < registers.size(); ++i) {
+    EXPECT_EQ(registers[i], i + 1);
+    registers[i] += 100;
+  }
+  delegate.SetRegisters(&context, registers);
+  EXPECT_EQ(context.X19, 101u);
+  EXPECT_EQ(context.X20, 102u);
+  EXPECT_EQ(context.X21, 103u);
+  EXPECT_EQ(context.X22, 104u);
+  EXPECT_EQ(context.X23, 105u);
+  EXPECT_EQ(context.X24, 106u);
+  EXPECT_EQ(context.X25, 107u);
+  EXPECT_EQ(context.X26, 108u);
+  EXPECT_EQ(context.X27, 109u);
+  EXPECT_EQ(context.X28, 110u);
+  EXPECT_EQ(context.Fp, 111u);
+  EXPECT_EQ(context.Lr, 112u);
+  EXPECT_EQ(context.Sp, 113u);
+#endif
 }
 
 }  // namespace base

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,28 +11,30 @@
 #include <string>
 
 #include "base/base_export.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/check.h"
+#include "base/compiler_specific.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
-#include "base/message_loop/timer_slack.h"
 #include "base/sequence_checker.h"
-#include "base/single_thread_task_runner.h"
 #include "base/synchronization/atomic_flag.h"
 #include "base/synchronization/lock.h"
 #include "base/synchronization/waitable_event.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "build/build_config.h"
 
 namespace base {
 
-class MessagePump;
-class RunLoop;
 namespace sequence_manager {
-class TimeDomain;
+struct SequenceManagerSettings;
 }
 
+class MessagePump;
+class RunLoop;
+
 // IMPORTANT: Instead of creating a base::Thread, consider using
-// base::Create(Sequenced|SingleThread)TaskRunner().
+// base::ThreadPool::Create(Sequenced|SingleThread)TaskRunner().
 //
 // A simple thread abstraction that establishes a MessageLoop on a new thread.
 // The consumer uses the MessageLoop of the thread to cause code to execute on
@@ -63,14 +65,13 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
  public:
   class BASE_EXPORT Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     virtual scoped_refptr<SingleThreadTaskRunner> GetDefaultTaskRunner() = 0;
 
-    // Binds a RunLoop::Delegate and TaskRunnerHandle to the thread. The
-    // underlying MessagePump will have its |timer_slack| set to the specified
-    // amount.
-    virtual void BindToCurrentThread(TimerSlack timer_slack) = 0;
+    // Binds a RunLoop::Delegate and task runner CurrentDefaultHandle to the
+    // thread.
+    virtual void BindToCurrentThread() = 0;
   };
 
   struct BASE_EXPORT Options {
@@ -79,6 +80,7 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
 
     Options();
     Options(MessagePumpType type, size_t size);
+    explicit Options(ThreadType thread_type);
     Options(Options&& other);
     Options& operator=(Options&& other);
     ~Options();
@@ -86,17 +88,6 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
     // Specifies the type of message pump that will be allocated on the thread.
     // This is ignored if message_pump_factory.is_null() is false.
     MessagePumpType message_pump_type = MessagePumpType::DEFAULT;
-
-    // An unbound Delegate that will be bound to the thread. Ownership
-    // of |delegate| will be transferred to the thread.
-    std::unique_ptr<Delegate> delegate = nullptr;
-
-    // Specifies timer slack for thread message loop.
-    TimerSlack timer_slack = TIMER_SLACK_NONE;
-
-    // The time domain to be used by the task queue. This is not compatible with
-    // a non-null |delegate|.
-    sequence_manager::TimeDomain* task_queue_time_domain = nullptr;
 
     // Used to create the MessagePump for the MessageLoop. The callback is Run()
     // on the thread. If message_pump_factory.is_null(), then a MessagePump
@@ -110,8 +101,8 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
     // A value of 0 indicates that the default maximum should be used.
     size_t stack_size = 0;
 
-    // Specifies the initial thread priority.
-    ThreadPriority priority = ThreadPriority::NORMAL;
+    // Specifies the initial thread type.
+    ThreadType thread_type = ThreadType::kDefault;
 
     // If false, the thread will not be joined on destruction. This is intended
     // for threads that want TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN
@@ -119,7 +110,13 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
     // can't be destroyed or Stop()'ed).
     // TODO(gab): allow non-joinable instances to be deleted without causing
     // user-after-frees (proposal @ https://crbug.com/629139#c14)
+    // TODO(crbug.com/40476967): Consider combining with Restartable trait.
     bool joinable = true;
+
+    // Custom settings for the SequenceManager created for this thread, if any.
+    // Allows overriding default SequenceManager behavior.
+    std::unique_ptr<base::sequence_manager::SequenceManagerSettings>
+        sequence_manager_settings;
 
     bool IsValid() const { return !moved_from; }
 
@@ -129,9 +126,20 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
     bool moved_from = false;
   };
 
+  // Allows the thread to be Start()-ed after being Stop()-ed.
+  struct Restartable {};
+
   // Constructor.
   // name is a display string to identify the thread.
-  explicit Thread(const std::string& name);
+  explicit Thread(const std::string& name, Restartable);
+
+  // When a custom delegate is provided, the thread can not be restarted because
+  // the delegate doesn't support being bound twice.
+  explicit Thread(const std::string& name,
+                  std::unique_ptr<Delegate> delegate = nullptr);
+
+  Thread(const Thread&) = delete;
+  Thread& operator=(const Thread&) = delete;
 
   // Destroys the thread, stopping it if necessary.
   //
@@ -143,7 +151,7 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   // before it is destructed.
   ~Thread() override;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Causes the thread to initialize COM.  This must be called before calling
   // Start() or StartWithOptions().  If |use_mta| is false, the thread is also
   // started with a TYPE_UI message loop.  It is an error to call
@@ -248,7 +256,7 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   }
 
   // Returns the name of this thread (for display in debugger too).
-  const std::string& thread_name() const { return name_; }
+  const std::string& thread_name() const LIFETIME_BOUND { return name_; }
 
   // Returns the thread ID.  Should not be called before the first Start*()
   // call.  Keeps on returning the same ID even after a Stop() call. The next
@@ -266,8 +274,9 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   // Called just prior to starting the message loop
   virtual void Init() {}
 
-  // Called to start the run loop
-  virtual void Run(RunLoop* run_loop);
+  // Called to start the run loop. Inhibit tail calls to this function so that
+  // the caller will be on the stack for profiling and crash analysis.
+  NOT_TAIL_CALLED virtual void Run(RunLoop* run_loop);
 
   // Called just after the message loop ends
   virtual void CleanUp() {}
@@ -280,7 +289,7 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   friend class MessageLoopTaskRunnerTest;
   friend class ScheduleWorkTest;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   enum ComStatus {
     NONE,
     STA,
@@ -288,12 +297,16 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   };
 #endif
 
+  Thread(const std::string& name,
+         std::unique_ptr<Delegate> delegate,
+         bool restartable);
+
   // PlatformThread::Delegate methods:
   void ThreadMain() override;
 
   void ThreadQuitHelper();
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Whether this thread needs to initialize COM, and if so, in what mode.
   ComStatus com_status_ = NONE;
 #endif
@@ -302,15 +315,21 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   // on Stop() -- non-joinable threads can't be joined (must be leaked).
   bool joinable_ = true;
 
-  // If true, we're in the middle of stopping, and shouldn't access
-  // |message_loop_|. It may non-nullptr and invalid.
-  // Should be written on the thread that created this thread. Also read data
-  // could be wrong on other threads.
-  bool stopping_ = false;
+  // If true, the thread can be Start()-ed after being Stop()-ed.
+  const bool restartable_ = false;
 
-  // True while inside of Run().
-  bool running_ = false;
-  mutable base::Lock running_lock_;  // Protects |running_|.
+  enum class State {
+    kInitial,
+    kRunning,
+    kStopping,
+    kStopped,
+  };
+
+  // Indicates the current state of the thread. If kStopping, |message_loop_|
+  // shouldn't be accessed; It may non-nullptr and invalid. Should be written on
+  // the thread that created this thread. Also read data could be wrong on other
+  // threads.
+  State state_ = State::kInitial;
 
   // The thread's handle.
   PlatformThreadHandle thread_;
@@ -324,11 +343,8 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   // The thread's Delegate and RunLoop are valid only while the thread is
   // alive. Set by the created thread.
   std::unique_ptr<Delegate> delegate_;
-  RunLoop* run_loop_ = nullptr;
 
-  // Stores Options::timer_slack_ until the sequence manager has been bound to
-  // a thread.
-  TimerSlack timer_slack_ = TIMER_SLACK_NONE;
+  raw_ptr<RunLoop> run_loop_ = nullptr;
 
   // The name of the thread.  Used for debugging purposes.
   const std::string name_;
@@ -339,8 +355,6 @@ class BASE_EXPORT Thread : PlatformThread::Delegate {
   // This class is not thread-safe, use this to verify access from the owning
   // sequence of the Thread.
   SequenceChecker owning_sequence_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(Thread);
 };
 
 }  // namespace base

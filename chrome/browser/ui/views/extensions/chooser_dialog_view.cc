@@ -1,15 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/ui/views/extensions/chooser_dialog_view.h"
 
-#include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/extensions/api/chrome_device_permissions_prompt.h"
-#include "chrome/browser/extensions/chrome_extension_chooser_dialog.h"
 #include "chrome/browser/extensions/device_permissions_dialog_controller.h"
-#include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/chrome_layout_provider.h"
 #include "chrome/browser/ui/views/device_chooser_content_view.h"
 #include "components/constrained_window/constrained_window_views.h"
@@ -17,13 +13,11 @@
 #include "components/web_modal/web_contents_modal_dialog_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
-#include "ui/gfx/geometry/insets.h"
+#include "ui/base/mojom/dialog_button.mojom.h"
+#include "ui/base/mojom/ui_base_types.mojom-shared.h"
 #include "ui/views/background.h"
 #include "ui/views/border.h"
-#include "ui/views/controls/button/label_button.h"
-#include "ui/views/controls/link.h"
-#include "ui/views/controls/styled_label.h"
-#include "ui/views/layout/fill_layout.h"
+#include "ui/views/controls/button/md_text_button.h"
 
 ChooserDialogView::ChooserDialogView(
     std::unique_ptr<permissions::ChooserController> chooser_controller) {
@@ -42,21 +36,24 @@ ChooserDialogView::ChooserDialogView(
   // | Get help                         |
   // ------------------------------------
 
-  DCHECK(chooser_controller);
+  CHECK(chooser_controller, base::NotFatalUntil::M162);
 
-  SetButtonLabel(ui::DIALOG_BUTTON_OK, chooser_controller->GetOkButtonLabel());
-  SetButtonLabel(ui::DIALOG_BUTTON_CANCEL,
+  SetUseDefaultFillLayout(true);
+  SetButtonLabel(ui::mojom::DialogButton::kOk,
+                 chooser_controller->GetOkButtonLabel());
+  SetButtonLabel(ui::mojom::DialogButton::kCancel,
                  chooser_controller->GetCancelButtonLabel());
 
   device_chooser_content_view_ =
-      new DeviceChooserContentView(this, std::move(chooser_controller));
+      AddChildView(std::make_unique<DeviceChooserContentView>(
+          this, std::move(chooser_controller)));
   device_chooser_content_view_->SetBorder(views::CreateEmptyBorder(
       ChromeLayoutProvider::Get()->GetDialogInsetsForContentType(
           views::DialogContentType::kControl,
           views::DialogContentType::kControl)));
 
   SetExtraView(device_chooser_content_view_->CreateExtraView());
-  SetModalType(ui::MODAL_TYPE_CHILD);
+  SetModalType(ui::mojom::ModalType::kChild);
   SetShowCloseButton(false);
   SetTitle(device_chooser_content_view_->GetWindowTitle());
 
@@ -69,13 +66,16 @@ ChooserDialogView::ChooserDialogView(
   SetCloseCallback(
       base::BindOnce(&DeviceChooserContentView::Close,
                      base::Unretained(device_chooser_content_view_)));
-
-  chrome::RecordDialogCreation(chrome::DialogIdentifier::CHOOSER);
 }
 
-ChooserDialogView::~ChooserDialogView() = default;
+ChooserDialogView::~ChooserDialogView() {
+  // This ensures that the `DeviceChooserContentView`'s table view, which keeps
+  // a pointer to `this`, does not outlive `this`.
+  device_chooser_content_view_.ClearAndDelete();
+}
 
-bool ChooserDialogView::IsDialogButtonEnabled(ui::DialogButton button) const {
+bool ChooserDialogView::IsDialogButtonEnabled(
+    ui::mojom::DialogButton button) const {
   return device_chooser_content_view_->IsDialogButtonEnabled(button);
 }
 
@@ -83,44 +83,46 @@ views::View* ChooserDialogView::GetInitiallyFocusedView() {
   return GetCancelButton();
 }
 
-views::View* ChooserDialogView::GetContentsView() {
-  return device_chooser_content_view_;
-}
-
-views::Widget* ChooserDialogView::GetWidget() {
-  return device_chooser_content_view_->GetWidget();
-}
-
-const views::Widget* ChooserDialogView::GetWidget() const {
-  return device_chooser_content_view_->GetWidget();
+bool ChooserDialogView::ShouldAllowKeyEventsDuringInputProtection() const {
+  return false;
 }
 
 void ChooserDialogView::OnSelectionChanged() {
   DialogModelChanged();
 }
 
-BEGIN_METADATA(ChooserDialogView, views::DialogDelegateView)
+DeviceChooserContentView*
+ChooserDialogView::device_chooser_content_view_for_test() const {
+  return device_chooser_content_view_;
+}
+
+BEGIN_METADATA(ChooserDialogView)
 END_METADATA
 
-void ChromeExtensionChooserDialog::ShowDialogImpl(
-    std::unique_ptr<permissions::ChooserController> chooser_controller) const {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  DCHECK(chooser_controller);
+namespace extensions {
+
+void ShowConstrainedDeviceChooserDialog(
+    content::WebContents* web_contents,
+    std::unique_ptr<permissions::ChooserController> controller) {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
+  CHECK(controller, base::NotFatalUntil::M162);
 
   web_modal::WebContentsModalDialogManager* manager =
-      web_modal::WebContentsModalDialogManager::FromWebContents(web_contents_);
+      web_modal::WebContentsModalDialogManager::FromWebContents(web_contents);
   if (manager) {
     constrained_window::ShowWebModalDialogViews(
-        new ChooserDialogView(std::move(chooser_controller)), web_contents_);
+        new ChooserDialogView(std::move(controller)), web_contents);
   }
 }
 
-void ChromeDevicePermissionsPrompt::ShowDialogViews() {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+}  //  namespace extensions
+
+void ChromeUsbDevicePermissionsPrompt::ShowDialogViews() {
+  CHECK_CURRENTLY_ON(content::BrowserThread::UI, base::NotFatalUntil::M162);
 
   std::unique_ptr<permissions::ChooserController> chooser_controller(
-      new DevicePermissionsDialogController(web_contents()->GetMainFrame(),
-                                            prompt()));
+      new DevicePermissionsDialogController(
+          web_contents()->GetPrimaryMainFrame(), prompt()));
 
   constrained_window::ShowWebModalDialogViews(
       new ChooserDialogView(std::move(chooser_controller)), web_contents());

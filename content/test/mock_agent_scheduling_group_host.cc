@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,6 @@ class RenderProcessHost;
 MockAgentSchedulingGroupHost::MockAgentSchedulingGroupHost(
     RenderProcessHost& process)
     : AgentSchedulingGroupHost(process) {}
-
-bool MockAgentSchedulingGroupHost::Send(IPC::Message* message) {
-  // Save the message in the sink.
-  sink_.OnMessageReceived(*message);
-  delete message;
-  return true;
-}
 
 MockAgentSchedulingGroupHostFactory::MockAgentSchedulingGroupHostFactory() =
     default;

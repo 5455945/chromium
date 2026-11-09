@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,12 @@
 #include <string>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/callback.h"
 #include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/macros.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "remoting/host/sas_injector.h"
 #include "remoting/proto/event.pb.h"
 #include "third_party/webrtc/modules/desktop_capture/win/desktop.h"
@@ -31,7 +30,7 @@ bool CheckCtrlAndAltArePressed(const std::set<ui::DomCode>& pressed_keys) {
   size_t alt_keys = pressed_keys.count(ui::DomCode::ALT_LEFT) +
                     pressed_keys.count(ui::DomCode::ALT_RIGHT);
   return ctrl_keys != 0 && alt_keys != 0 &&
-    (ctrl_keys + alt_keys == pressed_keys.size());
+         (ctrl_keys + alt_keys == pressed_keys.size());
 }
 
 bool IsWinKeyPressed(const std::set<ui::DomCode>& pressed_keys) {
@@ -40,7 +39,7 @@ bool IsWinKeyPressed(const std::set<ui::DomCode>& pressed_keys) {
   return win_keys != 0 && win_keys == pressed_keys.size();
 }
 
-} // namespace
+}  // namespace
 
 namespace remoting {
 
@@ -59,6 +58,9 @@ class SessionInputInjectorWin::Core
        scoped_refptr<base::SingleThreadTaskRunner> inject_sas_task_runner,
        const base::RepeatingClosure& inject_sas,
        const base::RepeatingClosure& lock_workstation);
+
+  Core(const Core&) = delete;
+  Core& operator=(const Core&) = delete;
 
   // InputInjector implementation.
   void Start(std::unique_ptr<ClipboardStub> client_clipboard) override;
@@ -97,8 +99,6 @@ class SessionInputInjectorWin::Core
 
   // Keys currently pressed by the client, used to detect key sequences.
   std::set<ui::DomCode> pressed_keys_;
-
-  DISALLOW_COPY_AND_ASSIGN(Core);
 };
 
 SessionInputInjectorWin::Core::Core(
@@ -202,8 +202,7 @@ void SessionInputInjectorWin::Core::InjectTouchEvent(const TouchEvent& event) {
   nested_executor_->InjectTouchEvent(event);
 }
 
-SessionInputInjectorWin::Core::~Core() {
-}
+SessionInputInjectorWin::Core::~Core() {}
 
 void SessionInputInjectorWin::Core::SwitchToInputDesktop() {
   // Switch to the desktop receiving user input if different from the current
@@ -227,8 +226,7 @@ SessionInputInjectorWin::SessionInputInjectorWin(
                    inject_sas_task_runner, inject_sas, lock_workstation);
 }
 
-SessionInputInjectorWin::~SessionInputInjectorWin() {
-}
+SessionInputInjectorWin::~SessionInputInjectorWin() {}
 
 void SessionInputInjectorWin::Start(
     std::unique_ptr<protocol::ClipboardStub> client_clipboard) {

@@ -1,84 +1,39 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "base/profiler/thread_delegate_posix.h"
 
 #include <inttypes.h>
 #include <pthread.h>
 #include <stdio.h>
 
+#include <optional>
+
+#include "base/check_op.h"
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
 #include "base/process/process_handle.h"
-#include "base/profiler/thread_delegate_posix.h"
 #include "build/build_config.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
-#if defined(OS_ANDROID)
-#include "base/files/file_util.h"
-#include "base/files/scoped_file.h"
+#if !(BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS))
+#include "base/profiler/stack_base_address_posix.h"
 #endif
 
 namespace base {
-
-namespace {
-
-#if defined(OS_ANDROID)
-absl::optional<uintptr_t> GetAndroidMainThreadStackBaseAddressImpl() {
-  char line[1024];
-  base::ScopedFILE fp(base::OpenFile(base::FilePath("/proc/self/maps"), "r"));
-  uintptr_t stack_addr = reinterpret_cast<uintptr_t>(line);
-  if (!fp)
-    return absl::nullopt;
-  while (fgets(line, sizeof(line), fp.get()) != nullptr) {
-    uintptr_t start, end;
-    if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR, &start, &end) == 2) {
-      if (start <= stack_addr && stack_addr < end)
-        return end;
-    }
-  }
-  return absl::nullopt;
-}
-#endif
-
-uintptr_t GetThreadStackBaseAddressImpl(
-    SamplingProfilerThreadToken thread_token) {
-  pthread_attr_t attr;
-  pthread_getattr_np(thread_token.pthread_id, &attr);
-  // See crbug.com/617730 for limitations of this approach on Linux.
-  void* address;
-  size_t size;
-  pthread_attr_getstack(&attr, &address, &size);
-  pthread_attr_destroy(&attr);
-  const uintptr_t base_address = reinterpret_cast<uintptr_t>(address) + size;
-  return base_address;
-}
-
-absl::optional<uintptr_t> GetThreadStackBaseAddress(
-    SamplingProfilerThreadToken thread_token) {
-#if defined(OS_ANDROID)
-  // The implementation of pthread_getattr_np() in Bionic reads proc/self/maps
-  // to find the main thread base address, and throws SIGABRT when it fails to
-  // read or parse the file. So, try to read the maps to get the main thread
-  // stack base and cache the result. Other thread base addresses are sourced
-  // from pthread state so are cheap to get.
-  const bool is_main_thread = thread_token.id == GetCurrentProcId();
-  if (is_main_thread) {
-    static const absl::optional<uintptr_t> main_thread_base_address =
-        GetAndroidMainThreadStackBaseAddressImpl();
-    return main_thread_base_address;
-  }
-#endif
-  return GetThreadStackBaseAddressImpl(thread_token);
-}
-
-}  // namespace
-
 // static
 std::unique_ptr<ThreadDelegatePosix> ThreadDelegatePosix::Create(
-    SamplingProfilerThreadToken thread_token) {
-  absl::optional<uintptr_t> base_address =
-      GetThreadStackBaseAddress(thread_token);
-  if (!base_address)
+    const SamplingProfilerThreadToken& thread_token) {
+  std::optional<uintptr_t> base_address;
+#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
+  base_address = thread_token.stack_base_address;
+#else
+  base_address =
+      GetThreadStackBaseAddress(thread_token.id, thread_token.pthread_id);
+#endif
+  if (!base_address) {
     return nullptr;
+  }
   return base::WrapUnique(
       new ThreadDelegatePosix(thread_token.id, *base_address));
 }
@@ -93,63 +48,124 @@ uintptr_t ThreadDelegatePosix::GetStackBaseAddress() const {
   return thread_stack_base_address_;
 }
 
-std::vector<uintptr_t*> ThreadDelegatePosix::GetRegistersToRewrite(
+std::vector<uintptr_t> ThreadDelegatePosix::GetRegisters(
     RegisterContext* thread_context) {
 #if defined(ARCH_CPU_ARM_FAMILY) && defined(ARCH_CPU_32_BITS)
   return {
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r0),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r1),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r2),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r3),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r4),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r5),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r6),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r7),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r8),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r9),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_r10),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_fp),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_ip),
-      reinterpret_cast<uintptr_t*>(&thread_context->arm_sp),
+      static_cast<uintptr_t>(thread_context->arm_r0),
+      static_cast<uintptr_t>(thread_context->arm_r1),
+      static_cast<uintptr_t>(thread_context->arm_r2),
+      static_cast<uintptr_t>(thread_context->arm_r3),
+      static_cast<uintptr_t>(thread_context->arm_r4),
+      static_cast<uintptr_t>(thread_context->arm_r5),
+      static_cast<uintptr_t>(thread_context->arm_r6),
+      static_cast<uintptr_t>(thread_context->arm_r7),
+      static_cast<uintptr_t>(thread_context->arm_r8),
+      static_cast<uintptr_t>(thread_context->arm_r9),
+      static_cast<uintptr_t>(thread_context->arm_r10),
+      static_cast<uintptr_t>(thread_context->arm_fp),
+      static_cast<uintptr_t>(thread_context->arm_ip),
+      static_cast<uintptr_t>(thread_context->arm_sp),
       // arm_lr and arm_pc do not require rewriting because they contain
       // addresses of executable code, not addresses in the stack.
   };
 #elif defined(ARCH_CPU_ARM_FAMILY) && \
-    defined(ARCH_CPU_64_BITS)   // #if defined(ARCH_CPU_ARM_FAMILY) &&
-                                // defined(ARCH_CPU_32_BITS)
-  std::vector<uintptr_t*> registers;
-  registers.reserve(12);
-  // Return the set of callee-save registers per the ARM 64-bit Procedure Call
-  // Standard section 5.1.1, plus the stack pointer.
-  registers.push_back(reinterpret_cast<uintptr_t*>(&thread_context->sp));
-  for (size_t i = 19; i <= 29; ++i)
-    registers.push_back(reinterpret_cast<uintptr_t*>(&thread_context->regs[i]));
-  return registers;
+    defined(ARCH_CPU_64_BITS)  // #if defined(ARCH_CPU_ARM_FAMILY) &&
+                               // defined(ARCH_CPU_32_BITS)
+  return {
+      // Return the set of callee-save registers per the ARM 64-bit Procedure
+      // Call
+      // Standard section 5.1.1, plus the stack pointer.
+      static_cast<uintptr_t>(thread_context->sp),
+      static_cast<uintptr_t>(thread_context->regs[19]),
+      static_cast<uintptr_t>(thread_context->regs[20]),
+      static_cast<uintptr_t>(thread_context->regs[21]),
+      static_cast<uintptr_t>(thread_context->regs[22]),
+      static_cast<uintptr_t>(thread_context->regs[23]),
+      static_cast<uintptr_t>(thread_context->regs[24]),
+      static_cast<uintptr_t>(thread_context->regs[25]),
+      static_cast<uintptr_t>(thread_context->regs[26]),
+      static_cast<uintptr_t>(thread_context->regs[27]),
+      static_cast<uintptr_t>(thread_context->regs[28]),
+      static_cast<uintptr_t>(thread_context->regs[29]),
+  };
 #elif defined(ARCH_CPU_X86_FAMILY) && defined(ARCH_CPU_32_BITS)
   return {
       // Return the set of callee-save registers per the i386 System V ABI
       // section 2.2.3, plus the stack pointer.
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_EBX]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_EBP]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_ESI]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_EDI]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_ESP]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_EBX]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_EBP]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_ESI]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_EDI]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_ESP]),
   };
 #elif defined(ARCH_CPU_X86_FAMILY) && defined(ARCH_CPU_64_BITS)
   return {
       // Return the set of callee-save registers per the x86-64 System V ABI
       // section 3.2.1, plus the stack pointer.
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_RBP]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_RBX]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_R12]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_R13]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_R14]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_R15]),
-      reinterpret_cast<uintptr_t*>(&thread_context->gregs[REG_RSP]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_RBP]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_RBX]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_R12]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_R13]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_R14]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_R15]),
+      static_cast<uintptr_t>(thread_context->gregs[REG_RSP]),
   };
 #else  // #if defined(ARCH_CPU_ARM_FAMILY) && defined(ARCH_CPU_32_BITS)
   // Unimplemented for other architectures.
   return {};
+#endif
+}
+
+void ThreadDelegatePosix::SetRegisters(
+    RegisterContext* thread_context,
+    const std::vector<uintptr_t>& registers) {
+#if defined(ARCH_CPU_ARM_FAMILY) && defined(ARCH_CPU_32_BITS)
+  CHECK_EQ(registers.size(), 14u);
+  thread_context->arm_r0 = registers[0];
+  thread_context->arm_r1 = registers[1];
+  thread_context->arm_r2 = registers[2];
+  thread_context->arm_r3 = registers[3];
+  thread_context->arm_r4 = registers[4];
+  thread_context->arm_r5 = registers[5];
+  thread_context->arm_r6 = registers[6];
+  thread_context->arm_r7 = registers[7];
+  thread_context->arm_r8 = registers[8];
+  thread_context->arm_r9 = registers[9];
+  thread_context->arm_r10 = registers[10];
+  thread_context->arm_fp = registers[11];
+  thread_context->arm_ip = registers[12];
+  thread_context->arm_sp = registers[13];
+#elif defined(ARCH_CPU_ARM_FAMILY) && defined(ARCH_CPU_64_BITS)
+  CHECK_EQ(registers.size(), 12u);
+  thread_context->sp = registers[0];
+  thread_context->regs[19] = registers[1];
+  thread_context->regs[20] = registers[2];
+  thread_context->regs[21] = registers[3];
+  thread_context->regs[22] = registers[4];
+  thread_context->regs[23] = registers[5];
+  thread_context->regs[24] = registers[6];
+  thread_context->regs[25] = registers[7];
+  thread_context->regs[26] = registers[8];
+  thread_context->regs[27] = registers[9];
+  thread_context->regs[28] = registers[10];
+  thread_context->regs[29] = registers[11];
+#elif defined(ARCH_CPU_X86_FAMILY) && defined(ARCH_CPU_32_BITS)
+  CHECK_EQ(registers.size(), 5u);
+  thread_context->gregs[REG_EBX] = static_cast<intptr_t>(registers[0]);
+  thread_context->gregs[REG_EBP] = static_cast<intptr_t>(registers[1]);
+  thread_context->gregs[REG_ESI] = static_cast<intptr_t>(registers[2]);
+  thread_context->gregs[REG_EDI] = static_cast<intptr_t>(registers[3]);
+  thread_context->gregs[REG_ESP] = static_cast<intptr_t>(registers[4]);
+#elif defined(ARCH_CPU_X86_FAMILY) && defined(ARCH_CPU_64_BITS)
+  CHECK_EQ(registers.size(), 7u);
+  thread_context->gregs[REG_RBP] = static_cast<intptr_t>(registers[0]);
+  thread_context->gregs[REG_RBX] = static_cast<intptr_t>(registers[1]);
+  thread_context->gregs[REG_R12] = static_cast<intptr_t>(registers[2]);
+  thread_context->gregs[REG_R13] = static_cast<intptr_t>(registers[3]);
+  thread_context->gregs[REG_R14] = static_cast<intptr_t>(registers[4]);
+  thread_context->gregs[REG_R15] = static_cast<intptr_t>(registers[5]);
+  thread_context->gregs[REG_RSP] = static_cast<intptr_t>(registers[6]);
 #endif
 }
 

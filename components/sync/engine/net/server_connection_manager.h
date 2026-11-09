@@ -1,4 +1,4 @@
-// Copyright 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,10 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
 #include "base/observer_list.h"
+#include "base/observer_list_types.h"
 #include "base/sequence_checker.h"
+#include "components/signin/public/identity_manager/access_token_info.h"
 
 namespace syncer {
 
@@ -28,9 +29,6 @@ struct HttpResponse {
     // CONNECTION_UNAVAILABLE means either the request got canceled or it
     // encountered a network error.
     CONNECTION_UNAVAILABLE,
-
-    // IO_ERROR is returned when reading/writing to a buffer has failed.
-    IO_ERROR,
 
     // SYNC_SERVER_ERROR is returned when the HTTP status code indicates that
     // a non-auth error has occurred.
@@ -56,15 +54,13 @@ struct HttpResponse {
   // The value of the Content-length header.
   int64_t content_length;
 
-  // The size of a download request's payload.
-  int64_t payload_length;
-
   static HttpResponse Uninitialized();
   static HttpResponse ForNetError(int net_error_code);
-  static HttpResponse ForIoError();
   static HttpResponse ForUnspecifiedError();
   static HttpResponse ForHttpStatusCode(int http_status_code);
-  static HttpResponse ForSuccess();
+
+  // For testing only.
+  static HttpResponse ForSuccessForTest();
 
  private:
   // Private to prevent accidental usage. Use Uninitialized() if you really need
@@ -78,12 +74,12 @@ struct ServerConnectionEvent {
       : connection_code(code) {}
 };
 
-class ServerConnectionEventListener {
+class ServerConnectionEventListener : public base::CheckedObserver {
  public:
   virtual void OnServerConnectionEvent(const ServerConnectionEvent& event) = 0;
 
  protected:
-  virtual ~ServerConnectionEventListener() = default;
+  ~ServerConnectionEventListener() override = default;
 };
 
 // Use this class to interact with the sync server.
@@ -92,10 +88,21 @@ class ServerConnectionEventListener {
 class ServerConnectionManager {
  public:
   ServerConnectionManager();
+
+  ServerConnectionManager(const ServerConnectionManager&) = delete;
+  ServerConnectionManager& operator=(const ServerConnectionManager&) = delete;
+
   virtual ~ServerConnectionManager();
 
-  // POSTs |buffer_in| and reads the body of the response into |buffer_out|.
-  // Uses the currently set access token in the headers.
+  // POSTs `buffer_in` and reads the body of the response into `buffer_out`.
+  // Uses the given `access_token_info` or the cached one in the headers.
+  HttpResponse PostBufferWithAccessToken(
+      const std::string& buffer_in,
+      std::string* buffer_out,
+      const signin::AccessTokenInfo& access_token_info);
+
+  // POSTs `buffer_in` and reads the body of the response into `buffer_out`.
+  // Uses the cached access token in the headers.
   HttpResponse PostBufferWithCachedAuth(const std::string& buffer_in,
                                         std::string* buffer_out);
 
@@ -117,39 +124,45 @@ class ServerConnectionManager {
     return server_response_.http_status_code;
   }
 
-  // Sets a new access token. If |access_token| is empty, the current token is
-  // invalidated and cleared. Returns false if the server is in authentication
-  // error state.
-  bool SetAccessToken(const std::string& access_token);
+  // Sets a new access token. If `access_token_info` is empty, the cached token
+  // is invalidated and cleared. Returns false if the server is in
+  // authentication error state.
+  bool SetAccessTokenInfo(const signin::AccessTokenInfo& access_token_info);
 
-  bool HasInvalidAccessToken() { return access_token_.empty(); }
+  // Returns true if the cached access token is not empty.
+  bool HasCachedAccessToken() const;
 
  protected:
-  // Updates |server_response_| and notifies listeners if the server status
+  // Updates `server_response_` and notifies listeners if the server status
   // changed.
   void SetServerResponse(const HttpResponse& server_response);
 
   // Internal PostBuffer base function which subclasses are expected to
   // implement.
-  virtual HttpResponse PostBuffer(const std::string& buffer_in,
-                                  const std::string& access_token,
-                                  std::string* buffer_out) = 0;
+  virtual HttpResponse PostBuffer(
+      const std::string& buffer_in,
+      std::string* buffer_out,
+      const signin::AccessTokenInfo& access_token_info) = 0;
 
-  void ClearAccessToken();
+  // Clears the current cached access token.
+  void ClearCachedAccessToken();
+
+  // Returns true if `access_token_info` has a non-empty token and is not
+  // expired.
+  static bool IsAccessTokenInfoValid(
+      const signin::AccessTokenInfo& access_token_info);
 
  private:
   void NotifyStatusChanged();
 
   // The access token to use in authenticated requests.
-  std::string access_token_;
+  signin::AccessTokenInfo cached_access_token_info_;
 
-  base::ObserverList<ServerConnectionEventListener>::Unchecked listeners_;
+  base::ObserverList<ServerConnectionEventListener> listeners_;
 
   HttpResponse server_response_;
 
   SEQUENCE_CHECKER(sequence_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(ServerConnectionManager);
 };
 
 std::ostream& operator<<(std::ostream& s, const struct HttpResponse& hr);

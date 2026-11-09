@@ -1,11 +1,10 @@
-# Copyright 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Code shared by the various language-specific code generators."""
 
 from __future__ import print_function
 
-from functools import partial
 import os.path
 import re
 
@@ -71,9 +70,8 @@ def _ToSnakeCase(identifier, upper=False):
     words = words[1:]
 
   # Variables cannot start with a digit
-  if (words[0][0].isdigit()):
+  if words[0][0].isdigit():
     words[0] = '_' + words[0]
-
 
   if upper:
     words = map(lambda x: x.upper(), words)
@@ -97,7 +95,7 @@ def ToLowerSnakeCase(identifier):
   return _ToSnakeCase(identifier, upper=False)
 
 
-class Stylizer(object):
+class Stylizer:
   """Stylizers specify naming rules to map mojom names to names in generated
   code. For example, if you would like method_name in mojom to be mapped to
   MethodName in the generated code, you need to define a subclass of Stylizer
@@ -128,6 +126,9 @@ class Stylizer(object):
     return mojom_name
 
   def StylizeEnum(self, mojom_name):
+    return mojom_name
+
+  def StylizeFeature(self, mojom_name):
     return mojom_name
 
   def StylizeModule(self, mojom_namespace):
@@ -179,51 +180,53 @@ def AddComputedData(module):
         method.param_struct.attributes[mojom.ATTRIBUTE_STABLE] = True
         if method.explicit_ordinal is None:
           raise Exception(
-              'Stable interfaces must declare explicit method ordinals. The '
-              'method %s on stable interface %s does not declare an explicit '
-              'ordinal.' % (method.mojom_name, interface.qualified_name))
-      interface.version = max(interface.version,
-                              method.param_struct.versions[-1].version)
+            'Stable interfaces must declare explicit method ordinals. The '
+            'method %s on stable interface %s does not declare an explicit '
+            'ordinal.' % (method.mojom_name, interface.qualified_name)
+          )
+      interface.version = max(
+        interface.version, method.param_struct.versions[-1].version
+      )
 
       if method.response_parameters is not None:
         method.response_param_struct = _GetResponseStructFromMethod(method)
         if interface.stable:
           method.response_param_struct.attributes[mojom.ATTRIBUTE_STABLE] = True
         interface.version = max(
-            interface.version,
-            method.response_param_struct.versions[-1].version)
+          interface.version, method.response_param_struct.versions[-1].version
+        )
       else:
         method.response_param_struct = None
 
   def _GetStructFromMethod(method):
     """Converts a method's parameters into the fields of a struct."""
-    params_class = "%s_%s_Params" % (method.interface.mojom_name,
-                                     method.mojom_name)
-    struct = mojom.Struct(params_class,
-                          module=method.interface.module,
-                          attributes={})
+    params_class = "%s_%s_Params" % (
+      method.interface.mojom_name,
+      method.mojom_name,
+    )
+    struct = mojom.Struct(
+      params_class, module=method.interface.module, attributes={}
+    )
     for param in method.parameters:
       struct.AddField(
-          param.mojom_name,
-          param.kind,
-          param.ordinal,
-          attributes=param.attributes)
+        param.mojom_name, param.kind, param.ordinal, attributes=param.attributes
+      )
     _AddStructComputedData(False, struct)
     return struct
 
   def _GetResponseStructFromMethod(method):
     """Converts a method's response_parameters into the fields of a struct."""
-    params_class = "%s_%s_ResponseParams" % (method.interface.mojom_name,
-                                             method.mojom_name)
-    struct = mojom.Struct(params_class,
-                          module=method.interface.module,
-                          attributes={})
+    params_class = "%s_%s_ResponseParams" % (
+      method.interface.mojom_name,
+      method.mojom_name,
+    )
+    struct = mojom.Struct(
+      params_class, module=method.interface.module, attributes={}
+    )
     for param in method.response_parameters:
       struct.AddField(
-          param.mojom_name,
-          param.kind,
-          param.ordinal,
-          attributes=param.attributes)
+        param.mojom_name, param.kind, param.ordinal, attributes=param.attributes
+      )
     _AddStructComputedData(False, struct)
     return struct
 
@@ -233,41 +236,39 @@ def AddComputedData(module):
     _AddInterfaceComputedData(interface)
 
 
-class Generator(object):
+class Generator:
   # Pass |output_dir| to emit files to disk. Omit |output_dir| to echo all
   # files to stdout.
-  def __init__(self,
-               module,
-               output_dir=None,
-               typemap=None,
-               variant=None,
-               bytecode_path=None,
-               for_blink=False,
-               js_bindings_mode="new",
-               js_generate_struct_deserializers=False,
-               export_attribute=None,
-               export_header=None,
-               generate_non_variant_code=False,
-               support_lazy_serialization=False,
-               disallow_native_types=False,
-               disallow_interfaces=False,
-               generate_message_ids=False,
-               generate_fuzzing=False,
-               enable_kythe_annotations=False,
-               extra_cpp_template_paths=None,
-               generate_extra_cpp_only=False):
+  def __init__(
+    self,
+    module,
+    output_dir=None,
+    typemap=None,
+    variant=None,
+    bytecode_path=None,
+    for_blink=False,
+    js_generate_struct_deserializers=False,
+    export_attribute=None,
+    export_header=None,
+    generate_non_variant_code=False,
+    disallow_native_types=False,
+    disallow_interfaces=False,
+    generate_message_ids=False,
+    generate_fuzzing=False,
+    enable_kythe_annotations=False,
+    extra_cpp_template_paths=None,
+    generate_extra_cpp_only=False,
+  ):
     self.module = module
     self.output_dir = output_dir
     self.typemap = typemap or {}
     self.variant = variant
     self.bytecode_path = bytecode_path
     self.for_blink = for_blink
-    self.js_bindings_mode = js_bindings_mode
     self.js_generate_struct_deserializers = js_generate_struct_deserializers
     self.export_attribute = export_attribute
     self.export_header = export_header
     self.generate_non_variant_code = generate_non_variant_code
-    self.support_lazy_serialization = support_lazy_serialization
     self.disallow_native_types = disallow_native_types
     self.disallow_interfaces = disallow_interfaces
     self.generate_message_ids = generate_message_ids
@@ -291,8 +292,9 @@ class Generator(object):
     for line in lines:
       if line.startswith('#') or line.startswith('//'):
         continue
-      if re.match(r'namespace .* {', line) or re.match(r'}.*//.*namespace',
-                                                       line):
+      if re.match(r'namespace .* {', line) or re.match(
+        r'}.*//.*namespace', line
+      ):
         continue
       if line.strip():
         # There is some actual code - return the unmodified contents.
@@ -308,9 +310,11 @@ class Generator(object):
 
   def WriteWithComment(self, contents, filename):
     generator_name = "mojom_bindings_generator.py"
-    comment = r"// %s is auto generated by %s, do not edit" % (filename,
-                                                               generator_name)
-    contents = comment + '\n' + '\n' + contents;
+    comment = r"// %s is auto generated by %s, do not edit" % (
+      filename,
+      generator_name,
+    )
+    contents = comment + '\n' + '\n' + contents
     if filename.endswith('.cc'):
       contents = self.OptimizeEmpty(contents)
     self.Write(contents, filename)

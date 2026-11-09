@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,6 +9,7 @@
 
 #include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "third_party/blink/public/mojom/choosers/popup_menu.mojom.h"
@@ -28,11 +29,14 @@ class SelectPopup {
   ~SelectPopup();
 
   // Creates a popup menu with |items|.
+  // |bounds| is the bounds of the source <select> element in physical pixels.
+  // |item_font_size| is the font size of the select element.
   // |multiple| defines if it should support multi-select.
   // If not |multiple|, |selected_item| sets the initially selected item.
   // Otherwise, item's "checked" flag selects it.
   void ShowMenu(mojo::PendingRemote<blink::mojom::PopupMenuClient> popup_client,
                 const gfx::Rect& bounds,
+                double item_font_size,
                 std::vector<blink::mojom::MenuItemPtr> items,
                 int selected_item,
                 bool multiple,
@@ -42,12 +46,11 @@ class SelectPopup {
 
   // Notifies that items were selected in the currently showing select popup.
   void SelectMenuItems(JNIEnv* env,
-                       const base::android::JavaParamRef<jobject>& obj,
-                       jlong selectPopupSourceFrame,
-                       const base::android::JavaParamRef<jintArray>& indices);
+                       int64_t selectPopupSourceFrame,
+                       const base::android::JavaRef<jintArray>& indices);
 
  private:
-  WebContentsImpl* web_contents_;
+  raw_ptr<WebContentsImpl> web_contents_;
   JavaObjectWeakGlobalRef java_obj_;
 
   // Select popup view

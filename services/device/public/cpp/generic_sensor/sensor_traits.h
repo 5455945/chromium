@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,6 +31,12 @@ struct SensorTraits<mojom::SensorType::MAGNETOMETER> {
 double GetSensorMaxAllowedFrequency(mojom::SensorType type);
 
 double GetSensorDefaultFrequency(mojom::SensorType type);
+
+// Returns whether |frequency| is usable as a sensor frequency, i.e. whether it
+// is finite and strictly positive. Platform code derives reporting intervals
+// from frequencies (e.g. 1/frequency), which is undefined behavior for
+// non-finite or zero values, so it validates them before use.
+bool IsValidSensorFrequency(double frequency);
 
 }  // namespace device
 

@@ -31,15 +31,19 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_BASE_AGENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_INSPECTOR_INSPECTOR_BASE_AGENT_H_
 
+#include "base/types/strong_alias.h"
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/core_probe_sink.h"
 #include "third_party/blink/renderer/core/inspector/inspector_session_state.h"
-#include "third_party/blink/renderer/core/inspector/protocol/Protocol.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/core/inspector/protocol/protocol.h"
+#include "third_party/blink/renderer/core/inspector/v8_session_holder.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
 
 namespace blink {
+
+using ClientIsTrusted = base::StrongAlias<class ClientIsTrustedTag, bool>;
 
 class LocalFrame;
 
@@ -55,7 +59,9 @@ class CORE_EXPORT InspectorAgent : public GarbageCollected<InspectorAgent> {
 
   virtual void Init(CoreProbeSink*,
                     protocol::UberDispatcher*,
-                    InspectorSessionState*) = 0;
+                    InspectorSessionState*,
+                    V8SessionHolder,
+                    ClientIsTrusted) = 0;
   virtual void Dispose() = 0;
 };
 
@@ -63,17 +69,19 @@ template <typename DomainMetainfo>
 class InspectorBaseAgent : public InspectorAgent,
                            public DomainMetainfo::BackendClass {
  public:
-  ~InspectorBaseAgent() override = default;
-
   void Init(CoreProbeSink* instrumenting_agents,
             protocol::UberDispatcher* dispatcher,
-            InspectorSessionState* session_state) override {
+            InspectorSessionState* session_state,
+            V8SessionHolder v8_session,
+            ClientIsTrusted client_is_trusted) override {
     instrumenting_agents_ = instrumenting_agents;
     frontend_.reset(
         new typename DomainMetainfo::FrontendClass(dispatcher->channel()));
     DomainMetainfo::DispatcherClass::wire(dispatcher, this);
 
     agent_state_.InitFrom(session_state);
+    v8_session_ = std::move(v8_session);
+    client_is_trusted_ = client_is_trusted.value();
   }
 
   protocol::Response disable() override {
@@ -84,6 +92,7 @@ class InspectorBaseAgent : public InspectorAgent,
     disable();
     frontend_.reset();
     instrumenting_agents_ = nullptr;
+    v8_session_.reset();
   }
 
   void Trace(Visitor* visitor) const override {
@@ -91,17 +100,25 @@ class InspectorBaseAgent : public InspectorAgent,
     InspectorAgent::Trace(visitor);
   }
 
+  V8SessionHolder V8Session() const { return v8_session_; }
+  bool IsTrustedClient() const { return client_is_trusted_; }
+
  protected:
   InspectorBaseAgent() : agent_state_(DomainMetainfo::domainName) {}
-
+  ~InspectorBaseAgent() override {
+    CHECK(!frontend_);  // Ensure Dispose() has been called.
+  }
   typename DomainMetainfo::FrontendClass* GetFrontend() const {
     return frontend_.get();
   }
+
   Member<CoreProbeSink> instrumenting_agents_;
   InspectorAgentState agent_state_;
+  bool client_is_trusted_ = false;
 
  private:
   std::unique_ptr<typename DomainMetainfo::FrontendClass> frontend_;
+  V8SessionHolder v8_session_;
 };
 
 }  // namespace blink

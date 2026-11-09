@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,39 +9,39 @@
 #include <string>
 #include <tuple>
 
+#include "base/component_export.h"
 #include "base/numerics/clamped_math.h"
 #include "build/build_config.h"
-#include "ui/gfx/geometry/geometry_export.h"
 #include "ui/gfx/geometry/vector2d.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 typedef unsigned long DWORD;
 typedef struct tagPOINT POINT;
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
 typedef struct CGPoint CGPoint;
 #endif
 
 namespace gfx {
 
 // A point has an x and y coordinate.
-class GEOMETRY_EXPORT Point {
+class COMPONENT_EXPORT(GEOMETRY) Point {
  public:
   constexpr Point() : x_(0), y_(0) {}
   constexpr Point(int x, int y) : x_(x), y_(y) {}
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // |point| is a DWORD value that contains a coordinate.  The x-coordinate is
   // the low-order short and the y-coordinate is the high-order short.  This
   // value is commonly acquired from GetMessagePos/GetCursorPos.
   explicit Point(DWORD point);
   explicit Point(const POINT& point);
   Point& operator=(const POINT& point);
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
   explicit Point(const CGPoint& point);
 #endif
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   POINT ToPOINT() const;
-#elif defined(OS_APPLE)
+#elif BUILDFLAG(IS_APPLE)
   CGPoint ToCGPoint() const;
 #endif
 
@@ -77,6 +77,11 @@ class GEOMETRY_EXPORT Point {
 
   Vector2d OffsetFromOrigin() const { return Vector2d(x_, y_); }
 
+  void Transpose() {
+    using std::swap;
+    swap(x_, y_);
+  }
+
   // A point is less than another point if its y-value is closer
   // to the origin. If the y-values are the same, then point with
   // the x-value closer to the origin is considered less than the
@@ -90,18 +95,12 @@ class GEOMETRY_EXPORT Point {
   // Returns a string representation of point.
   std::string ToString() const;
 
+  friend constexpr bool operator==(const Point&, const Point&) = default;
+
  private:
   int x_;
   int y_;
 };
-
-inline bool operator==(const Point& lhs, const Point& rhs) {
-  return lhs.x() == rhs.x() && lhs.y() == rhs.y();
-}
-
-inline bool operator!=(const Point& lhs, const Point& rhs) {
-  return !(lhs == rhs);
-}
 
 inline Point operator+(const Point& lhs, const Vector2d& rhs) {
   Point result(lhs);
@@ -124,24 +123,28 @@ inline Point PointAtOffsetFromOrigin(const Vector2d& offset_from_origin) {
   return Point(offset_from_origin.x(), offset_from_origin.y());
 }
 
+inline Point TransposePoint(const gfx::Point& p) {
+  return Point(p.y(), p.x());
+}
+
 // This is declared here for use in gtest-based unit tests but is defined in
 // the //ui/gfx:test_support target. Depend on that to use this in your unit
 // test. This should not be used in production code - call ToString() instead.
 void PrintTo(const Point& point, ::std::ostream* os);
 
 // Helper methods to scale a gfx::Point to a new gfx::Point.
-GEOMETRY_EXPORT Point ScaleToCeiledPoint(const Point& point,
-                                         float x_scale,
-                                         float y_scale);
-GEOMETRY_EXPORT Point ScaleToCeiledPoint(const Point& point, float x_scale);
-GEOMETRY_EXPORT Point ScaleToFlooredPoint(const Point& point,
-                                          float x_scale,
-                                          float y_scale);
-GEOMETRY_EXPORT Point ScaleToFlooredPoint(const Point& point, float x_scale);
-GEOMETRY_EXPORT Point ScaleToRoundedPoint(const Point& point,
-                                          float x_scale,
-                                          float y_scale);
-GEOMETRY_EXPORT Point ScaleToRoundedPoint(const Point& point, float x_scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToCeiledPoint(const Point& point, float x_scale, float y_scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToCeiledPoint(const Point& point, float scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToFlooredPoint(const Point& point, float x_scale, float y_scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToFlooredPoint(const Point& point, float scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToRoundedPoint(const Point& point, float x_scale, float y_scale);
+COMPONENT_EXPORT(GEOMETRY)
+Point ScaleToRoundedPoint(const Point& point, float scale);
 
 }  // namespace gfx
 

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,8 @@
 namespace gpu {
 namespace gles2 {
 
-// This class a stub to help with mocks for the GLES2Interface class.
+// This class a stub to help with partial implementations or mocks for the
+// GLES2Interface class.
 class GLES2InterfaceStub : public GLES2Interface {
  public:
   GLES2InterfaceStub();

@@ -1,19 +1,20 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/command_line.h"
-#include "base/macros.h"
-#include "content/public/common/content_switches.h"
+#include "base/memory/raw_ptr.h"
 #include "content/public/test/render_view_test.h"
-#include "content/renderer/render_view_impl.h"
-#include "gin/handle.h"
 #include "gin/per_isolate_data.h"
+#include "gin/public/wrappable_pointer_tags.h"
 #include "gin/wrappable.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/common/switches.h"
 #include "third_party/blink/public/web/web_local_frame.h"
 #include "third_party/blink/public/web/web_view.h"
+#include "v8/include/cppgc/allocation.h"
+#include "v8/include/v8-context.h"
+#include "v8/include/v8-cppgc.h"
 
 namespace content {
 
@@ -21,38 +22,49 @@ namespace {
 
 class TestGinObject : public gin::Wrappable<TestGinObject> {
  public:
-  static gin::WrapperInfo kWrapperInfo;
+  static constexpr gin::WrapperInfo kWrapperInfo = {{gin::kEmbedderNativeGin},
+                                                    gin::kTestObject};
 
-  static gin::Handle<TestGinObject> Create(v8::Isolate* isolate, bool* alive) {
-    return gin::CreateHandle(isolate, new TestGinObject(alive));
+  static void Create(v8::Isolate* isolate, bool* alive) {
+    auto* obj = cppgc::MakeGarbageCollected<TestGinObject>(
+        isolate->GetCppHeap()->GetAllocationHandle(), alive);
+    // We need to create a wrapper to keep it alive until the next GC. The local
+    // handle will be destroyed at the end of the scope, making the wrapper
+    // object eligible for GC.
+    obj->GetWrapper(isolate).ToLocalChecked();
   }
 
- private:
-  TestGinObject(bool* alive) : alive_(alive) { *alive_ = true; }
+  TestGinObject(const TestGinObject&) = delete;
+  TestGinObject& operator=(const TestGinObject&) = delete;
+
+  // Make public for cppgc::MakeGarbageCollected.
+  explicit TestGinObject(bool* alive) : alive_(alive) { *alive_ = true; }
   ~TestGinObject() override { *alive_ = false; }
 
-  bool* alive_;
+ private:
+  // gin::Wrappable
+  const gin::WrapperInfo* wrapper_info() const override {
+    return &kWrapperInfo;
+  }
 
-  DISALLOW_COPY_AND_ASSIGN(TestGinObject);
+  raw_ptr<bool> alive_;
 };
-
-gin::WrapperInfo TestGinObject::kWrapperInfo = { gin::kEmbedderNativeGin };
 
 class GinBrowserTest : public RenderViewTest {
  public:
-  GinBrowserTest() {}
+  GinBrowserTest() = default;
+
+  GinBrowserTest(const GinBrowserTest&) = delete;
+  GinBrowserTest& operator=(const GinBrowserTest&) = delete;
+
   ~GinBrowserTest() override {}
 
   void SetUp() override {
     base::CommandLine::ForCurrentProcess()->AppendSwitchASCII(
-        switches::kJavaScriptFlags, "--expose_gc");
+        blink::switches::kJavaScriptFlags, "--expose_gc");
 
     RenderViewTest::SetUp();
   }
-
- private:
-
-  DISALLOW_COPY_AND_ASSIGN(GinBrowserTest);
 };
 
 // Test that garbage collection doesn't crash if a gin-wrapped object is
@@ -63,7 +75,7 @@ TEST_F(GinBrowserTest, GinAndGarbageCollection) {
   bool alive = false;
 
   {
-    v8::Isolate* isolate = blink::MainThreadIsolate();
+    v8::Isolate* isolate = Isolate();
     v8::HandleScope handle_scope(isolate);
     v8::Context::Scope context_scope(GetMainFrame()->MainWorldScriptContext());
 
@@ -75,11 +87,11 @@ TEST_F(GinBrowserTest, GinAndGarbageCollection) {
   CHECK(alive);
 
   // Should not crash.
-  blink::MainThreadIsolate()->LowMemoryNotification();
-
+  Isolate()->RequestGarbageCollectionForTesting(
+      v8::Isolate::kFullGarbageCollection, v8::StackState::kNoHeapPointers);
   CHECK(!alive);
 }
 
-} // namespace
+}  // namespace
 
 }  // namespace content

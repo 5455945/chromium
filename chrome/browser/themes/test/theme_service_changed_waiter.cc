@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@ namespace test {
 
 ThemeServiceChangedWaiter::ThemeServiceChangedWaiter(ThemeService* service)
     : service_(service) {
-  DCHECK(service_);
+  CHECK(service_, base::NotFatalUntil::M163);
   service_->AddObserver(this);
 }
 

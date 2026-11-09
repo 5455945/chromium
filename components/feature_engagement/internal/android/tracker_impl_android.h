@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,45 +12,15 @@
 #include "base/android/callback_android.h"
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/macros.h"
+#include "base/feature_list.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/supports_user_data.h"
 #include "components/feature_engagement/internal/tracker_impl.h"
 #include "components/feature_engagement/public/feature_list.h"
 #include "components/feature_engagement/public/tracker.h"
 
-namespace base {
-struct Feature;
-}  // namespace base
-
 namespace feature_engagement {
-
-// JNI bridge between DisplayLockHandleAndroid in Java and C++.
-// This class owns the underlying DisplayLockHandle acquired from the backing
-// Tracker. Ownership of this class is released to Java, which means Java owners
-// MUST call release() before removing their reference to this object.
-// This class must be in this header file, since it is used by the generated
-// JNI code.
-class DisplayLockHandleAndroid {
- public:
-  DisplayLockHandleAndroid(
-      std::unique_ptr<DisplayLockHandle> display_lock_handle);
-  ~DisplayLockHandleAndroid();
-
-  // Returns the Java-side of this JNI bridge.
-  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
-
-  // Deletes |this|.
-  void Release(JNIEnv* env);
-
- private:
-  // The DisplayLockHandle that this JNI bridge owns.
-  std::unique_ptr<DisplayLockHandle> display_lock_handle_;
-
-  // The Java-side of this JNI bridge.
-  base::android::ScopedJavaGlobalRef<jobject> java_obj_;
-
-  DISALLOW_COPY_AND_ASSIGN(DisplayLockHandleAndroid);
-};
 
 // JNI bridge between TrackerImpl in Java and C++. See the
 // public API of Tracker for documentation for all methods.
@@ -62,6 +32,10 @@ class TrackerImplAndroid : public base::SupportsUserData::Data {
       const base::android::JavaRef<jobject>& jobj);
 
   TrackerImplAndroid(Tracker* tracker, FeatureVector features);
+
+  TrackerImplAndroid(const TrackerImplAndroid&) = delete;
+  TrackerImplAndroid& operator=(const TrackerImplAndroid&) = delete;
+
   ~TrackerImplAndroid() override;
 
   base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
@@ -70,37 +44,42 @@ class TrackerImplAndroid : public base::SupportsUserData::Data {
 
   // Tracker JNI bridge implementation.
   virtual void NotifyEvent(JNIEnv* env,
-                           const base::android::JavaRef<jobject>& jobj,
-                           const base::android::JavaParamRef<jstring>& jevent);
-  virtual bool ShouldTriggerHelpUI(
+                           const base::android::JavaRef<jstring>& jevent);
+  virtual bool ShouldTriggerHelpUi(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& jfeature);
-  virtual bool WouldTriggerHelpUI(
+      const base::android::JavaRef<jstring>& jfeature);
+  virtual base::android::ScopedJavaLocalRef<jobject>
+  ShouldTriggerHelpUiWithSnooze(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& jfeature);
-  virtual bool HasEverTriggered(
+      const base::android::JavaRef<jstring>& jfeature);
+  virtual bool WouldTriggerHelpUi(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& jfeature,
-      const jboolean j_from_window);
-  virtual jint GetTriggerState(
-      JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj,
-      const base::android::JavaParamRef<jstring>& jfeature);
+      const base::android::JavaRef<jstring>& jfeature);
+  virtual bool HasEverTriggered(JNIEnv* env,
+                                const base::android::JavaRef<jstring>& jfeature,
+                                const bool j_from_window);
   virtual void Dismissed(JNIEnv* env,
-                         const base::android::JavaRef<jobject>& jobj,
-                         const base::android::JavaParamRef<jstring>& jfeature);
+                         const base::android::JavaRef<jstring>& jfeature);
+  virtual void DismissedWithSnooze(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& jfeature,
+      const int32_t snooze_action);
   virtual base::android::ScopedJavaLocalRef<jobject> AcquireDisplayLock(
+      JNIEnv* env);
+  virtual void SetPriorityNotification(
       JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj);
-  virtual bool IsInitialized(JNIEnv* env,
-                             const base::android::JavaRef<jobject>& jobj);
+      const base::android::JavaRef<jstring>& jfeature);
+  virtual base::android::ScopedJavaLocalRef<jstring>
+  GetPendingPriorityNotification(JNIEnv* env);
+  virtual void RegisterPriorityNotificationHandler(
+      const std::string& feature,
+      base::OnceClosure&& callback);
+  virtual void UnregisterPriorityNotificationHandler(
+      JNIEnv* env,
+      const base::android::JavaRef<jstring>& jfeature);
+  virtual bool IsInitialized(JNIEnv* env);
   virtual void AddOnInitializedCallback(
-      JNIEnv* env,
-      const base::android::JavaRef<jobject>& jobj,
-      const base::android::JavaParamRef<jobject>& j_callback_obj);
+      base::OnceCallback<void(bool)> callback);
 
  private:
   // A map from the feature name to the base::Feature, to ensure that the Java
@@ -109,12 +88,10 @@ class TrackerImplAndroid : public base::SupportsUserData::Data {
   FeatureMap features_;
 
   // The Tracker this is a JNI bridge for.
-  Tracker* tracker_;
+  raw_ptr<Tracker> tracker_;
 
   // The Java-side of this JNI bridge.
   base::android::ScopedJavaGlobalRef<jobject> java_obj_;
-
-  DISALLOW_COPY_AND_ASSIGN(TrackerImplAndroid);
 };
 
 }  // namespace feature_engagement

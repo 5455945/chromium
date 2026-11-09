@@ -1,3 +1,7 @@
+// Copyright 2026 The Chromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
 #include "third_party/blink/renderer/core/css/css_value_clamping_utils.h"
 
 #include <limits>
@@ -26,7 +30,7 @@ TEST(CSSValueClampingTest, IsLengthClampedPositiveInfinity) {
 TEST(CSSValueClampingTest, IsLengthClampedNaN) {
   EXPECT_EQ(CSSValueClampingUtils::ClampLength(
                 std::numeric_limits<double>::quiet_NaN()),
-            std::numeric_limits<double>::max());
+            0.0);
 }
 
 TEST(CSSValueClampingTest, IsLengthClampedNegativeInfinity) {

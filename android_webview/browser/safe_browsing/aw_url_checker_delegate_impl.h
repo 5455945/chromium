@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,19 +7,28 @@
 
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "components/safe_browsing/core/browser/url_checker_delegate.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
+#include "components/safe_browsing/core/browser/url_checker/url_checker_delegate.h"
 #include "content/public/browser/web_contents.h"
 
+class PrefRegistrySimple;
+
 namespace android_webview {
+
+namespace prefs {
+inline constexpr char kSafeBrowsingUserOptIn[] =
+    "android_webview.safe_browsing_user_opt_in";
+}
 
 class AwSafeBrowsingUIManager;
 class AwSafeBrowsingAllowlistManager;
 struct AwWebResourceRequest;
 
+// Lifetime: Singleton
 class AwUrlCheckerDelegateImpl : public safe_browsing::UrlCheckerDelegate {
  public:
+  static void RegisterPrefs(PrefRegistrySimple* registry);
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.android_webview
   enum class SafeBrowsingAction {
     SHOW_INTERSTITIAL,
@@ -33,6 +42,9 @@ class AwUrlCheckerDelegateImpl : public safe_browsing::UrlCheckerDelegate {
       scoped_refptr<AwSafeBrowsingUIManager> ui_manager,
       AwSafeBrowsingAllowlistManager* allowlist_manager);
 
+  AwUrlCheckerDelegateImpl(const AwUrlCheckerDelegateImpl&) = delete;
+  AwUrlCheckerDelegateImpl& operator=(const AwUrlCheckerDelegateImpl&) = delete;
+
  private:
   ~AwUrlCheckerDelegateImpl() override;
 
@@ -43,20 +55,33 @@ class AwUrlCheckerDelegateImpl : public safe_browsing::UrlCheckerDelegate {
       const security_interstitials::UnsafeResource& resource,
       const std::string& method,
       const net::HttpRequestHeaders& headers,
-      bool is_main_frame,
       bool has_user_gesture) override;
   void StartObservingInteractionsForDelayedBlockingPageHelper(
-      const security_interstitials::UnsafeResource& resource,
-      bool is_main_frame) override;
+      const security_interstitials::UnsafeResource& resource) override;
   bool IsUrlAllowlisted(const GURL& url) override;
   void SetPolicyAllowlistDomains(
       const std::vector<std::string>& allowlist_domains) override;
-  bool ShouldSkipRequestCheck(const GURL& original_url,
-                              int frame_tree_node_id,
-                              int render_process_id,
-                              int render_frame_id,
-                              bool originated_from_service_worker) override;
+  bool ShouldSkipRequestCheck(
+      const GURL& original_url,
+      int frame_tree_node_id,
+      int child_id,
+      base::optional_ref<const base::UnguessableToken> render_frame_token,
+      bool originated_from_service_worker) override;
   void NotifySuspiciousSiteDetected(
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
+  void ShowSuspiciousSiteWarning(
+      const security_interstitials::UnsafeResource& resource,
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
+  bool AreSuspiciousSiteWarningsAllowed(
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
+  void SendUrlRealTimeAndHashRealTimeDiscrepancyReport(
+      std::unique_ptr<safe_browsing::ClientSafeBrowsingReportRequest> report,
+      const base::RepeatingCallback<content::WebContents*()>&
+          web_contents_getter) override;
+  bool AreBackgroundHashRealTimeSampleLookupsAllowed(
       const base::RepeatingCallback<content::WebContents*()>&
           web_contents_getter) override;
   const safe_browsing::SBThreatTypeSet& GetThreatTypes() override;
@@ -86,9 +111,7 @@ class AwUrlCheckerDelegateImpl : public safe_browsing::UrlCheckerDelegate {
   scoped_refptr<safe_browsing::SafeBrowsingDatabaseManager> database_manager_;
   scoped_refptr<AwSafeBrowsingUIManager> ui_manager_;
   safe_browsing::SBThreatTypeSet threat_types_;
-  AwSafeBrowsingAllowlistManager* allowlist_manager_;
-
-  DISALLOW_COPY_AND_ASSIGN(AwUrlCheckerDelegateImpl);
+  raw_ptr<AwSafeBrowsingAllowlistManager> allowlist_manager_;
 };
 
 }  // namespace android_webview

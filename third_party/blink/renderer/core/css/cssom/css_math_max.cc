@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,44 +13,48 @@ namespace blink {
 
 CSSMathMax* CSSMathMax::Create(const HeapVector<Member<V8CSSNumberish>>& args,
                                ExceptionState& exception_state) {
-  if (args.IsEmpty()) {
+  if (args.empty()) {
     exception_state.ThrowDOMException(DOMExceptionCode::kSyntaxError,
                                       "Arguments can't be empty");
     return nullptr;
   }
 
-  CSSMathMax* result = Create(CSSNumberishesToNumericValues(args));
+  return Create(CSSNumberishesToNumericValues(args), exception_state);
+}
+
+CSSMathMax* CSSMathMax::Create(CSSNumericValueVector values,
+                               ExceptionState& exception_state) {
+  bool error = false;
+  CSSNumericValueType final_type =
+      CSSMathVariadic::TypeCheck(values, CSSNumericValueType::Add, error);
+  CSSMathMax* result =
+      error ? nullptr
+            : MakeGarbageCollected<CSSMathMax>(
+                  MakeGarbageCollected<CSSNumericArray>(std::move(values)),
+                  final_type);
   if (!result) {
     exception_state.ThrowTypeError("Incompatible types");
-    return nullptr;
   }
 
   return result;
 }
 
-CSSMathMax* CSSMathMax::Create(CSSNumericValueVector values) {
-  bool error = false;
-  CSSNumericValueType final_type =
-      CSSMathVariadic::TypeCheck(values, CSSNumericValueType::Add, error);
-  return error ? nullptr
-               : MakeGarbageCollected<CSSMathMax>(
-                     MakeGarbageCollected<CSSNumericArray>(std::move(values)),
-                     final_type);
-}
-
-absl::optional<CSSNumericSumValue> CSSMathMax::SumValue() const {
+std::optional<CSSNumericSumValue> CSSMathMax::SumValue() const {
   auto cur_max = NumericValues()[0]->SumValue();
-  if (!cur_max || cur_max->terms.size() != 1)
-    return absl::nullopt;
+  if (!cur_max.has_value() || cur_max->terms.size() != 1) {
+    return std::nullopt;
+  }
 
   for (const auto& value : NumericValues()) {
     const auto child_sum = value->SumValue();
-    if (!child_sum || child_sum->terms.size() != 1 ||
-        child_sum->terms[0].units != cur_max->terms[0].units)
-      return absl::nullopt;
+    if (!child_sum.has_value() || child_sum->terms.size() != 1 ||
+        child_sum->terms[0].units != cur_max->terms[0].units) {
+      return std::nullopt;
+    }
 
-    if (child_sum->terms[0].value > cur_max->terms[0].value)
+    if (child_sum->terms[0].value > cur_max->terms[0].value) {
       cur_max = child_sum;
+    }
   }
   return cur_max;
 }
@@ -60,8 +64,9 @@ void CSSMathMax::BuildCSSText(Nested, ParenLess, StringBuilder& result) const {
 
   bool first_iteration = true;
   for (const auto& value : NumericValues()) {
-    if (!first_iteration)
+    if (!first_iteration) {
       result.Append(", ");
+    }
     first_iteration = false;
 
     DCHECK(value);
@@ -72,26 +77,24 @@ void CSSMathMax::BuildCSSText(Nested, ParenLess, StringBuilder& result) const {
 }
 
 CSSMathExpressionNode* CSSMathMax::ToCalcExpressionNode() const {
-  CSSMathExpressionVariadicOperation::Operands operands;
-  operands.ReserveCapacity(NumericValues().size());
+  CSSMathExpressionOperation::Operands operands;
+  operands.reserve(NumericValues().size());
   for (const auto& value : NumericValues()) {
     CSSMathExpressionNode* operand = value->ToCalcExpressionNode();
     if (!operand) {
       // TODO(crbug.com/983784): Remove this when all ToCalcExpressionNode()
       // overrides are implemented.
       NOTREACHED();
-      continue;
     }
-    operands.push_back(value->ToCalcExpressionNode());
+    operands.push_back(operand);
   }
   if (!operands.size()) {
     // TODO(crbug.com/983784): Remove this when all ToCalcExpressionNode()
     // overrides are implemented.
     NOTREACHED();
-    return nullptr;
   }
-  return CSSMathExpressionVariadicOperation::Create(std::move(operands),
-                                                    CSSMathOperator::kMax);
+  return CSSMathExpressionOperation::CreateComparisonFunction(
+      std::move(operands), CSSMathOperator::kMax);
 }
 
 }  // namespace blink

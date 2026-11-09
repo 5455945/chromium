@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,19 +8,23 @@
 #include <stddef.h>
 
 #include <atomic>
+#include <cstdint>
 #include <limits>
-#include <memory>
+#include <optional>
 #include <utility>
 
 #include "base/base_export.h"
-#include "base/callback.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/synchronization/condition_variable.h"
 #include "base/task/common/checked_lock.h"
+#include "base/task/common/task_annotator.h"
 #include "base/task/post_job.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool/task.h"
 #include "base/task/thread_pool/task_source.h"
 #include "base/task/thread_pool/task_source_sort_key.h"
+#include "base/threading/scoped_thread_priority.h"
 
 namespace base {
 namespace internal {
@@ -32,8 +36,11 @@ class PooledTaskRunnerDelegate;
 // Derived classes control the intended concurrency with GetMaxConcurrency().
 class BASE_EXPORT JobTaskSource : public TaskSource {
  public:
+  static void InitializeFeatures();
+
   JobTaskSource(const Location& from_here,
                 const TaskTraits& traits,
+                ThreadType originating_thread_type,
                 RepeatingCallback<void(JobDelegate*)> worker_task,
                 MaxConcurrencyCallback max_concurrency_callback,
                 PooledTaskRunnerDelegate* delegate);
@@ -44,6 +51,9 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
       scoped_refptr<internal::JobTaskSource> task_source) {
     return JobHandle(std::move(task_source));
   }
+
+  // Called before the task source is enqueued to initialize task metadata.
+  void WillEnqueue(int sequence_num, TaskAnnotator& annotator);
 
   // Notifies this task source that max concurrency was increased, and the
   // number of worker should be adjusted.
@@ -70,8 +80,9 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
   // TaskSource:
   ExecutionEnvironment GetExecutionEnvironment() override;
   size_t GetRemainingConcurrency() const override;
-  TaskSourceSortKey GetSortKey(
-      bool disable_fair_scheduling = false) const override;
+  TaskSourceSortKey GetSortKey() const override;
+  TimeTicks GetDelayedSortKey() const override;
+  bool HasReadyTasks(TimeTicks now) const override;
 
   bool IsActive() const;
   size_t GetWorkerCount() const;
@@ -102,7 +113,9 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
                                                       << kWorkerCountBitOffset;
 
     struct Value {
-      size_t worker_count() const { return value >> kWorkerCountBitOffset; }
+      uint8_t worker_count() const {
+        return static_cast<uint8_t>(value >> kWorkerCountBitOffset);
+      }
       // Returns true if canceled.
       bool is_canceled() const { return value & kCanceledMask; }
 
@@ -112,8 +125,7 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
     State();
     ~State();
 
-    // Sets as canceled. Returns the state
-    // before the operation.
+    // Sets as canceled. Returns the state before the operation.
     Value Cancel();
 
     // Increments the worker count by 1. Returns the state before the operation.
@@ -188,8 +200,11 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
   // TaskSource:
   RunStatus WillRunTask() override;
   Task TakeTask(TaskSource::Transaction* transaction) override;
-  Task Clear(TaskSource::Transaction* transaction) override;
+  std::optional<Task> Clear(TaskSource::Transaction* transaction) override;
   bool DidProcessTask(TaskSource::Transaction* transaction) override;
+  bool WillReEnqueue(TimeTicks now,
+                     TaskSource::Transaction* transaction) override;
+  bool OnBecomeReady() override;
 
   // Synchronizes access to workers state.
   mutable CheckedLock worker_lock_{UniversalSuccessor()};
@@ -201,12 +216,18 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
   // hence the use of atomics.
   JoinFlag join_flag_ GUARDED_BY(worker_lock_);
   // Signaled when |join_flag_| is kWaiting* and a worker returns.
-  std::unique_ptr<ConditionVariable> worker_released_condition_
+  std::optional<ConditionVariable> worker_released_condition_
+      GUARDED_BY(worker_lock_);
+  bool is_queued_ GUARDED_BY(worker_lock_) = false;
+
+  // This maintains a collection of ScopedBoostablePriority objects for all
+  // threads currently participating in this job, inserted in WillRunTask() and
+  // removed in DidProcessTask().
+  std::map<PlatformThreadId, ScopedBoostablePriority> workers_priority_
       GUARDED_BY(worker_lock_);
 
   std::atomic<uint32_t> assigned_task_ids_{0};
 
-  const Location from_here_;
   RepeatingCallback<size_t(size_t)> max_concurrency_callback_;
 
   // Worker task set by the job owner.
@@ -214,8 +235,10 @@ class BASE_EXPORT JobTaskSource : public TaskSource {
   // Task returned from TakeTask(), that calls |worker_task_| internally.
   RepeatingClosure primary_task_;
 
+  TaskMetadata task_metadata_;
+
   const TimeTicks ready_time_;
-  PooledTaskRunnerDelegate* delegate_;
+  raw_ptr<PooledTaskRunnerDelegate, LeakedDanglingUntriaged> delegate_;
 };
 
 }  // namespace internal

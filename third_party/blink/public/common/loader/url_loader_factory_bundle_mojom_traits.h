@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,6 +11,7 @@
 #include "mojo/public/cpp/bindings/struct_traits.h"
 #include "third_party/blink/public/common/common_export.h"
 #include "third_party/blink/public/common/loader/url_loader_factory_bundle.h"
+#include "third_party/blink/public/mojom/loader/local_resource_loader_config.mojom-forward.h"
 #include "third_party/blink/public/mojom/loader/url_loader_factory_bundle.mojom-shared.h"
 #include "url/mojom/origin_mojom_traits.h"
 
@@ -29,9 +30,6 @@ struct BLINK_COMMON_EXPORT
   static mojo::PendingRemote<network::mojom::URLLoaderFactory> default_factory(
       BundleInfoType& bundle);
 
-  static mojo::PendingRemote<network::mojom::URLLoaderFactory> appcache_factory(
-      BundleInfoType& bundle);
-
   static blink::PendingURLLoaderFactoryBundle::SchemeMap
   scheme_specific_factories(BundleInfoType& bundle);
 
@@ -39,6 +37,9 @@ struct BLINK_COMMON_EXPORT
   isolated_world_factories(BundleInfoType& bundle);
 
   static bool bypass_redirect_checks(BundleInfoType& bundle);
+
+  static blink::mojom::LocalResourceLoaderConfigPtr
+  local_resource_loader_config(BundleInfoType& bundle);
 
   static bool Read(blink::mojom::URLLoaderFactoryBundleDataView data,
                    BundleInfoType* out_bundle);

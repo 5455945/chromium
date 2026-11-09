@@ -48,10 +48,6 @@ bool StyleSheetCandidate::IsXSL() const {
          To<ProcessingInstruction>(GetNode()).IsXSL();
 }
 
-bool StyleSheetCandidate::IsCSSStyle() const {
-  return type_ == kHTMLStyle || type_ == kSVGStyle;
-}
-
 bool StyleSheetCandidate::IsEnabledViaScript() const {
   auto* html_link_element = DynamicTo<HTMLLinkElement>(GetNode());
   return html_link_element && html_link_element->IsEnabledViaScript();
@@ -67,30 +63,33 @@ bool StyleSheetCandidate::CanBeActivated(
     const String& current_preferrable_name) const {
   StyleSheet* sheet = Sheet();
   auto* css_style_sheet = DynamicTo<CSSStyleSheet>(sheet);
-  if (!css_style_sheet || sheet->disabled())
+  if (!css_style_sheet || sheet->disabled()) {
     return false;
+  }
   return css_style_sheet->CanBeActivated(current_preferrable_name);
 }
 
 StyleSheetCandidate::Type StyleSheetCandidate::TypeOf(Node& node) {
-  if (node.getNodeType() == Node::kProcessingInstructionNode)
+  if (node.getNodeType() == Node::kProcessingInstructionNode) {
     return kPi;
-
-  if (node.IsHTMLElement()) {
-    if (IsA<HTMLLinkElement>(node))
-      return kHTMLLink;
-    if (IsA<HTMLStyleElement>(node))
-      return kHTMLStyle;
-
-    NOTREACHED();
-    return kInvalid;
   }
 
-  if (IsA<SVGStyleElement>(node))
+  if (node.IsHTMLElement()) {
+    if (IsA<HTMLLinkElement>(node)) {
+      return kHTMLLink;
+    }
+    if (IsA<HTMLStyleElement>(node)) {
+      return kHTMLStyle;
+    }
+
+    NOTREACHED();
+  }
+
+  if (IsA<SVGStyleElement>(node)) {
     return kSVGStyle;
+  }
 
   NOTREACHED();
-  return kInvalid;
 }
 
 StyleSheet* StyleSheetCandidate::Sheet() const {
@@ -105,7 +104,6 @@ StyleSheet* StyleSheetCandidate::Sheet() const {
       return To<ProcessingInstruction>(GetNode()).sheet();
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 

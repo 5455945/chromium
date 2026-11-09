@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,17 @@
 
 #include <memory>
 
+#include "base/files/file_path.h"
 #include "build/chromeos_buildflags.h"
-#include "content/public/test/test_content_client_initializer.h"
 #include "content/public/test/test_renderer_host.h"
 #include "extensions/browser/mock_extension_system.h"
 #include "testing/gtest/include/gtest/gtest.h"
-
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "chromeos/lacros/lacros_test_helper.h"
-#endif
 
 class ExtensionPrefValueMap;
 class PrefService;
 
 namespace content {
 class BrowserContext;
-class ContentUtilityClient;
 class RenderViewHostTestEnabler;
 }
 
@@ -35,7 +30,7 @@ class TestExtensionsBrowserClient;
 //
 // NOTE: Use this class only in extensions_unittests, not in Chrome unit_tests.
 // In Chrome those factories assume any BrowserContext is a Profile and will
-// cause crashes if it is not. http://crbug.com/395820
+// cause crashes if it is not. http://crbug.com/41121315
 class ExtensionsTest : public testing::Test {
  public:
   template <typename... Args>
@@ -51,6 +46,10 @@ class ExtensionsTest : public testing::Test {
   // before SetUp().
   void SetExtensionsBrowserClient(
       std::unique_ptr<TestExtensionsBrowserClient> extensions_browser_client);
+
+  // Sets the path to be used for the BrowserContext. Must be called before
+  // SetUp().
+  void SetBrowserContextPath(const base::FilePath& path);
 
   // Returned as a BrowserContext since most users don't need methods from
   // TestBrowserContext.
@@ -74,6 +73,10 @@ class ExtensionsTest : public testing::Test {
         extension_system_factory_.GetForBrowserContext(browser_context_.get()));
   }
 
+  content::BrowserTaskEnvironment* task_environment() {
+    return task_environment_.get();
+  }
+
   // testing::Test overrides:
   void SetUp() override;
   void TearDown() override;
@@ -84,12 +87,6 @@ class ExtensionsTest : public testing::Test {
   explicit ExtensionsTest(
       std::unique_ptr<content::BrowserTaskEnvironment> task_environment);
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  chromeos::ScopedLacrosServiceTestHelper lacros_service_test_helper_;
-#endif
-
-  content::TestContentClientInitializer content_client_initializer_;
-  std::unique_ptr<content::ContentUtilityClient> content_utility_client_;
   std::unique_ptr<content::BrowserContext> browser_context_;
   std::unique_ptr<content::BrowserContext> incognito_context_;
   std::unique_ptr<TestExtensionsBrowserClient> extensions_browser_client_;
@@ -103,6 +100,8 @@ class ExtensionsTest : public testing::Test {
   // The existence of this object enables tests via
   // RenderViewHostTester.
   std::unique_ptr<content::RenderViewHostTestEnabler> rvh_test_enabler_;
+
+  base::FilePath browser_context_path_;
 };
 
 }  // namespace extensions

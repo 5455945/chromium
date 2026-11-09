@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,11 +10,13 @@
 #include "ui/views/cocoa/native_widget_mac_ns_window_host.h"
 #include "ui/views/view.h"
 #include "ui/views/widget/widget.h"
+#include "ui/views/widget/widget_delegate.h"
 
 namespace views {
 
 // static
-std::unique_ptr<ViewAccessibility> ViewAccessibility::Create(View* view) {
+std::unique_ptr<ViewAccessibility>
+ViewAXPlatformNodeDelegate::CreatePlatformSpecific(View* view) {
   auto result = std::make_unique<ViewAXPlatformNodeDelegateMac>(view);
   result->Init();
   return result;
@@ -27,31 +29,43 @@ ViewAXPlatformNodeDelegateMac::~ViewAXPlatformNodeDelegateMac() = default;
 
 gfx::NativeViewAccessible ViewAXPlatformNodeDelegateMac::GetNSWindow() {
   auto* widget = view()->GetWidget();
-  if (!widget)
-    return nil;
+  if (!widget) {
+    return gfx::NativeViewAccessible();
+  }
 
   auto* window_host = NativeWidgetMacNSWindowHost::GetFromNativeWindow(
       widget->GetNativeWindow());
-  if (!window_host)
-    return nil;
+  if (!window_host) {
+    return gfx::NativeViewAccessible();
+  }
 
   return window_host->GetNativeViewAccessibleForNSWindow();
 }
 
-gfx::NativeViewAccessible ViewAXPlatformNodeDelegateMac::GetParent() {
-  if (view()->parent())
+gfx::NativeViewAccessible ViewAXPlatformNodeDelegateMac::GetParent() const {
+  if (view()->parent()) {
     return ViewAXPlatformNodeDelegate::GetParent();
+  }
 
   auto* widget = view()->GetWidget();
-  if (!widget)
-    return nil;
+  if (!widget) {
+    return gfx::NativeViewAccessible();
+  }
 
   auto* window_host = NativeWidgetMacNSWindowHost::GetFromNativeWindow(
       view()->GetWidget()->GetNativeWindow());
-  if (!window_host)
-    return nil;
+  if (!window_host) {
+    return gfx::NativeViewAccessible();
+  }
 
   return window_host->GetNativeViewAccessibleForNSView();
+}
+
+void ViewAXPlatformNodeDelegateMac::OverrideNativeWindowTitle(
+    const std::string& title) {
+  if (gfx::NativeViewAccessible ax_window = GetNSWindow()) {
+    [ax_window.Get() setAccessibilityLabel:base::SysUTF8ToNSString(title)];
+  }
 }
 
 }  // namespace views

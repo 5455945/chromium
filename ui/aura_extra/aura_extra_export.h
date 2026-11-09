@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,11 +18,7 @@
 #endif  // defined(AURA_EXTRA_IMPLEMENTATION)
 
 #else  // defined(WIN32)
-#if defined(AURA_EXTRA_IMPLEMENTATION)
 #define AURA_EXTRA_EXPORT __attribute__((visibility("default")))
-#else
-#define AURA_EXTRA_EXPORT
-#endif
 #endif
 
 #else  // defined(COMPONENT_BUILD)

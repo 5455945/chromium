@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,10 @@
 
 #include <map>
 #include <memory>
+#include <sstream>
+#include <string_view>
 
-#include "base/strings/string_piece.h"
+#include "base/memory/raw_ref.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -15,8 +17,7 @@ using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 using ::testing::Pair;
 
-namespace base {
-namespace debug {
+namespace base::debug {
 
 namespace {
 
@@ -33,16 +34,20 @@ class TestCrashKeyImplementation : public CrashKeyImplementation {
     return new CrashKeyString(name, size);
   }
 
-  void Set(CrashKeyString* crash_key, base::StringPiece value) override {
-    ASSERT_TRUE(data_.emplace(crash_key->name, value).second);
+  void Set(CrashKeyString* crash_key, std::string_view value) override {
+    ASSERT_TRUE(data_->emplace(crash_key->name, value).second);
   }
 
   void Clear(CrashKeyString* crash_key) override {
-    ASSERT_EQ(1u, data_.erase(crash_key->name));
+    ASSERT_EQ(1u, data_->erase(crash_key->name));
+  }
+
+  void OutputCrashKeysToStream(std::ostream& out) override {
+    out << "Got " << data_->size() << " crash keys.";
   }
 
  private:
-  std::map<std::string, std::string>& data_;
+  const raw_ref<std::map<std::string, std::string>> data_;
 };
 
 }  // namespace
@@ -79,9 +84,15 @@ TEST_F(CrashLoggingTest, Basic) {
 
   SetCrashKeyString(crash_key, "value");
   EXPECT_THAT(data(), ElementsAre(Pair("test", "value")));
+  std::ostringstream stream;
+  OutputCrashKeysToStream(stream);
+  EXPECT_EQ("Got 1 crash keys.", stream.view());
 
   ClearCrashKeyString(crash_key);
   EXPECT_THAT(data(), IsEmpty());
+  std::ostringstream stream2;
+  OutputCrashKeysToStream(stream2);
+  EXPECT_EQ("Got 0 crash keys.", stream2.view());
 }
 
 // Verify that the macros are properly setting crash keys.
@@ -120,6 +131,11 @@ TEST_F(CrashLoggingTest, Macros) {
     SCOPED_CRASH_KEY_STRING256("category", "string256-value", "餅");
     EXPECT_THAT(data(), ElementsAre(Pair("category-string256-value", "餅")));
   }
+
+  {
+    SCOPED_CRASH_KEY_STRING1024("category", "string1024-value", "餅");
+    EXPECT_THAT(data(), ElementsAre(Pair("category-string1024-value", "餅")));
+  }
 }
 
 // Test that the helper macros properly uniqify the internal variable used for
@@ -130,7 +146,10 @@ TEST_F(CrashLoggingTest, MultipleCrashKeysInSameScope) {
 
   EXPECT_THAT(data(), ElementsAre(Pair("category-bool-value", "false"),
                                   Pair("category-int-value", "1")));
+
+  std::ostringstream stream;
+  OutputCrashKeysToStream(stream);
+  EXPECT_EQ("Got 2 crash keys.", stream.view());
 }
 
-}  // namespace debug
-}  // namespace base
+}  // namespace base::debug

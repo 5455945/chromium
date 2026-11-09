@@ -1,12 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/presentation/presentation.h"
 
-#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
-#include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
 #include "third_party/blink/renderer/modules/presentation/presentation_controller.h"
@@ -16,6 +14,17 @@
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
+
+namespace {
+
+// Checks if the frame of the provided window is the outermost frame, which
+// means, neither an iframe, or a fenced frame.
+bool IsOutermostDocument(LocalDOMWindow* window) {
+  return window->GetFrame()->IsMainFrame() &&
+         !window->GetFrame()->IsInFencedFrameTree();
+}
+
+}  // namespace
 
 // static
 const char Presentation::kSupplementName[] = "Presentation";
@@ -46,7 +55,7 @@ void Presentation::Trace(Visitor* visitor) const {
 }
 
 PresentationRequest* Presentation::defaultRequest() const {
-  return default_request_;
+  return default_request_.Get();
 }
 
 void Presentation::setDefaultRequest(PresentationRequest* request) {
@@ -58,12 +67,12 @@ void Presentation::setDefaultRequest(PresentationRequest* request) {
 
   PresentationController* controller = PresentationController::From(*window);
   controller->GetPresentationService()->SetDefaultPresentationUrls(
-      request ? request->Urls() : WTF::Vector<KURL>());
+      request ? request->Urls() : Vector<KURL>());
 }
 
 void Presentation::MaybeInitReceiver() {
   LocalDOMWindow* window = GetSupplementable()->DomWindow();
-  if (!receiver_ && window && window->GetFrame()->IsMainFrame() &&
+  if (!receiver_ && window && IsOutermostDocument(window) &&
       window->GetFrame()->GetSettings()->GetPresentationReceiver()) {
     receiver_ = MakeGarbageCollected<PresentationReceiver>(window);
   }
@@ -71,7 +80,7 @@ void Presentation::MaybeInitReceiver() {
 
 PresentationReceiver* Presentation::receiver() {
   MaybeInitReceiver();
-  return receiver_;
+  return receiver_.Get();
 }
 
 }  // namespace blink

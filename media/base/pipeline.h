@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #define MEDIA_BASE_PIPELINE_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/memory/ref_counted.h"
 #include "base/time/time.h"
 #include "media/base/audio_decoder_config.h"
 #include "media/base/buffering_state.h"
@@ -17,11 +17,9 @@
 #include "media/base/pipeline_metadata.h"
 #include "media/base/pipeline_status.h"
 #include "media/base/ranges.h"
-#include "media/base/text_track.h"
 #include "media/base/video_decoder_config.h"
 #include "media/base/video_transformation.h"
 #include "media/base/waiting.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "ui/gfx/geometry/size.h"
 
 namespace media {
@@ -39,6 +37,11 @@ class MEDIA_EXPORT Pipeline {
     // NOTE: The client is responsible for calling Pipeline::Stop().
     virtual void OnError(PipelineStatus status) = 0;
 
+    // Executed whenever some fallback-enabled portion of the pipeline (Just
+    // Decoders and Renderers for now) fails in such a way that a fallback
+    // is still possible without a fatal pipeline error.
+    virtual void OnFallback(PipelineStatus status) = 0;
+
     // Executed whenever the media reaches the end.
     virtual void OnEnded() = 0;
 
@@ -54,11 +57,6 @@ class MEDIA_EXPORT Pipeline {
 
     // Executed whenever the presentation duration changes.
     virtual void OnDurationChange() = 0;
-
-    // Executed whenever a text track is added.
-    // The client is expected to create a TextTrack and call |done_cb|.
-    virtual void OnAddTextTrack(const TextTrackConfig& config,
-                                AddTextTrackDoneCB done_cb) = 0;
 
     // Executed whenever the pipeline is waiting because of |reason|.
     virtual void OnWaiting(WaitingReason reason) = 0;
@@ -85,7 +83,7 @@ class MEDIA_EXPORT Pipeline {
     // Executed whenever the video frame rate changes.  |fps| will be unset if
     // the frame rate is unstable.  The duration used for the frame rate is
     // based on wall clock time, not media time.
-    virtual void OnVideoFrameRateChange(absl::optional<int> fps) = 0;
+    virtual void OnVideoFrameRateChange(std::optional<int> fps) = 0;
   };
 
   virtual ~Pipeline() {}
@@ -114,7 +112,7 @@ class MEDIA_EXPORT Pipeline {
                      PipelineStatusCallback seek_cb) = 0;
 
   // Track switching works similarly for both audio and video. Callbacks are
-  // used to notify when it is time to procede to the next step, since many of
+  // used to notify when it is time to proceed to the next step, since many of
   // the operations are asynchronous.
   // ──────────────────── Track Switch Control Flow ───────────────────────
   //  pipeline | demuxer | demuxer_stream | renderer | video/audio_renderer
@@ -140,16 +138,21 @@ class MEDIA_EXPORT Pipeline {
   //     <--------------------------------------     |
   //           |         |                |          |
   //           |         |                |          |
-  // |enabled_track_ids| contains track ids of enabled audio tracks.
+  // |enabled_track_id| is either empty, which means no audio track is
+  // enabled, or contains the selected audio track id.
   virtual void OnEnabledAudioTracksChanged(
-      const std::vector<MediaTrack::Id>& enabled_track_ids,
+      std::optional<MediaTrack::Id> enabled_track_id,
       base::OnceClosure change_completed_cb) = 0;
 
   // |selected_track_id| is either empty, which means no video track is
   // selected, or contains the selected video track id.
   virtual void OnSelectedVideoTrackChanged(
-      absl::optional<MediaTrack::Id> selected_track_id,
+      std::optional<MediaTrack::Id> selected_track_id,
       base::OnceClosure change_completed_cb) = 0;
+
+  // Signal to the pipeline that there has been a client request to access
+  // video frame data.
+  virtual void OnExternalVideoFrameRequest() = 0;
 
   // Stops the pipeline. This is a blocking function.
   // If the pipeline is started, it must be stopped before destroying it.
@@ -223,14 +226,20 @@ class MEDIA_EXPORT Pipeline {
   // post-decode buffering required to start playback or resume from
   // seek/underflow. A null option indicates the hint is unset and the pipeline
   // can choose its own default.
-  virtual void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) = 0;
+  virtual void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) = 0;
 
   // Sets whether pitch adjustment should be applied when the playback rate is
   // different than 1.0.
   virtual void SetPreservesPitch(bool preserves_pitch) = 0;
 
-  // Sets a flag indicating whether the audio stream was initiated by autoplay.
-  virtual void SetAutoplayInitiated(bool autoplay_initiated) = 0;
+  // Sets a flag indicating whether to render muted audio to the active sink or
+  // switch to a null sink.
+  virtual void SetRenderMutedAudio(bool render_muted_audio) {}
+
+  // Sets a flag indicating whether the audio stream was played with user
+  // activation.
+  virtual void SetWasPlayedWithUserActivationAndHighMediaEngagement(
+      bool was_played_with_user_activation_and_high_media_engagement) = 0;
 
   // Returns the current media playback time, which progresses from 0 until
   // GetMediaDuration().

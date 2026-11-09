@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,10 @@
 
 #include <string>
 
-#include "base/callback_forward.h"
-#include "base/macros.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "base/message_loop/message_pump_type.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_checker.h"
 #include "build/build_config.h"
@@ -36,27 +37,39 @@ class AutoThread : base::PlatformThread::Delegate {
   // Create an AutoThread with the specified message-loop |type| and |name|.
   // The supplied AutoThreadTaskRunner will be used to join and delete the
   // new thread when no references to it remain.
+  // |pre_init_callback| will be run at the beginning of ThreadMain(), before
+  // the message pump is created. This may be used to do initialization work
+  // before any resource is open on the thread, such as calling
+  // SetThreadDesktop() on a Windows UI thread.
+  static scoped_refptr<AutoThreadTaskRunner> CreateWithPreInitCallback(
+      const char* name,
+      scoped_refptr<base::SequencedTaskRunner> joiner,
+      base::MessagePumpType pump_type,
+      base::OnceClosure pre_init_callback);
   static scoped_refptr<AutoThreadTaskRunner> CreateWithType(
       const char* name,
-      scoped_refptr<AutoThreadTaskRunner> joiner,
+      scoped_refptr<base::SequencedTaskRunner> joiner,
       base::MessagePumpType type);
   static scoped_refptr<AutoThreadTaskRunner> Create(
       const char* name,
-      scoped_refptr<AutoThreadTaskRunner> joiner);
+      scoped_refptr<base::SequencedTaskRunner> joiner);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Create an AutoThread initialized for COM.  |com_init_type| specifies the
   // type of COM apartment to initialize.
   enum ComInitType { COM_INIT_NONE, COM_INIT_STA, COM_INIT_MTA };
   static scoped_refptr<AutoThreadTaskRunner> CreateWithLoopAndComInitTypes(
       const char* name,
-      scoped_refptr<AutoThreadTaskRunner> joiner,
+      scoped_refptr<base::SequencedTaskRunner> joiner,
       base::MessagePumpType pump_type,
       ComInitType com_init_type);
 #endif
 
   // Construct the AutoThread.  |name| identifies the thread for debugging.
   explicit AutoThread(const char* name);
+
+  AutoThread(const AutoThread&) = delete;
+  AutoThread& operator=(const AutoThread&) = delete;
 
   // Waits for the thread to exit, and then destroys it.
   ~AutoThread() override;
@@ -73,14 +86,14 @@ class AutoThread : base::PlatformThread::Delegate {
   // thread will exit when no references to the TaskRunner remain.
   scoped_refptr<AutoThreadTaskRunner> StartWithType(base::MessagePumpType type);
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // Configures the thread to initialize the specified COM apartment type.
   // SetComInitType() must be called before Start().
   void SetComInitType(ComInitType com_init_type);
 #endif
 
  private:
-  AutoThread(const char* name, AutoThreadTaskRunner* joiner);
+  AutoThread(const char* name, scoped_refptr<base::SequencedTaskRunner> joiner);
 
   void QuitThread(base::OnceClosure quit_when_idle_closure);
   void JoinAndDeleteThread();
@@ -90,9 +103,11 @@ class AutoThread : base::PlatformThread::Delegate {
 
   // Used to pass data to ThreadMain.
   struct StartupData;
-  StartupData* startup_data_;
+  raw_ptr<StartupData> startup_data_;
 
-#if defined(OS_WIN)
+  base::OnceClosure pre_init_callback_;
+
+#if BUILDFLAG(IS_WIN)
   // Specifies which kind of COM apartment to initialize, if any.
   ComInitType com_init_type_;
 #endif
@@ -107,13 +122,11 @@ class AutoThread : base::PlatformThread::Delegate {
   // This allows us to detect premature exit via MessageLoop::QuitWhenIdle().
   bool was_quit_properly_;
 
-  // AutoThreadTaskRunner to post a task to to join & delete this thread.
-  scoped_refptr<AutoThreadTaskRunner> joiner_;
+  // Task runner to post a task to to join & delete this thread.
+  scoped_refptr<base::SequencedTaskRunner> joiner_;
 
   // Verifies that QuitThread() is called on the same thread as ThreadMain().
   base::ThreadChecker thread_checker_;
-
-  DISALLOW_COPY_AND_ASSIGN(AutoThread);
 };
 
 }  // namespace remoting

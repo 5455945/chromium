@@ -1,25 +1,27 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "net/cert/ct_log_verifier.h"
 
-#include <string.h>
+#include <stdint.h>
 
+#include <bit>
+#include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/bits.h"
 #include "base/logging.h"
 #include "base/notreached.h"
-#include "base/strings/string_piece.h"
+#include "base/strings/string_view_util.h"
+#include "crypto/evp.h"
+#include "crypto/hash.h"
 #include "crypto/openssl_util.h"
-#include "crypto/sha2.h"
 #include "net/cert/ct_log_verifier_util.h"
 #include "net/cert/ct_serialization.h"
 #include "net/cert/merkle_audit_proof.h"
 #include "net/cert/merkle_consistency_proof.h"
 #include "net/cert/signed_tree_head.h"
-#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
 
 namespace net {
@@ -27,7 +29,7 @@ namespace net {
 namespace {
 
 // The SHA-256 hash of the empty string.
-const unsigned char kSHA256EmptyStringHash[ct::kSthRootHashLength] = {
+constexpr std::array<uint8_t, ct::kSthRootHashLength> kSHA256EmptyStringHash = {
     0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4,
     0xc8, 0x99, 0x6f, 0xb9, 0x24, 0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b,
     0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55};
@@ -49,7 +51,6 @@ const EVP_MD* GetEvpAlg(ct::DigitallySigned::HashAlgorithm alg) {
     case ct::DigitallySigned::HASH_ALGO_NONE:
     default:
       NOTREACHED();
-      return nullptr;
   }
 }
 
@@ -57,79 +58,51 @@ const EVP_MD* GetEvpAlg(ct::DigitallySigned::HashAlgorithm alg) {
 
 // static
 scoped_refptr<const CTLogVerifier> CTLogVerifier::Create(
-    const base::StringPiece& public_key,
+    std::string_view public_key,
     std::string description) {
-  scoped_refptr<CTLogVerifier> result(
-      new CTLogVerifier(std::move(description)));
+  auto result = base::WrapRefCounted(new CTLogVerifier(std::move(description)));
   if (!result->Init(public_key))
     return nullptr;
   return result;
 }
 
 CTLogVerifier::CTLogVerifier(std::string description)
-    : description_(std::move(description)),
-      hash_algorithm_(ct::DigitallySigned::HASH_ALGO_NONE),
-      signature_algorithm_(ct::DigitallySigned::SIG_ALGO_ANONYMOUS),
-      public_key_(nullptr) {}
+    : description_(std::move(description)) {}
 
 bool CTLogVerifier::Verify(const ct::SignedEntryData& entry,
                            const ct::SignedCertificateTimestamp& sct) const {
-  if (sct.log_id != key_id()) {
-    DVLOG(1) << "SCT is not signed by this log.";
-    return false;
-  }
-
-  if (!SignatureParametersMatch(sct.signature))
-    return false;
-
   std::string serialized_log_entry;
-  if (!ct::EncodeSignedEntry(entry, &serialized_log_entry)) {
-    DVLOG(1) << "Unable to serialize entry.";
-    return false;
-  }
   std::string serialized_data;
-  if (!ct::EncodeV1SCTSignedData(sct.timestamp, serialized_log_entry,
-                                 sct.extensions, &serialized_data)) {
-    DVLOG(1) << "Unable to create SCT to verify.";
-    return false;
-  }
 
-  return VerifySignature(serialized_data, sct.signature.signature_data);
+  return sct.log_id == key_id_ && SignatureParametersMatch(sct.signature) &&
+         ct::EncodeSignedEntry(entry, &serialized_log_entry) &&
+         ct::EncodeV1SCTSignedData(sct.timestamp, serialized_log_entry,
+                                   sct.extensions, &serialized_data) &&
+         VerifySignature(serialized_data, sct.signature.signature_data);
 }
 
 bool CTLogVerifier::VerifySignedTreeHead(
     const ct::SignedTreeHead& signed_tree_head) const {
-  if (!SignatureParametersMatch(signed_tree_head.signature))
-    return false;
-
   std::string serialized_data;
-  if (!ct::EncodeTreeHeadSignature(signed_tree_head, &serialized_data))
+  if (!SignatureParametersMatch(signed_tree_head.signature) ||
+      !ct::EncodeTreeHeadSignature(signed_tree_head, &serialized_data) ||
+      !VerifySignature(serialized_data,
+                       signed_tree_head.signature.signature_data)) {
     return false;
-
-  if (VerifySignature(serialized_data,
-                      signed_tree_head.signature.signature_data)) {
-    if (signed_tree_head.tree_size == 0) {
-      // Root hash must equate SHA256 hash of the empty string.
-      return (memcmp(signed_tree_head.sha256_root_hash, kSHA256EmptyStringHash,
-                     ct::kSthRootHashLength) == 0);
-    }
-    return true;
   }
-  return false;
+
+  if (signed_tree_head.tree_size == 0) {
+    // Root hash must equate SHA256 hash of the empty string.
+    return signed_tree_head.sha256_root_hash == kSHA256EmptyStringHash;
+  }
+
+  return true;
 }
 
 bool CTLogVerifier::SignatureParametersMatch(
     const ct::DigitallySigned& signature) const {
-  if (!signature.SignatureParametersMatch(hash_algorithm_,
-                                          signature_algorithm_)) {
-    DVLOG(1) << "Mismatched hash or signature algorithm. Hash: "
-             << hash_algorithm_ << " vs " << signature.hash_algorithm
-             << " Signature: " << signature_algorithm_ << " vs "
-             << signature.signature_algorithm << ".";
-    return false;
-  }
-
-  return true;
+  return signature.SignatureParametersMatch(hash_algorithm_,
+                                            signature_algorithm_);
 }
 
 bool CTLogVerifier::VerifyConsistencyProof(
@@ -173,9 +146,9 @@ bool CTLogVerifier::VerifyConsistencyProof(
 
   // 1. If "first" is an exact power of 2, then prepend "first_hash" to the
   // "consistency_path" array.
-  base::StringPiece first_proof_node = old_tree_hash;
+  std::string_view first_proof_node = old_tree_hash;
   auto iter = proof.nodes.begin();
-  if (!base::bits::IsPowerOfTwo(proof.first_tree_size)) {
+  if (!std::has_single_bit(proof.first_tree_size)) {
     if (iter == proof.nodes.end())
       return false;
     first_proof_node = *iter;
@@ -289,28 +262,21 @@ bool CTLogVerifier::VerifyAuditProof(const ct::MerkleAuditProof& proof,
   return sn == 0 && r == root_hash;
 }
 
-CTLogVerifier::~CTLogVerifier() {
+CTLogVerifier::~CTLogVerifier() = default;
+
+bool CTLogVerifier::Init(std::string_view public_key) {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
-  if (public_key_)
-    EVP_PKEY_free(public_key_);
-}
-
-bool CTLogVerifier::Init(const base::StringPiece& public_key) {
-  crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
-
-  CBS cbs;
-  CBS_init(&cbs, reinterpret_cast<const uint8_t*>(public_key.data()),
-           public_key.size());
-  public_key_ = EVP_parse_public_key(&cbs);
-  if (!public_key_ || CBS_len(&cbs) != 0)
+  public_key_ = crypto::evp::PublicKeyFromBytes(base::as_byte_span(public_key));
+  if (!public_key_) {
     return false;
+  }
 
-  key_id_ = crypto::SHA256HashString(public_key);
+  key_id_ = base::as_string_view(crypto::hash::Sha256(public_key));
 
   // Right now, only RSASSA-PKCS1v15 with SHA-256 and ECDSA with SHA-256 are
   // supported.
-  switch (EVP_PKEY_type(public_key_->type)) {
+  switch (EVP_PKEY_id(public_key_.get())) {
     case EVP_PKEY_RSA:
       hash_algorithm_ = ct::DigitallySigned::HASH_ALGO_SHA256;
       signature_algorithm_ = ct::DigitallySigned::SIG_ALGO_RSA;
@@ -320,32 +286,28 @@ bool CTLogVerifier::Init(const base::StringPiece& public_key) {
       signature_algorithm_ = ct::DigitallySigned::SIG_ALGO_ECDSA;
       break;
     default:
-      DVLOG(1) << "Unsupported key type: " << EVP_PKEY_type(public_key_->type);
       return false;
   }
 
-  // Extra sanity check: Require RSA keys of at least 2048 bits.
+  // Extra safety check: Require RSA keys of at least 2048 bits.
   // EVP_PKEY_size returns the size in bytes. 256 = 2048-bit RSA key.
   if (signature_algorithm_ == ct::DigitallySigned::SIG_ALGO_RSA &&
-      EVP_PKEY_size(public_key_) < 256) {
-    DVLOG(1) << "Too small a public key.";
+      EVP_PKEY_size(public_key_.get()) < 256) {
     return false;
   }
 
   return true;
 }
 
-bool CTLogVerifier::VerifySignature(const base::StringPiece& data_to_sign,
-                                    const base::StringPiece& signature) const {
+bool CTLogVerifier::VerifySignature(std::string_view data_to_sign,
+                                    std::string_view signature) const {
   crypto::OpenSSLErrStackTracer err_tracer(FROM_HERE);
 
   const EVP_MD* hash_alg = GetEvpAlg(hash_algorithm_);
-  if (hash_alg == nullptr)
-    return false;
-
   bssl::ScopedEVP_MD_CTX ctx;
-  return EVP_DigestVerifyInit(ctx.get(), nullptr, hash_alg, nullptr,
-                              public_key_) &&
+  return hash_alg &&
+         EVP_DigestVerifyInit(ctx.get(), nullptr, hash_alg, nullptr,
+                              public_key_.get()) &&
          EVP_DigestVerifyUpdate(ctx.get(), data_to_sign.data(),
                                 data_to_sign.size()) &&
          EVP_DigestVerifyFinal(

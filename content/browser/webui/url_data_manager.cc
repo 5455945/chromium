@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,18 @@
 
 #include <stddef.h>
 
+#include <algorithm>
 #include <utility>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/containers/contains.h"
-#include "base/lazy_instance.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ref_counted_memory.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
-#include "content/browser/resource_context_impl.h"
+#include "base/values.h"
 #include "content/browser/webui/url_data_manager_backend.h"
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/browser/webui/web_ui_data_source_impl.h"
@@ -31,7 +31,10 @@ namespace {
 
 const char kURLDataManagerKeyName[] = "url_data_manager";
 
-base::LazyInstance<base::Lock>::Leaky g_delete_lock = LAZY_INSTANCE_INITIALIZER;
+base::Lock& GetDeleteLock() {
+  static base::NoDestructor<base::Lock> delete_lock;
+  return *delete_lock;
+}
 
 URLDataManager* GetFromBrowserContext(BrowserContext* context) {
   if (!context->GetUserData(kURLDataManagerKeyName)) {
@@ -46,35 +49,33 @@ URLDataManager* GetFromBrowserContext(BrowserContext* context) {
 
 // static
 URLDataManager::URLDataSources* URLDataManager::data_sources_ PT_GUARDED_BY(
-    g_delete_lock.Get()) = nullptr;
+    GetDeleteLock()) = nullptr;
 
 URLDataManager::URLDataManager(BrowserContext* browser_context)
     : browser_context_(browser_context) {
 }
 
-URLDataManager::~URLDataManager() {
-}
+URLDataManager::~URLDataManager() = default;
 
 void URLDataManager::AddDataSource(URLDataSourceImpl* source) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   URLDataManagerBackend::GetForBrowserContext(browser_context_)
       ->AddDataSource(source);
 }
 
-void URLDataManager::UpdateWebUIDataSource(
-    const std::string& source_name,
-    std::unique_ptr<base::DictionaryValue> update) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+void URLDataManager::UpdateWebUIDataSource(const std::string& source_name,
+                                           const base::DictValue& update) {
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   URLDataManagerBackend::GetForBrowserContext(browser_context_)
-      ->UpdateWebUIDataSource(source_name, *update);
+      ->UpdateWebUIDataSource(source_name, update);
 }
 
 // static
 void URLDataManager::DeleteDataSources() {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   URLDataSources sources;
   {
-    base::AutoLock lock(g_delete_lock.Get());
+    base::AutoLock lock(GetDeleteLock());
     if (!data_sources_)
       return;
     data_sources_->swap(sources);
@@ -96,7 +97,7 @@ void URLDataManager::DeleteDataSource(const URLDataSourceImpl* data_source) {
   // to delete.
   bool schedule_delete = false;
   {
-    base::AutoLock lock(g_delete_lock.Get());
+    base::AutoLock lock(GetDeleteLock());
     if (!data_sources_)
       data_sources_ = new URLDataSources();
     schedule_delete = data_sources_->empty();
@@ -125,10 +126,9 @@ void URLDataManager::AddWebUIDataSource(BrowserContext* browser_context,
   GetFromBrowserContext(browser_context)->AddDataSource(impl);
 }
 
-void URLDataManager::UpdateWebUIDataSource(
-    BrowserContext* browser_context,
-    const std::string& source_name,
-    std::unique_ptr<base::DictionaryValue> update) {
+void URLDataManager::UpdateWebUIDataSource(BrowserContext* browser_context,
+                                           const std::string& source_name,
+                                           const base::DictValue& update) {
   GetFromBrowserContext(browser_context)
       ->UpdateWebUIDataSource(source_name, std::move(update));
 }
@@ -136,8 +136,8 @@ void URLDataManager::UpdateWebUIDataSource(
 // static
 bool URLDataManager::IsScheduledForDeletion(
     const URLDataSourceImpl* data_source) {
-  base::AutoLock lock(g_delete_lock.Get());
-  return data_sources_ && base::Contains(*data_sources_, data_source);
+  base::AutoLock lock(GetDeleteLock());
+  return data_sources_ && std::ranges::contains(*data_sources_, data_source);
 }
 
 }  // namespace content

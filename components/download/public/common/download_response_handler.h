@@ -1,13 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_RESPONSE_HANDLER_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_RESPONSE_HANDLER_H_
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_source.h"
@@ -16,9 +18,9 @@
 #include "components/download/public/common/download_utils.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "net/cert/cert_status_flags.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/origin.h"
 
 namespace download {
@@ -53,22 +55,28 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
       const DownloadUrlParameters::RequestHeadersType& request_headers,
       const std::string& request_origin,
       DownloadSource download_source,
+      bool require_safety_checks,
       std::vector<GURL> url_chain,
-      bool is_background_mode);
+      bool is_background_mode,
+      ::network::mojom::RequestMode fetch_request_mode);
+
+  DownloadResponseHandler(const DownloadResponseHandler&) = delete;
+  DownloadResponseHandler& operator=(const DownloadResponseHandler&) = delete;
+
   ~DownloadResponseHandler() override;
 
   // network::mojom::URLLoaderClient
   void OnReceiveEarlyHints(network::mojom::EarlyHintsPtr early_hints) override;
-  void OnReceiveResponse(network::mojom::URLResponseHeadPtr head) override;
+  void OnReceiveResponse(
+      network::mojom::URLResponseHeadPtr head,
+      mojo::ScopedDataPipeConsumerHandle body,
+      std::optional<mojo_base::BigBuffer> cached_metadata) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          network::mojom::URLResponseHeadPtr head) override;
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override;
-  void OnReceiveCachedMetadata(mojo_base::BigBuffer data) override;
   void OnTransferSizeUpdated(int32_t transfer_size_diff) override;
-  void OnStartLoadingResponseBody(
-      mojo::ScopedDataPipeConsumerHandle body) override;
   void OnComplete(const network::URLLoaderCompletionStatus& status) override;
 
  private:
@@ -78,13 +86,17 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
   // Helper method that is called when response is received.
   void OnResponseStarted(mojom::DownloadStreamHandlePtr stream_handle);
 
-  Delegate* const delegate_;
+  const raw_ptr<Delegate> delegate_;
 
   std::unique_ptr<DownloadCreateInfo> create_info_;
 
   bool started_;
 
-  // Information needed to create DownloadCreateInfo when the time comes.
+  const url::Origin first_origin_;
+
+  // Information needed to create DownloadCreateInfo when the time comes. These
+  // members are consumed by CreateDownloadCreateInfo() and must not be used
+  // afterwards.
   std::unique_ptr<DownloadSaveInfo> save_info_;
   std::vector<GURL> url_chain_;
   std::string method_;
@@ -93,15 +105,21 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
   bool is_transient_;
   bool fetch_error_body_;
   network::mojom::RedirectMode cross_origin_redirects_;
-  url::Origin first_origin_;
   DownloadUrlParameters::RequestHeadersType request_headers_;
   std::string request_origin_;
   DownloadSource download_source_;
-  net::CertStatus cert_status_;
+  net::CertStatus cert_status_ = 0;
   bool has_strong_validators_;
-  absl::optional<url::Origin> request_initiator_;
+  // Whether the response was served by a Service Worker. Captured in
+  // OnReceiveResponse so it is available when mapping the completion status.
+  bool fetched_via_service_worker_ = false;
+  std::optional<url::Origin> request_initiator_;
+  ::network::mojom::CredentialsMode credentials_mode_;
+  ::network::mojom::RequestMode fetch_request_mode_;
+  std::optional<net::IsolationInfo> isolation_info_;
   bool is_partial_request_;
   bool completed_;
+  bool require_safety_checks_;
 
   // The abort reason if this class decides to block the download.
   DownloadInterruptReason abort_reason_;
@@ -111,7 +129,6 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
 
   // Whether the download is running in background mode.
   bool is_background_mode_;
-  DISALLOW_COPY_AND_ASSIGN(DownloadResponseHandler);
 };
 
 }  // namespace download

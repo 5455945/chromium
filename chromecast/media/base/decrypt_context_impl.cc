@@ -1,22 +1,23 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chromecast/media/base/decrypt_context_impl.h"
 
 #include <memory>
+#include <ostream>
 #include <vector>
 
-#include "base/bind.h"
 #include "base/check.h"
+#include "base/functional/bind.h"
 #include "chromecast/public/media/cast_decoder_buffer.h"
 
 namespace chromecast {
 namespace media {
 namespace {
 void BufferDecryptCB(bool* called, bool* ret, bool success) {
-  DCHECK(called);
-  DCHECK(ret);
+  CHECK(called, base::NotFatalUntil::M163);
+  CHECK(ret, base::NotFatalUntil::M163);
   *called = true;
   *ret = success;
 }

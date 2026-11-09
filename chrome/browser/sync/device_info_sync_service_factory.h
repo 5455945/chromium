@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,13 @@
 
 #include <vector>
 
-#include "base/macros.h"
-#include "components/keyed_service/content/browser_context_keyed_service_factory.h"
+#include "chrome/browser/profiles/profile_keyed_service_factory.h"
 
 class Profile;
 
 namespace base {
 template <typename T>
-struct DefaultSingletonTraits;
+class NoDestructor;
 }  // namespace base
 
 namespace syncer {
@@ -22,10 +21,14 @@ class DeviceInfoSyncService;
 class DeviceInfoTracker;
 }  // namespace syncer
 
-class DeviceInfoSyncServiceFactory : public BrowserContextKeyedServiceFactory {
+class DeviceInfoSyncServiceFactory : public ProfileKeyedServiceFactory {
  public:
   static syncer::DeviceInfoSyncService* GetForProfile(Profile* profile);
   static DeviceInfoSyncServiceFactory* GetInstance();
+
+  DeviceInfoSyncServiceFactory(const DeviceInfoSyncServiceFactory&) = delete;
+  DeviceInfoSyncServiceFactory& operator=(const DeviceInfoSyncServiceFactory&) =
+      delete;
 
   // Iterates over all of the profiles that have been loaded so far, and
   // extracts their tracker if present. If some profiles don't have trackers, no
@@ -34,16 +37,14 @@ class DeviceInfoSyncServiceFactory : public BrowserContextKeyedServiceFactory {
       std::vector<const syncer::DeviceInfoTracker*>* trackers);
 
  private:
-  friend struct base::DefaultSingletonTraits<DeviceInfoSyncServiceFactory>;
+  friend base::NoDestructor<DeviceInfoSyncServiceFactory>;
 
   DeviceInfoSyncServiceFactory();
   ~DeviceInfoSyncServiceFactory() override;
 
   // BrowserContextKeyedServiceFactory:
-  KeyedService* BuildServiceInstanceFor(
+  std::unique_ptr<KeyedService> BuildServiceInstanceForBrowserContext(
       content::BrowserContext* context) const override;
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceInfoSyncServiceFactory);
 };
 
 #endif  // CHROME_BROWSER_SYNC_DEVICE_INFO_SYNC_SERVICE_FACTORY_H_

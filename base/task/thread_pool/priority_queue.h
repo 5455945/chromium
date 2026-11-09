@@ -1,16 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef BASE_TASK_THREAD_POOL_PRIORITY_QUEUE_H_
 #define BASE_TASK_THREAD_POOL_PRIORITY_QUEUE_H_
 
-#include <memory>
-
 #include "base/base_export.h"
-#include "base/memory/ref_counted.h"
+#include "base/containers/intrusive_heap.h"
 #include "base/task/common/checked_lock.h"
-#include "base/task/common/intrusive_heap.h"
 #include "base/task/thread_pool/task_source.h"
 #include "base/task/thread_pool/task_source_sort_key.h"
 
@@ -64,15 +61,20 @@ class BASE_EXPORT PriorityQueue {
   // Returns the number of TaskSources in the PriorityQueue.
   size_t Size() const;
 
-  // Returns the number of TaskSources with |priority|.
-  size_t GetNumTaskSourcesWithPriority(TaskPriority priority) const {
-    return num_task_sources_per_priority_[static_cast<int>(priority)];
+  // Returns the number of TaskSources with foreground / background ThreadType.
+  size_t GetNumForegroundTaskSources() const {
+    return num_foreground_task_sources_;
+  }
+  size_t GetNumBackgroundTaskSources() const {
+    return num_background_task_sources_;
   }
 
   // Set the PriorityQueue to empty all its TaskSources of Tasks when it is
   // destroyed; needed to prevent memory leaks caused by a reference cycle
   // (TaskSource -> Task -> TaskRunner -> TaskSource...) during test teardown.
   void EnableFlushTaskSourcesOnDestroyForTesting();
+
+  void swap(PriorityQueue& other);
 
  private:
   // A class combining a TaskSource and the TaskSourceSortKey that determines
@@ -81,13 +83,13 @@ class BASE_EXPORT PriorityQueue {
 
   using ContainerType = IntrusiveHeap<TaskSourceAndSortKey>;
 
-  void DecrementNumTaskSourcesForPriority(TaskPriority priority);
-  void IncrementNumTaskSourcesForPriority(TaskPriority priority);
+  void DecrementNumTaskSourcesForThreadType(ThreadType thread_type);
+  void IncrementNumTaskSourcesForThreadType(ThreadType thread_type);
 
   ContainerType container_;
 
-  std::array<size_t, static_cast<int>(TaskPriority::HIGHEST) + 1>
-      num_task_sources_per_priority_ = {};
+  size_t num_foreground_task_sources_ = 0;
+  size_t num_background_task_sources_ = 0;
 
   // Should only be enabled by EnableFlushTaskSourcesOnDestroyForTesting().
   bool is_flush_task_sources_on_destroy_enabled_ = false;

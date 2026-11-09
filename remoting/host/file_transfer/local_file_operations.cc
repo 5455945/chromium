@@ -1,30 +1,30 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/file_transfer/local_file_operations.h"
 
 #include <cstdint>
+#include <optional>
+#include <variant>
 
-#include "base/bind.h"
+#include "base/files/file_path.h"
 #include "base/files/file_proxy.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/sequence_checker.h"
-#include "base/sequenced_task_runner.h"
-#include "base/task/post_task.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
-#include "base/task_runner_util.h"
-#include "base/threading/sequenced_task_runner_handle.h"
 #include "build/build_config.h"
 #include "remoting/base/result.h"
+#include "remoting/host/file_transfer/directory_helpers.h"
 #include "remoting/host/file_transfer/ensure_user.h"
 #include "remoting/host/file_transfer/file_chooser.h"
-#include "remoting/host/file_transfer/get_desktop_directory.h"
 #include "remoting/protocol/file_transfer_helpers.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace remoting {
 
@@ -45,7 +45,7 @@ remoting::protocol::FileTransfer_Error_Type FileErrorToResponseErrorType(
 }
 
 scoped_refptr<base::SequencedTaskRunner> CreateFileTaskRunner() {
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
   // On Windows, we use user impersonation to write files as the currently
   // logged-in user, while the process as a whole runs as SYSTEM. Since user
   // impersonation is per-thread on Windows, we need a dedicated thread to
@@ -63,6 +63,10 @@ class LocalFileReader : public FileOperations::Reader {
  public:
   explicit LocalFileReader(
       scoped_refptr<base::SequencedTaskRunner> ui_task_runner);
+
+  LocalFileReader(const LocalFileReader&) = delete;
+  LocalFileReader& operator=(const LocalFileReader&) = delete;
+
   ~LocalFileReader() override;
 
   // FileOperations::Reader implementation.
@@ -74,7 +78,7 @@ class LocalFileReader : public FileOperations::Reader {
 
  private:
   void OnEnsureUserResult(OpenCallback callback,
-                          protocol::FileTransferResult<Monostate> result);
+                          protocol::FileTransferResult<std::monostate> result);
   void OnFileChooserResult(OpenCallback callback, FileChooser::Result result);
   void OnOpenResult(OpenCallback callback, base::File::Error error);
   void OnGetInfoResult(OpenCallback callback,
@@ -82,8 +86,7 @@ class LocalFileReader : public FileOperations::Reader {
                        const base::File::Info& info);
   void OnReadResult(ReadCallback callback,
                     base::File::Error error,
-                    const char* data,
-                    int bytes_read);
+                    base::span<const char> data);
 
   void SetState(FileOperations::State state);
 
@@ -95,16 +98,18 @@ class LocalFileReader : public FileOperations::Reader {
   scoped_refptr<base::SequencedTaskRunner> ui_task_runner_;
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
   std::unique_ptr<FileChooser> file_chooser_;
-  absl::optional<base::FileProxy> file_proxy_;
+  std::optional<base::FileProxy> file_proxy_;
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<LocalFileReader> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileReader);
 };
 
 class LocalFileWriter : public FileOperations::Writer {
  public:
   LocalFileWriter();
+
+  LocalFileWriter(const LocalFileWriter&) = delete;
+  LocalFileWriter& operator=(const LocalFileWriter&) = delete;
+
   ~LocalFileWriter() override;
 
   // FileOperations::Writer implementation.
@@ -144,11 +149,9 @@ class LocalFileWriter : public FileOperations::Writer {
   std::uint64_t bytes_written_ = 0;
 
   scoped_refptr<base::SequencedTaskRunner> file_task_runner_;
-  absl::optional<base::FileProxy> file_proxy_;
+  std::optional<base::FileProxy> file_proxy_;
   SEQUENCE_CHECKER(sequence_checker_);
   base::WeakPtrFactory<LocalFileWriter> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(LocalFileWriter);
 };
 
 LocalFileReader::LocalFileReader(
@@ -163,8 +166,8 @@ void LocalFileReader::Open(OpenCallback callback) {
   SetState(FileOperations::kBusy);
   file_task_runner_ = CreateFileTaskRunner();
   file_proxy_.emplace(file_task_runner_.get());
-  base::PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE, base::BindOnce(&EnsureUserContext),
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&EnsureUserContext),
       base::BindOnce(&LocalFileReader::OnEnsureUserResult,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -193,7 +196,7 @@ FileOperations::State LocalFileReader::state() const {
 
 void LocalFileReader::OnEnsureUserResult(
     FileOperations::Reader::OpenCallback callback,
-    protocol::FileTransferResult<Monostate> result) {
+    protocol::FileTransferResult<std::monostate> result) {
   if (!result) {
     SetState(FileOperations::kFailed);
     std::move(callback).Run(std::move(result.error()));
@@ -255,8 +258,7 @@ void LocalFileReader::OnGetInfoResult(OpenCallback callback,
 
 void LocalFileReader::OnReadResult(ReadCallback callback,
                                    base::File::Error error,
-                                   const char* data,
-                                   int bytes_read) {
+                                   base::span<const char> data) {
   if (error != base::File::FILE_OK) {
     SetState(FileOperations::kFailed);
     std::move(callback).Run(protocol::MakeFileTransferError(
@@ -264,19 +266,19 @@ void LocalFileReader::OnReadResult(ReadCallback callback,
     return;
   }
 
-  offset_ += bytes_read;
-  SetState(bytes_read > 0 ? FileOperations::kReady : FileOperations::kComplete);
+  offset_ += data.size();
+  SetState(data.size() > 0 ? FileOperations::kReady
+                           : FileOperations::kComplete);
 
   // The read buffer is provided and owned by FileProxy, so there's no way to
   // avoid a copy, here.
-  std::move(callback).Run(std::vector<std::uint8_t>(data, data + bytes_read));
+  std::move(callback).Run(std::vector<std::uint8_t>(data.begin(), data.end()));
 }
 
 void LocalFileReader::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK_EQ(FileOperations::kBusy, state_);
       break;
@@ -307,10 +309,10 @@ void LocalFileWriter::Open(const base::FilePath& filename, Callback callback) {
   SetState(FileOperations::kBusy);
   file_task_runner_ = CreateFileTaskRunner();
   file_proxy_.emplace(file_task_runner_.get());
-  base::PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE, base::BindOnce([] {
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce([] {
         return EnsureUserContext().AndThen(
-            [](Monostate) { return GetDesktopDirectory(); });
+            [](std::monostate) { return GetFileUploadDirectory(); });
       }),
       base::BindOnce(&LocalFileWriter::OnGetTargetDirectoryResult,
                      weak_ptr_factory_.GetWeakPtr(), filename,
@@ -326,12 +328,9 @@ void LocalFileWriter::WriteChunk(std::vector<std::uint8_t> data,
   //               worth checking for? If so, what should we do in that case,
   //               given that callback is moved into the task and not returned
   //               on error?
-
-  // Ensure buffer pointer is obtained before data is moved.
-  const std::uint8_t* buffer = data.data();
-  const std::size_t size = data.size();
-  file_proxy_->Write(bytes_written_, reinterpret_cast<const char*>(buffer),
-                     size,
+  // Ensure span is obtained before data is moved.
+  auto data_span = base::span(data);
+  file_proxy_->Write(bytes_written_, data_span,
                      base::BindOnce(&LocalFileWriter::OnWriteResult,
                                     weak_ptr_factory_.GetWeakPtr(),
                                     std::move(data), std::move(callback)));
@@ -361,9 +360,8 @@ void LocalFileWriter::Cancel() {
   file_proxy_.reset();
   // And finally, queue deletion of the temp file.
   if (!temp_filepath_.empty()) {
-    file_task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(base::GetDeleteFileCallback(), temp_filepath_));
+    file_task_runner_->PostTask(FROM_HERE,
+                                base::GetDeleteFileCallback(temp_filepath_));
   }
   SetState(FileOperations::kFailed);
 }
@@ -391,9 +389,8 @@ void LocalFileWriter::OnGetTargetDirectoryResult(
   base::FilePath temp_filepath =
       destination_filepath_.AddExtensionASCII(kTempFileExtension);
 
-  PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&base::GetUniquePath, temp_filepath),
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&base::GetUniquePath, temp_filepath),
       base::BindOnce(&LocalFileWriter::CreateTempFile,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -411,13 +408,14 @@ void LocalFileWriter::CreateTempFile(Callback callback,
 
   temp_filepath_ = std::move(temp_filepath);
 
-  // FLAG_SHARE_DELETE allows the file to be marked as deleted on Windows while
-  // the handle is still open. (Other OS's allow this by default.) This allows
-  // Cancel to clean up the temporary file even if there are writes pending.
+  // FLAG_WIN_SHARE_DELETE allows the file to be marked as deleted on Windows
+  // while the handle is still open. (Other OS's allow this by default.) This
+  // allows Cancel to clean up the temporary file even if there are writes
+  // pending.
   file_proxy_->CreateOrOpen(
       temp_filepath_,
       base::File::FLAG_CREATE | base::File::FLAG_WRITE |
-          base::File::FLAG_SHARE_DELETE,
+          base::File::FLAG_WIN_SHARE_DELETE,
       base::BindOnce(&LocalFileWriter::OnCreateResult,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -485,9 +483,8 @@ void LocalFileWriter::OnCloseResult(Callback callback,
     return;
   }
 
-  base::PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&base::GetUniquePath, destination_filepath_),
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE, base::BindOnce(&base::GetUniquePath, destination_filepath_),
       base::BindOnce(&LocalFileWriter::MoveToDestination,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
 }
@@ -505,8 +502,8 @@ void LocalFileWriter::MoveToDestination(Callback callback,
 
   destination_filepath_ = std::move(destination_filepath);
 
-  PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE,
+  file_task_runner_->PostTaskAndReplyWithResult(
+      FROM_HERE,
       base::BindOnce(&base::Move, temp_filepath_, destination_filepath_),
       base::BindOnce(&LocalFileWriter::OnMoveResult,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
@@ -529,7 +526,6 @@ void LocalFileWriter::SetState(FileOperations::State state) {
   switch (state) {
     case FileOperations::kCreated:
       NOTREACHED();  // Can never return to initial state.
-      break;
     case FileOperations::kReady:
       DCHECK(state_ == FileOperations::kBusy);
       break;

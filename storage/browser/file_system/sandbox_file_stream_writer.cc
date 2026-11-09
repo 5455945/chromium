@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,18 +10,19 @@
 #include <tuple>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/functional/bind.h"
 #include "base/memory/weak_ptr.h"
-#include "base/sequenced_task_runner.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
+#include "storage/browser/blob/scoped_file.h"
 #include "storage/browser/file_system/file_observers.h"
 #include "storage/browser/file_system/file_system_context.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
 #include "storage/browser/file_system/memory_file_stream_writer.h"
 #include "storage/browser/file_system/obfuscated_file_util_memory_delegate.h"
-#include "storage/browser/file_system/plugin_private_file_system_backend.h"
+#include "storage/browser/file_system/sandbox_file_system_backend_delegate.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/common/file_system/file_system_util.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -127,8 +128,8 @@ void SandboxFileStreamWriter::DidCreateSnapshotFile(
     base::File::Error file_error,
     const base::File::Info& file_info,
     const base::FilePath& platform_path,
-    scoped_refptr<ShareableFileReference> file_ref) {
-  DCHECK(!file_ref.get());
+    ScopedFile temp_file) {
+  CHECK(temp_file.path().empty());
 
   if (CancelIfRequested())
     return;
@@ -146,17 +147,8 @@ void SandboxFileStreamWriter::DidCreateSnapshotFile(
   DCHECK(!file_writer_.get());
 
   if (file_system_context_->is_incognito()) {
-    base::WeakPtr<ObfuscatedFileUtilMemoryDelegate> memory_file_util_delegate;
-    if (url_.type() == kFileSystemTypePluginPrivate) {
-      auto* backend = static_cast<PluginPrivateFileSystemBackend*>(
-          file_system_context_->GetFileSystemBackend(
-              kFileSystemTypePluginPrivate));
-      memory_file_util_delegate =
-          backend->obfuscated_file_util_memory_delegate()->GetWeakPtr();
-    } else {
-      memory_file_util_delegate =
-          file_system_context_->sandbox_delegate()->memory_file_util_delegate();
-    }
+    base::WeakPtr<ObfuscatedFileUtilMemoryDelegate> memory_file_util_delegate =
+        file_system_context_->sandbox_delegate()->memory_file_util_delegate();
     file_writer_ = std::make_unique<MemoryFileStreamWriter>(
         file_system_context_->default_file_task_runner(),
         memory_file_util_delegate, platform_path, initial_offset_);
@@ -166,7 +158,7 @@ void SandboxFileStreamWriter::DidCreateSnapshotFile(
         file_system_context_->default_file_task_runner(), platform_path,
         initial_offset_, FileStreamWriter::OPEN_EXISTING_FILE);
   }
-  QuotaManagerProxy* quota_manager_proxy =
+  const scoped_refptr<QuotaManagerProxy>& quota_manager_proxy =
       file_system_context_->quota_manager_proxy();
   if (!quota_manager_proxy) {
     // If we don't have the quota manager or the requested filesystem type
@@ -176,30 +168,28 @@ void SandboxFileStreamWriter::DidCreateSnapshotFile(
     return;
   }
 
+  BucketLocator bucket = url_.bucket().value_or(
+      BucketLocator::ForDefaultBucket(url_.storage_key()));
+
   DCHECK(quota_manager_proxy);
-  quota_manager_proxy->GetUsageAndQuota(
-      blink::StorageKey(url_.origin()),
-      FileSystemTypeToQuotaStorageType(url_.type()),
-      base::SequencedTaskRunnerHandle::Get(),
-      base::BindOnce(&SandboxFileStreamWriter::DidGetUsageAndQuota,
+  quota_manager_proxy->GetBucketSpaceRemaining(
+      bucket,
+      base::BindOnce(&SandboxFileStreamWriter::DidGetBucketSpaceRemaining,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
 }
 
-void SandboxFileStreamWriter::DidGetUsageAndQuota(
+void SandboxFileStreamWriter::DidGetBucketSpaceRemaining(
     net::CompletionOnceCallback callback,
-    blink::mojom::QuotaStatusCode status,
-    int64_t usage,
-    int64_t quota) {
+    storage::QuotaErrorOr<int64_t> space_remaining) {
   if (CancelIfRequested())
     return;
-  if (status != blink::mojom::QuotaStatusCode::kOk) {
-    LOG(WARNING) << "Got unexpected quota error : " << static_cast<int>(status);
-
+  if (!space_remaining.has_value()) {
+    LOG(WARNING) << "Got unexpected quota error";
     std::move(callback).Run(net::ERR_FAILED);
     return;
   }
 
-  allowed_bytes_to_write_ = quota - usage;
+  allowed_bytes_to_write_ = space_remaining.value();
   std::move(callback).Run(net::OK);
 }
 
@@ -225,12 +215,12 @@ void SandboxFileStreamWriter::DidWrite(int write_response) {
   has_pending_operation_ = false;
 
   if (write_response <= 0) {
-    // TODO(crbug.com/1091792): Consider listening explicitly for out
+    // TODO(crbug.com/40134326): Consider listening explicitly for out
     // of space errors instead of surfacing all write errors to quota.
-    QuotaManagerProxy* quota_manager_proxy =
+    const scoped_refptr<QuotaManagerProxy>& quota_manager_proxy =
         file_system_context_->quota_manager_proxy();
     if (quota_manager_proxy) {
-      quota_manager_proxy->NotifyWriteFailed(blink::StorageKey(url_.origin()));
+      quota_manager_proxy->OnClientWriteFailed(url_.storage_key());
     }
     if (CancelIfRequested())
       return;
@@ -240,7 +230,7 @@ void SandboxFileStreamWriter::DidWrite(int write_response) {
   }
 
   if (total_bytes_written_ + write_response + initial_offset_ > file_size_) {
-    int overlapped = file_size_ - total_bytes_written_ - initial_offset_;
+    int64_t overlapped = file_size_ - total_bytes_written_ - initial_offset_;
     // If writing past the end of a file, the distance seeked past the file
     // needs to be accounted for. This adjustment should only be made for the
     // first such write (when |total_bytes_written_| is 0).
@@ -266,7 +256,8 @@ bool SandboxFileStreamWriter::CancelIfRequested() {
   return true;
 }
 
-int SandboxFileStreamWriter::Flush(net::CompletionOnceCallback callback) {
+int SandboxFileStreamWriter::Flush(FlushMode flush_mode,
+                                   net::CompletionOnceCallback callback) {
   DCHECK(!has_pending_operation_);
   DCHECK(cancel_callback_.is_null());
 
@@ -276,6 +267,7 @@ int SandboxFileStreamWriter::Flush(net::CompletionOnceCallback callback) {
 
   has_pending_operation_ = true;
   int result = file_writer_->Flush(
+      flush_mode,
       base::BindOnce(&SandboxFileStreamWriter::DidFlush,
                      weak_factory_.GetWeakPtr(), std::move(callback)));
   if (result != net::ERR_IO_PENDING)

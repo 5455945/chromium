@@ -1,4 +1,4 @@
-# Copyright 2019 The Chromium Authors. All rights reserved.
+# Copyright 2019 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -17,11 +17,11 @@ from py_utils import tempfile_ext
 from tracing.value import histogram_set
 from tracing.value.histogram import Histogram
 
-
 TP_BINARY_NAME = 'trace_processor_shell'
 EXPORT_JSON_QUERY_TEMPLATE = 'select export_json(%s)\n'
-METRICS_PATH = os.path.realpath(os.path.join(os.path.dirname(__file__),
-                                             'metrics'))
+METRICS_PATH = os.path.realpath(
+  os.path.join(os.path.dirname(__file__), 'metrics')
+)
 POWER_PROFILE_SQL = 'power_profile.sql'
 
 MetricFiles = namedtuple('MetricFiles', ('sql', 'proto', 'internal_metric'))
@@ -29,6 +29,7 @@ MetricFiles = namedtuple('MetricFiles', ('sql', 'proto', 'internal_metric'))
 
 class InvalidTraceProcessorOutput(Exception):
   pass
+
 
 # These will be set to respective paths once the files have been fetched
 # to avoid downloading several times during one Results Processor run.
@@ -42,21 +43,56 @@ def _SqlString(s):
   return "'%s'" % s.replace("'", "''")
 
 
+def _FindLocalTraceProcessor():
+  """Find a locally built trace_processor_shell binary if available."""
+  executable_names = [TP_BINARY_NAME, TP_BINARY_NAME + '.exe']
+  search_dirs = [os.getcwd()]
+  chromium_output_dir = os.environ.get('CHROMIUM_OUTPUT_DIR')
+  if chromium_output_dir:
+    search_dirs.insert(0, chromium_output_dir)
+
+  for directory in search_dirs:
+    for executable_name in executable_names:
+      candidate_path = os.path.abspath(os.path.join(directory, executable_name))
+      if os.path.isfile(candidate_path):
+        return candidate_path
+  return None
+
+
+def _CanRunTraceProcessor(trace_processor_path):
+  """Check if the trace processor executable can run on the current host."""
+  try:
+    _RunTraceProcessor(trace_processor_path, '--version')
+    return True
+  except (OSError, RuntimeError):
+    return False
+
+
 def _EnsureTraceProcessor(trace_processor_path):
   global _fetched_trace_processor
 
   if trace_processor_path is None:
     with _fetch_lock:
       if not _fetched_trace_processor:
-        _fetched_trace_processor = binary_deps_manager.FetchHostBinary(
-            TP_BINARY_NAME)
-        logging.info('Trace processor binary downloaded to %s',
-                     _fetched_trace_processor)
+        fetched_path = binary_deps_manager.FetchHostBinary(TP_BINARY_NAME)
+        logging.info('Trace processor binary downloaded to %s', fetched_path)
+        if not _CanRunTraceProcessor(fetched_path):
+          local_path = _FindLocalTraceProcessor()
+          if local_path and _CanRunTraceProcessor(local_path):
+            logging.warning(
+              'Downloaded trace processor at %s cannot run on this host; '
+              'falling back to local binary at %s',
+              fetched_path,
+              local_path,
+            )
+            fetched_path = local_path
+        _fetched_trace_processor = fetched_path
     trace_processor_path = _fetched_trace_processor
 
   if not os.path.isfile(trace_processor_path):
-    raise RuntimeError("Can't find trace processor executable at %s" %
-                       trace_processor_path)
+    raise RuntimeError(
+      "Can't find trace processor executable at %s" % trace_processor_path
+    )
   return trace_processor_path
 
 
@@ -65,22 +101,33 @@ def _EnsurePowerProfile():
   with _fetch_lock:
     if not _fetched_power_profile:
       _fetched_power_profile = binary_deps_manager.FetchDataFile(
-          POWER_PROFILE_SQL)
-      logging.info('Device power profiles downloaded to %s',
-                   _fetched_power_profile)
+        POWER_PROFILE_SQL
+      )
+      logging.info(
+        'Device power profiles downloaded to %s', _fetched_power_profile
+      )
   return _fetched_power_profile
 
 
 def _RunTraceProcessor(*args):
   """Run trace processor shell with given command line arguments."""
-  p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+  # Unset environment variables that are not needed for current trace processor
+  # use cases, but, if set, can interfere with its execution.
+  custom_environment = os.environ.copy()
+  custom_environment.pop('PERFETTO_BINARY_PATH', None)
+  custom_environment.pop('PERFETTO_SYMBOLIZER_MODE', None)
+  p = subprocess.Popen(
+    args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=custom_environment
+  )
   stdout, stderr = p.communicate()
+  stdout = stdout.decode('utf-8')
+  stderr = stderr.decode('utf-8')
   if p.returncode == 0:
     return stdout
-  else:
-    raise RuntimeError(
-        'Running trace processor failed. Command line:\n%s\nStderr:\n%s\n' %
-        (' '.join(args), stderr))
+  raise RuntimeError(
+    'Running trace processor failed. Command line:\n%s\nStderr:\n%s\n'
+    % (' '.join(args), stderr)
+  )
 
 
 def _CreateMetricFiles(metric_name):
@@ -93,9 +140,9 @@ def _CreateMetricFiles(metric_name):
   if not (os.path.isfile(sql_file) and os.path.isfile(proto_file)):
     # Metric files not found - metric may be compiled into trace processor.
     internal_metric = True
-  return MetricFiles(sql=sql_file,
-                     proto=proto_file,
-                     internal_metric=internal_metric)
+  return MetricFiles(
+    sql=sql_file, proto=proto_file, internal_metric=internal_metric
+  )
 
 
 def _ScopedHistogramName(metric_name, histogram_name):
@@ -108,8 +155,8 @@ def _ScopedHistogramName(metric_name, histogram_name):
   """
   metric_suffix = '_metric'
   suffix_length = len(metric_suffix)
-  # TODO(crbug.com/1012687): Decide on whether metrics should always have
-  # '_metric' suffix.
+  # TBMv3 was deprioritized, so the metric naming convention (with or without
+  # '_metric' suffix) was left flexible. See crbug.com/40102479 for context.
   if metric_name[-suffix_length:] == metric_suffix:
     scope = metric_name[:-suffix_length]
   else:
@@ -128,15 +175,15 @@ class ProtoFieldInfo(object):
   def path_from_root(self):
     if self.parent is None:
       return [self]
-    else:
-      return self.parent.path_from_root + [self]
+    return self.parent.path_from_root + [self]
 
   def __repr__(self):
-    return 'ProtoFieldInfo("%s", repeated=%s)' %(self.name, self.repeated)
+    return 'ProtoFieldInfo("%s", repeated=%s)' % (self.name, self.repeated)
 
 
 def _LeafFieldAnnotations(annotations, parent=None):
   """Yields leaf fields in the annotations tree, yielding a proto field info
+
   each time. Given the following annotation:
   __annotations: {
     a: {
@@ -152,14 +199,15 @@ def _LeafFieldAnnotations(annotations, parent=None):
                  repeated=False, field_options={unit: "ms"})
 
   """
-  for (name, field_value) in annotations.items():
-    if name[:2] == "__":
+  for name, field_value in annotations.items():
+    if name[:2] == '__':
       continue  # internal fields.
     current_field = ProtoFieldInfo(
-        name=name,
-        parent=parent,
-        repeated=field_value.get('__repeated', False),
-        field_options=field_value.get('__field_options', {}))
+      name=name,
+      parent=parent,
+      repeated=field_value.get('__repeated', False),
+      field_options=field_value.get('__field_options', {}),
+    )
     has_no_descendants = True
     for descendant in _LeafFieldAnnotations(field_value, current_field):
       has_no_descendants = False
@@ -190,17 +238,18 @@ def _PluckField(json_dict, field_path):
     field_values = json_dict[path_head.name]
     if not isinstance(field_values, list):
       raise InvalidTraceProcessorOutput(
-          "Field marked as repeated but json value is not list")
+        'Field marked as repeated but json value is not list'
+      )
     output = []
     for field_value in field_values:
       output.extend(_PluckField(field_value, path_tail))
     return output
-  else:
-    field_value = json_dict[path_head.name]
-    if isinstance(field_value, list):
-      raise InvalidTraceProcessorOutput(
-          "Field not marked as repeated but json value is list")
-    return _PluckField(field_value, path_tail)
+  field_value = json_dict[path_head.name]
+  if isinstance(field_value, list):
+    raise InvalidTraceProcessorOutput(
+      'Field not marked as repeated but json value is list'
+    )
+  return _PluckField(field_value, path_tail)
 
 
 def RunQuery(trace_processor_path, trace_file, sql_command):
@@ -251,15 +300,15 @@ def RunQuery(trace_processor_path, trace_file, sql_command):
   # Write query to temporary file because trace processor accepts
   # SQL query in a file.
   tp_output = None
-  with tempfile_ext.NamedTemporaryFile(mode="w+") as sql_file:
+  with tempfile_ext.NamedTemporaryFile(mode='w+') as sql_file:
     sql_file.write(sql_command)
     sql_file.close()
     # Run Trace Processor
     command_args = [
-        trace_processor_path,
-        '--query-file',
-        sql_file.name,
-        trace_file,
+      trace_processor_path,
+      '--query-file',
+      sql_file.name,
+      trace_file,
     ]
     tp_output = _RunTraceProcessor(*command_args)
 
@@ -269,7 +318,7 @@ def RunQuery(trace_processor_path, trace_file, sql_command):
   # object inconveniently requires open csv file to access data.
   csv_output = []
   # tempfile creates and opens the file
-  with tempfile.NamedTemporaryFile(mode="w+") as csv_file:
+  with tempfile.NamedTemporaryFile(mode='w+') as csv_file:
     csv_file.write(tp_output)
     csv_file.flush()
     csv_file.seek(0)
@@ -286,18 +335,20 @@ def RunQuery(trace_processor_path, trace_file, sql_command):
   return csv_output
 
 
-def RunMetrics(trace_processor_path,
-               trace_file,
-               metric_names,
-               fetch_power_profile=False,
-               retain_all_samples=False):
+def RunMetrics(
+  trace_processor_path,
+  trace_file,
+  metric_names,
+  fetch_power_profile=False,
+  retain_all_samples=False,
+):
   """Run TBMv3 metrics using trace processor.
 
   Args:
     trace_processor_path: path to the trace_processor executable.
     trace_file: path to the trace file.
     metric_names: a list of metric names (the corresponding files must exist in
-        tbmv3/metrics directory).
+      tbmv3/metrics directory).
 
   Returns:
     A HistogramSet with metric results.
@@ -311,10 +362,12 @@ def RunMetrics(trace_processor_path,
     else:
       metric_name_args.append(metric_files.sql)
   command_args = [
-      trace_processor_path,
-      '--run-metrics', ','.join(metric_name_args),
-      '--metrics-output', 'json',
-      trace_file,
+    trace_processor_path,
+    '--run-metrics',
+    ','.join(metric_name_args),
+    '--metrics-output',
+    'json',
+    trace_file,
   ]
   if fetch_power_profile:
     command_args[1:1] = ['--pre-metrics', _EnsurePowerProfile()]
@@ -329,18 +382,20 @@ def RunMetrics(trace_processor_path,
     annotations = root_annotations.get(full_metric_name, None)
     metric_proto = measurements.get(full_metric_name, None)
     if metric_proto is None:
-      logging.warn("Metric not found in the output: %s", metric_name)
+      logging.warning('Metric not found in the output: %s', metric_name)
       continue
-    elif annotations is None:
-      logging.info("Skipping metric %s because it has no field with unit.",
-                   metric_name)
+    if annotations is None:
+      logging.info(
+        'Skipping metric %s because it has no field with unit.', metric_name
+      )
       continue
 
     for field in _LeafFieldAnnotations(annotations):
       unit = field.field_options.get('unit', None)
       if unit is None:
-        logging.debug('Skipping field %s to histograms because it has no unit',
-            field.name)
+        logging.debug(
+          'Skipping field %s to histograms because it has no unit', field.name
+        )
         continue
       histogram_name = ':'.join([field.name for field in field.path_from_root])
       samples = _PluckField(metric_proto, field.path_from_root)
@@ -354,15 +409,20 @@ def RunMetrics(trace_processor_path,
   return histograms
 
 
-def RunMetric(trace_processor_path,
-              trace_file,
-              metric_name,
-              fetch_power_profile=False,
-              retain_all_samples=False):
-  return RunMetrics(trace_processor_path,
-                    trace_file, [metric_name],
-                    fetch_power_profile=fetch_power_profile,
-                    retain_all_samples=retain_all_samples)
+def RunMetric(
+  trace_processor_path,
+  trace_file,
+  metric_name,
+  fetch_power_profile=False,
+  retain_all_samples=False,
+):
+  return RunMetrics(
+    trace_processor_path,
+    trace_file,
+    [metric_name],
+    fetch_power_profile=fetch_power_profile,
+    retain_all_samples=retain_all_samples,
+  )
 
 
 def ConvertProtoTraceToJson(trace_processor_path, proto_file, json_path):
@@ -381,9 +441,11 @@ def ConvertProtoTraceToJson(trace_processor_path, proto_file, json_path):
     query_file.write(EXPORT_JSON_QUERY_TEMPLATE % _SqlString(json_path))
     query_file.close()
     _RunTraceProcessor(
-        trace_processor_path,
-        '-q', query_file.name,
-        proto_file,
+      trace_processor_path,
+      '--allow-sql-file-access',
+      '-q',
+      query_file.name,
+      proto_file,
     )
 
   return json_path

@@ -1,12 +1,15 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef SERVICES_NETWORK_PUBLIC_CPP_ORIGIN_AGENT_CLUSTER_PARSER_H_
 #define SERVICES_NETWORK_PUBLIC_CPP_ORIGIN_AGENT_CLUSTER_PARSER_H_
 
+#include <optional>
 #include <string>
+
 #include "base/component_export.h"
+#include "services/network/public/mojom/parsed_headers.mojom.h"
 
 namespace network {
 
@@ -16,7 +19,8 @@ namespace network {
 // See the comment in network::PopulateParsedHeaders for restrictions on this
 // function.
 COMPONENT_EXPORT(NETWORK_CPP)
-bool ParseOriginAgentCluster(const std::string&);
+mojom::OriginAgentClusterValue ParseOriginAgentCluster(
+    const std::optional<std::string>&);
 
 }  // namespace network
 

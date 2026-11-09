@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,15 @@
 
 #import <CoreSpotlight/CoreSpotlight.h>
 
-#include "base/metrics/histogram_macros.h"
-#include "base/strings/sys_string_conversions.h"
-#include "ios/public/provider/chrome/browser/chrome_browser_provider.h"
-#include "ios/public/provider/chrome/browser/spotlight/spotlight_provider.h"
-#include "url/gurl.h"
-
-#if !defined(__has_feature) || !__has_feature(objc_arc)
-#error "This file requires ARC support."
-#endif
+#import "base/metrics/histogram_macros.h"
+#import "base/notreached.h"
+#import "base/strings/sys_string_conversions.h"
+#import "build/branding_buildflags.h"
+#import "ios/chrome/app/spotlight/spotlight_logger.h"
+#import "ios/chrome/grit/ios_branded_strings.h"
+#import "ios/chrome/grit/ios_strings.h"
+#import "ui/base/l10n/l10n_util.h"
+#import "url/gurl.h"
 
 namespace {
 // This enum is used for Histogram. Items should not be removed or reordered and
@@ -37,33 +37,41 @@ enum Availability {
   SPOTLIGHT_AVAILABILITY_COUNT
 };
 
-// Documentation says that failed deletion should be retried. Set a maximum
-// value to avoid infinite loop.
-const int kMaxDeletionAttempts = 5;
+// Strings corresponding to the domain/prefix for respectively bookmarks,
+// top sites and actions items for spotlight.
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+NSString* const kSpotlightBookmarkDomain = @"com.google.chrome.bookmarks";
+NSString* const kSpotlightBookmarkPrefix = @"com.google.chrome.bookmarks.";
 
-// Execute blockName block with up to retryCount retries on error. Execute
-// callback when done.
-void DoWithRetry(BlockWithError callback,
-                 NSUInteger retryCount,
-                 void (^blockName)(BlockWithError error)) {
-  BlockWithError retryCallback = ^(NSError* error) {
-    if (error && retryCount > 0) {
-      DoWithRetry(callback, retryCount - 1, blockName);
-    } else {
-      if (callback) {
-        callback(error);
-      }
-    }
-  };
-  blockName(retryCallback);
-}
+NSString* const kSpotlightTopSitesDomain = @"com.google.chrome.topsites";
+NSString* const kSpotlightTopSitesPrefix = @"com.google.chrome.topsites.";
 
-// Execute blockName block with up to kMaxDeletionAttempts retries on error.
-// Execute callback when done.
-void DoWithRetry(BlockWithError completion,
-                 void (^blockName)(BlockWithError error)) {
-  DoWithRetry(completion, kMaxDeletionAttempts, blockName);
-}
+NSString* const kSpotlightActionsDomain = @"com.google.chrome.actions";
+NSString* const kSpotlightActionsPrefix = @"com.google.chrome.actions.";
+
+NSString* const kSpotlightReadingListDomain = @"com.google.readinglist";
+NSString* const kSpotlightReadingListPrefix = @"com.google.readinglist.";
+
+NSString* const kSpotlightOpenTabsDomain = @"com.google.opentabs";
+NSString* const kSpotlightOpenTabsPrefix = @"com.google.opentabs.";
+#else
+
+NSString* const kSpotlightBookmarkDomain = @"org.chromium.bookmarks";
+NSString* const kSpotlightBookmarkPrefix = @"org.chromium.bookmarks.";
+
+NSString* const kSpotlightTopSitesDomain = @"org.chromium.topsites";
+NSString* const kSpotlightTopSitesPrefix = @"org.chromium.topsites.";
+
+NSString* const kSpotlightActionsDomain = @"org.chromium.actions";
+NSString* const kSpotlightActionsPrefix = @"org.chromium.actions.";
+
+NSString* const kSpotlightReadingListDomain = @"org.chromium.readinglist";
+NSString* const kSpotlightReadingListPrefix = @"org.chromium.readinglist.";
+
+NSString* const kSpotlightOpenTabsDomain = @"org.chromium.opentabs";
+NSString* const kSpotlightOpenTabsPrefix = @"org.chromium.opentabs.";
+
+#endif
 
 }  // namespace
 
@@ -77,94 +85,68 @@ const char kSpotlightLastIndexingDateKey[] = "SpotlightLastIndexingDate";
 const char kSpotlightLastIndexingVersionKey[] = "SpotlightLastIndexingVersion";
 
 // The current version of the Spotlight index format.
-// Change this value if there are change int the information indexed in
+// Change this value if there are change in the information indexed in
 // Spotlight. This will force reindexation on next startup.
-// Value is stored in |kSpotlightLastIndexingVersionKey|.
-const int kCurrentSpotlightIndexVersion = 3;
+// Value is stored in `kSpotlightLastIndexingVersionKey`.
+const int kCurrentSpotlightIndexVersion = 5;
 
 Domain SpotlightDomainFromString(NSString* domain) {
-  SpotlightProvider* provider =
-      ios::GetChromeBrowserProvider()->GetSpotlightProvider();
-  if ([domain hasPrefix:[provider->GetBookmarkDomain()
-                            stringByAppendingString:@"."]]) {
+  if ([domain hasPrefix:kSpotlightBookmarkPrefix]) {
     return DOMAIN_BOOKMARKS;
-  } else if ([domain hasPrefix:[provider->GetTopSitesDomain()
-                                   stringByAppendingString:@"."]]) {
+  } else if ([domain hasPrefix:kSpotlightTopSitesPrefix]) {
     return DOMAIN_TOPSITES;
-  } else if ([domain hasPrefix:[provider->GetActionsDomain()
-                                   stringByAppendingString:@"."]]) {
+  } else if ([domain hasPrefix:kSpotlightActionsPrefix]) {
     return DOMAIN_ACTIONS;
+  } else if ([domain hasPrefix:kSpotlightReadingListPrefix]) {
+    return DOMAIN_READING_LIST;
+  } else if ([domain hasPrefix:kSpotlightOpenTabsPrefix]) {
+    return DOMAIN_OPEN_TABS;
   }
-  // On normal flow, it is not possible to reach this point. When testing the
-  // app, it may be possible though if the app is downgraded.
-  NOTREACHED();
   return DOMAIN_UNKNOWN;
 }
 
 NSString* StringFromSpotlightDomain(Domain domain) {
-  SpotlightProvider* provider =
-      ios::GetChromeBrowserProvider()->GetSpotlightProvider();
   switch (domain) {
     case DOMAIN_BOOKMARKS:
-      return provider->GetBookmarkDomain();
+      return kSpotlightBookmarkDomain;
     case DOMAIN_TOPSITES:
-      return provider->GetTopSitesDomain();
+      return kSpotlightTopSitesDomain;
     case DOMAIN_ACTIONS:
-      return provider->GetActionsDomain();
+      return kSpotlightActionsDomain;
+    case DOMAIN_READING_LIST:
+      return kSpotlightReadingListDomain;
+    case DOMAIN_OPEN_TABS:
+      return kSpotlightOpenTabsDomain;
+
     default:
       // On normal flow, it is not possible to reach this point. When testing
       // the app, it may be possible though if the app is downgraded.
       NOTREACHED();
-      return nil;
   }
 }
 
-void DeleteItemsWithIdentifiers(NSArray* items, BlockWithError callback) {
-  void (^deleteItems)(BlockWithError) = ^(BlockWithError errorBlock) {
-    [[CSSearchableIndex defaultSearchableIndex]
-        deleteSearchableItemsWithIdentifiers:items
-                           completionHandler:errorBlock];
-  };
+NSString* SpotlightItemSourceLabelFromDomain(Domain domain) {
+  switch (domain) {
+    case DOMAIN_BOOKMARKS:
+      return l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_BOOKMARKS);
+    case DOMAIN_TOPSITES:
+      return l10n_util::GetNSString(
+          IDS_IOS_CONTENT_SUGGESTIONS_MOST_VISITED_MODULE_TITLE);
+    case DOMAIN_ACTIONS:
+      return l10n_util::GetNSString(IDS_IOS_SPOTLIGHT_CHROME_ACTIONS_LABEL);
+    case DOMAIN_READING_LIST:
+      return l10n_util::GetNSString(IDS_IOS_TOOLS_MENU_READING_LIST);
+    case DOMAIN_OPEN_TABS:
+      return l10n_util::GetNSString(IDS_IOS_SPOTLIGHT_OPEN_TAB_LABEL);
 
-  DoWithRetry(callback, deleteItems);
-}
-
-void DeleteSearchableDomainItems(Domain domain, BlockWithError callback) {
-  void (^deleteItems)(BlockWithError) = ^(BlockWithError errorBlock) {
-    [[CSSearchableIndex defaultSearchableIndex]
-        deleteSearchableItemsWithDomainIdentifiers:@[ StringFromSpotlightDomain(
-                                                       domain) ]
-                                 completionHandler:errorBlock];
-  };
-
-  DoWithRetry(callback, deleteItems);
-}
-
-void ClearAllSpotlightEntries(BlockWithError callback) {
-  BlockWithError augmentedCallback = ^(NSError* error) {
-    [[NSUserDefaults standardUserDefaults]
-        removeObjectForKey:@(kSpotlightLastIndexingDateKey)];
-    if (callback) {
-      callback(error);
-    }
-  };
-
-  void (^deleteItems)(BlockWithError) = ^(BlockWithError errorBlock) {
-    [[CSSearchableIndex defaultSearchableIndex]
-        deleteAllSearchableItemsWithCompletionHandler:errorBlock];
-  };
-
-  DoWithRetry(augmentedCallback, deleteItems);
+    default:
+      // On normal flow, it is not possible to reach this point. When testing
+      // the app, it may be possible though if the app is downgraded.
+      NOTREACHED();
+  }
 }
 
 bool IsSpotlightAvailable() {
-  bool provided = ios::GetChromeBrowserProvider()
-                      ->GetSpotlightProvider()
-                      ->IsSpotlightEnabled();
-  if (!provided) {
-    // The product does not support Spotlight, do not go further.
-    return false;
-  }
   bool loaded = !![CSSearchableIndex class];
   bool available = loaded && [CSSearchableIndex isIndexingAvailable];
   static dispatch_once_t once;
@@ -182,15 +164,12 @@ bool IsSpotlightAvailable() {
   return loaded && available;
 }
 
-void ClearSpotlightIndexWithCompletion(BlockWithError completion) {
-  DCHECK(IsSpotlightAvailable());
-  ClearAllSpotlightEntries(completion);
-}
-
 NSString* GetSpotlightCustomAttributeItemID() {
-  return ios::GetChromeBrowserProvider()
-      ->GetSpotlightProvider()
-      ->GetCustomAttributeItemID();
+#if BUILDFLAG(GOOGLE_CHROME_BRANDING)
+  return @"ComGoogleChromeItemID";
+#else
+  return @"OrgChromiumItemID";
+#endif
 }
 
 void GetURLForSpotlightItemID(NSString* itemID, BlockWithNSURL completion) {
@@ -198,9 +177,10 @@ void GetURLForSpotlightItemID(NSString* itemID, BlockWithNSURL completion) {
       [NSString stringWithFormat:@"%@ == \"%@\"",
                                  GetSpotlightCustomAttributeItemID(), itemID];
 
-  CSSearchQuery* query =
-      [[CSSearchQuery alloc] initWithQueryString:queryString
-                                      attributes:@[ @"contentURL" ]];
+  CSSearchQueryContext* context = [[CSSearchQueryContext alloc] init];
+  context.fetchAttributes = @[ @"contentURL" ];
+  CSSearchQuery* query = [[CSSearchQuery alloc] initWithQueryString:queryString
+                                                       queryContext:context];
 
   [query setFoundItemsHandler:^(NSArray<CSSearchableItem*>* items) {
     if ([items count] == 1) {
@@ -211,7 +191,6 @@ void GetURLForSpotlightItemID(NSString* itemID, BlockWithNSURL completion) {
       }
     }
     completion(nil);
-
   }];
 
   [query start];

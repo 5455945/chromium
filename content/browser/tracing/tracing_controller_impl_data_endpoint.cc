@@ -1,17 +1,20 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <memory>
+#include <tuple>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_util.h"
+#include "base/functional/bind.h"
 #include "base/json/json_writer.h"
-#include "base/macros.h"
+#include "base/logging.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/sequenced_task_runner.h"
 #include "base/strings/pattern.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/threading/scoped_blocking_call.h"
 #include "content/browser/tracing/tracing_controller_impl.h"
@@ -29,6 +32,9 @@ class StringTraceDataEndpoint : public TracingController::TraceDataEndpoint {
   explicit StringTraceDataEndpoint(
       TracingController::CompletionCallback callback)
       : completion_callback_(std::move(callback)) {}
+
+  StringTraceDataEndpoint(const StringTraceDataEndpoint&) = delete;
+  StringTraceDataEndpoint& operator=(const StringTraceDataEndpoint&) = delete;
 
   void ReceivedTraceFinalContents() override {
     auto str = std::make_unique<std::string>(trace_.str());
@@ -49,10 +55,10 @@ class StringTraceDataEndpoint : public TracingController::TraceDataEndpoint {
 
   TracingController::CompletionCallback completion_callback_;
   std::ostringstream trace_;
-
-  DISALLOW_COPY_AND_ASSIGN(StringTraceDataEndpoint);
 };
 
+// The file is opened in binary mode: the trace may be gzip data or a protobuf,
+// which Windows text mode would corrupt by translating '\n' to '\r\n'.
 class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
  public:
   explicit FileTraceDataEndpoint(const base::FilePath& trace_file_path,
@@ -63,6 +69,9 @@ class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
         may_block_task_runner_(base::ThreadPool::CreateSequencedTaskRunner(
             {base::MayBlock(), write_priority,
              base::TaskShutdownBehavior::BLOCK_SHUTDOWN})) {}
+
+  FileTraceDataEndpoint(const FileTraceDataEndpoint&) = delete;
+  FileTraceDataEndpoint& operator=(const FileTraceDataEndpoint&) = delete;
 
   void ReceiveTraceChunk(std::unique_ptr<std::string> chunk) override {
     may_block_task_runner_->PostTask(
@@ -84,7 +93,8 @@ class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
   void ReceiveTraceChunkOnBlockingThread(std::unique_ptr<std::string> chunk) {
     if (!OpenFileIfNeededOnBlockingThread())
       return;
-    ignore_result(fwrite(chunk->c_str(), chunk->size(), 1, file_));
+    std::ignore =
+        UNSAFE_TODO(fwrite(chunk->c_str(), chunk->size(), 1, file_.get()));
   }
 
   bool OpenFileIfNeededOnBlockingThread() {
@@ -96,13 +106,17 @@ class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
     base::File temp_file = CreateAndOpenTemporaryFileInDir(file_path_.DirName(),
                                                            &pending_file_path_);
     if (temp_file.IsValid()) {
-      file_ = FileToFILE(std::move(temp_file), "w");
+      // On Android, fdsan prohibits associating a new stream with a file while
+      // it's still owned by base::File. So we have to close it first and then
+      // reopen as FILE*.
+      temp_file.Close();
+      file_.reset(base::OpenFile(pending_file_path_, "wb"));
     } else {
       LOG(WARNING) << "Unable to use temporary file " << pending_file_path_
                    << ": "
                    << base::File::ErrorToString(temp_file.error_details());
       pending_file_path_.clear();
-      file_ = base::OpenFile(file_path_, "w");
+      file_.reset(base::OpenFile(file_path_, "wb"));
       LOG_IF(ERROR, file_ == nullptr)
           << "Failed to open " << file_path_.value();
     }
@@ -111,7 +125,6 @@ class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
 
   void CloseOnBlockingThread() {
     if (OpenFileIfNeededOnBlockingThread()) {
-      base::CloseFile(file_);
       file_ = nullptr;
     }
 
@@ -135,10 +148,8 @@ class FileTraceDataEndpoint : public TracingController::TraceDataEndpoint {
   base::FilePath file_path_;
   base::FilePath pending_file_path_;
   base::OnceClosure completion_callback_;
-  FILE* file_ = nullptr;
+  base::ScopedFILE file_ = nullptr;
   const scoped_refptr<base::SequencedTaskRunner> may_block_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(FileTraceDataEndpoint);
 };
 
 class CompressedTraceDataEndpoint
@@ -152,6 +163,10 @@ class CompressedTraceDataEndpoint
             {compress_with_background_priority
                  ? base::TaskPriority::BEST_EFFORT
                  : base::TaskPriority::USER_VISIBLE})) {}
+
+  CompressedTraceDataEndpoint(const CompressedTraceDataEndpoint&) = delete;
+  CompressedTraceDataEndpoint& operator=(const CompressedTraceDataEndpoint&) =
+      delete;
 
   void ReceiveTraceChunk(std::unique_ptr<std::string> chunk) override {
     background_task_runner_->PostTask(
@@ -238,8 +253,6 @@ class CompressedTraceDataEndpoint
   std::unique_ptr<z_stream> stream_;
   bool already_tried_open_;
   const scoped_refptr<base::SequencedTaskRunner> background_task_runner_;
-
-  DISALLOW_COPY_AND_ASSIGN(CompressedTraceDataEndpoint);
 };
 
 }  // namespace

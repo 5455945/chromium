@@ -1,61 +1,60 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/metrics/variations/chrome_variations_service_client.h"
 
-#include "base/bind.h"
+#include "base/check.h"
+#include "base/feature_list.h"
+#include "base/path_service.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/google/google_brand.h"
+#include "chrome/browser/metrics/chrome_feature_list_creator.h"
+#include "chrome/browser/metrics/variations/google_groups_manager_factory.h"
 #include "chrome/browser/net/system_network_context_manager.h"
+#include "chrome/browser/profiles/profile_attributes_storage.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/common/channel_info.h"
+#include "chrome/common/chrome_paths.h"
+#include "chrome/common/pref_names.h"
+#include "components/metrics/metrics_service.h"
+#include "components/prefs/scoped_user_pref_update.h"
+#include "components/variations/pref_names.h"
+#include "components/variations/seed_response.h"
+#include "components/variations/service/google_groups_manager.h"
 #include "components/variations/service/variations_service_client.h"
+#include "components/variations/synthetic_trials.h"
 #include "components/version_info/version_info.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/upgrade_detector/upgrade_detector_impl.h"
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+#include "chrome/browser/upgrade_detector/build_state.h"
 #endif
 
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chromeos/components/chromebox_for_meetings/buildflags/buildflags.h"
+#if BUILDFLAG(IS_CHROMEOS)
+#include "chromeos/ash/components/install_attributes/install_attributes.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
 #endif
 
-#if defined(OS_WIN) || defined(OS_MAC)
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
 #include "base/enterprise_util.h"
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-#include "chromeos/tpm/install_attributes.h"
 #endif
 
-namespace {
+ChromeVariationsServiceClient::ChromeVariationsServiceClient() = default;
 
-// Gets the version number to use for variations seed simulation. Must be called
-// on a thread where IO is allowed.
-base::Version GetVersionForSimulation() {
-#if !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
-  const base::Version installed_version =
-      UpgradeDetectorImpl::GetCurrentlyInstalledVersion();
-  if (installed_version.IsValid())
-    return installed_version;
-#endif  // !defined(OS_ANDROID) && !BUILDFLAG(IS_CHROMEOS_ASH)
+ChromeVariationsServiceClient::~ChromeVariationsServiceClient() = default;
+
+base::Version ChromeVariationsServiceClient::GetVersionForSimulation() {
+#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
+  const auto* build_state = g_browser_process->GetBuildState();
+  if (build_state->installed_version().has_value())
+    return *build_state->installed_version();
+#endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_CHROMEOS)
 
   // TODO(asvitkine): Get the version that will be used on restart instead of
   // the current version on Android, iOS and ChromeOS.
   return version_info::GetVersion();
-}
-
-}  // namespace
-
-ChromeVariationsServiceClient::ChromeVariationsServiceClient() {}
-
-ChromeVariationsServiceClient::~ChromeVariationsServiceClient() {}
-
-ChromeVariationsServiceClient::VersionCallback
-ChromeVariationsServiceClient::GetVersionForSimulationCallback() {
-  return base::BindOnce(&GetVersionForSimulation);
 }
 
 scoped_refptr<network::SharedURLLoaderFactory>
@@ -71,8 +70,8 @@ ChromeVariationsServiceClient::GetNetworkTimeTracker() {
 
 bool ChromeVariationsServiceClient::OverridesRestrictParameter(
     std::string* parameter) {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  ash::CrosSettings::Get()->GetString(chromeos::kVariationsRestrictParameter,
+#if BUILDFLAG(IS_CHROMEOS)
+  ash::CrosSettings::Get()->GetString(ash::kVariationsRestrictParameter,
                                       parameter);
   return true;
 #else
@@ -80,25 +79,55 @@ bool ChromeVariationsServiceClient::OverridesRestrictParameter(
 #endif
 }
 
-variations::Study::FormFactor
-ChromeVariationsServiceClient::GetCurrentFormFactor() {
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-#if BUILDFLAG(PLATFORM_CFM)
-  return variations::Study::MEET_DEVICE;
-#endif  // BUILDFLAG(PLATFORM_CFM)
-#endif  // BUILDFLAG(IS_CHROMEOS_ASH)
+base::FilePath ChromeVariationsServiceClient::GetVariationsSeedFileDir() {
+  base::FilePath seed_file_dir;
+  base::PathService::Get(chrome::DIR_USER_DATA, &seed_file_dir);
+  return seed_file_dir;
+}
 
-  return variations::VariationsServiceClient::GetCurrentFormFactor();
+std::unique_ptr<variations::SeedResponse>
+ChromeVariationsServiceClient::TakeSeedFromNativeVariationsSeedStore() {
+  return ChromeFeatureListCreator::GetInstance()->TakeInitialSeed();
 }
 
 bool ChromeVariationsServiceClient::IsEnterprise() {
-#if defined(OS_WIN) || defined(OS_MAC)
-  return base::IsMachineExternallyManaged();
-#elif BUILDFLAG(IS_CHROMEOS_ASH)
-  return chromeos::InstallAttributes::Get()->IsEnterpriseManaged();
+#if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC)
+  return base::IsEnterpriseDevice();
+#elif BUILDFLAG(IS_CHROMEOS)
+  return ash::InstallAttributes::Get()->IsEnterpriseManaged();
 #else
   return false;
 #endif
+}
+
+std::optional<base::flat_set<std::string>>
+ChromeVariationsServiceClient::GetAllProfilesKeys(PrefService* local_state) {
+  return ProfileAttributesStorage::GetAllProfilesKeys(local_state);
+}
+
+bool ChromeVariationsServiceClient::IsChromeEnterpriseCoreSupported() {
+#if BUILDFLAG(IS_CHROMEOS)
+  return false;
+#else
+  return true;
+#endif
+}
+
+metrics::MetricsService::RotateUmaLogResult
+ChromeVariationsServiceClient::RotateUmaLogForRuntimeMutability(
+    metrics::MetricsService::RuntimeMutabilityPassKey passkey) {
+  metrics::MetricsService* metrics_service =
+      g_browser_process->metrics_service();
+  CHECK(metrics_service);
+  return metrics_service->RotateUmaLogForRuntimeMutability(passkey);
+}
+
+bool ChromeVariationsServiceClient::ShouldDelayRuntimeMutability(
+    metrics::MetricsService::RuntimeMutabilityPassKey passkey) {
+  metrics::MetricsService* metrics_service =
+      g_browser_process->metrics_service();
+  CHECK(metrics_service);
+  return metrics_service->ShouldDelayRuntimeMutability(passkey);
 }
 
 version_info::Channel ChromeVariationsServiceClient::GetChannel() {

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,32 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <stdlib.h>
 
 #include <algorithm>
-#include <atomic>
+#include <array>
+#include <optional>
+#include <string_view>
 #include <utility>
+#include <vector>
 
-#include "base/bind.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/debug/crash_logging.h"
+#include "base/feature_list.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/lazy_instance.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/stack_allocated.h"
+#include "base/no_destructor.h"
 #include "base/numerics/safe_math.h"
+#include "base/rand_util.h"
+#include "base/synchronization/lock.h"
+#include "base/thread_annotations.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_id_helper.h"
+#include "base/trace_event/typed_macros.h"
 #include "mojo/public/cpp/bindings/associated_group_controller.h"
 #include "mojo/public/cpp/bindings/lib/array_internal.h"
 #include "mojo/public/cpp/bindings/lib/message_fragment.h"
@@ -29,11 +41,80 @@ namespace mojo {
 
 namespace {
 
-base::LazyInstance<
-    base::SequenceLocalStorageSlot<internal::MessageDispatchContext*>>::Leaky
-    g_sls_message_dispatch_context = LAZY_INSTANCE_INITIALIZER;
+BASE_FEATURE(kMojoBindingsInlineSLS, base::FEATURE_ENABLED_BY_DEFAULT);
 
-void DoNotifyBadMessage(Message message, const std::string& error) {
+base::GenericSequenceLocalStorageSlot<internal::MessageDispatchContext*>&
+GetSLSMessageDispatchContext() {
+  static base::GenericSequenceLocalStorageSlot<
+      internal::MessageDispatchContext*>
+      sls;
+  return sls;
+}
+
+base::SmallSequenceLocalStorageSlot<internal::MessageDispatchContext*>&
+GetSmallSLSMessageDispatchContext() {
+  static base::SmallSequenceLocalStorageSlot<internal::MessageDispatchContext*>
+      sls;
+  return sls;
+}
+
+void SetMessageDispatchContext(internal::MessageDispatchContext* context) {
+  if (base::FeatureList::IsEnabled(kMojoBindingsInlineSLS)) {
+    GetSmallSLSMessageDispatchContext().emplace(context);
+  } else {
+    GetSLSMessageDispatchContext().emplace(context);
+  }
+}
+
+internal::MessageDispatchContext* GetMessageDispatchContext() {
+  if (base::FeatureList::IsEnabled(kMojoBindingsInlineSLS)) {
+    return GetSmallSLSMessageDispatchContext().GetOrCreateValue();
+  } else {
+    return GetSLSMessageDispatchContext().GetOrCreateValue();
+  }
+}
+
+base::Lock& GetBadMessageCrashKeyLock() {
+  static base::NoDestructor<base::Lock> lock;
+  return *lock;
+}
+
+class BadMessageCrashKeyScope {
+  STACK_ALLOCATED();
+
+ public:
+  explicit BadMessageCrashKeyScope(const Message* message) {
+    auto* context = internal::MessageDispatchContext::current();
+    if (!context || context->message() != message) {
+      return;
+    }
+    lock_.emplace(GetBadMessageCrashKeyLock());
+    static const auto keys = std::to_array({
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-1",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-2",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-3",
+                                            base::debug::CrashKeySize::Size256),
+        base::debug::AllocateCrashKeyString("mojo-bad-message-trace-4",
+                                            base::debug::CrashKeySize::Size256),
+    });
+    base::span<const DeserializationError> error_trace = context->error_trace();
+    const size_t num_keys = std::min(error_trace.size(), scoped_keys_.size());
+    for (size_t i = 0; i < num_keys; ++i) {
+      scoped_keys_[i].emplace(keys[i], error_trace[i].ToString());
+    }
+  }
+
+ private:
+  std::optional<base::AutoLock> lock_;
+  // Crash keys are globals, but deserialization happens on the receiving
+  // sequence.
+  std::array<std::optional<base::debug::ScopedCrashKeyString>, 4> scoped_keys_
+      GUARDED_BY(lock_);
+};
+
+void DoNotifyBadMessage(Message message, std::string_view error) {
   message.NotifyBadMessage(error);
 }
 
@@ -43,53 +124,53 @@ void AllocateHeaderFromBuffer(internal::Buffer* buffer, HeaderType** header) {
   (*header)->num_bytes = sizeof(HeaderType);
 }
 
+uint64_t GetTraceId(uint32_t name, uint32_t trace_nonce) {
+  // |name| is used as additional sources of entropy to reduce the
+  // changes of collision.
+  return (static_cast<uint64_t>(name) << 32) |
+         static_cast<uint64_t>(trace_nonce);
+}
+
+void WriteMessageHeaderV1(uint32_t name,
+                          uint32_t flags,
+                          uint32_t trace_nonce,
+                          internal::Buffer* payload_buffer) {
+  internal::MessageHeaderV1* header;
+  AllocateHeaderFromBuffer(payload_buffer, &header);
+  header->version = 1;
+  header->name = name;
+  header->flags = flags;
+  header->trace_nonce = trace_nonce;
+}
+
 void WriteMessageHeader(uint32_t name,
                         uint32_t flags,
-                        uint32_t trace_id,
+                        uint32_t trace_nonce,
                         size_t payload_interface_id_count,
-                        internal::Buffer* payload_buffer) {
-  if (payload_interface_id_count > 0) {
-    // Version 2
-    internal::MessageHeaderV2* header;
-    AllocateHeaderFromBuffer(payload_buffer, &header);
-    header->version = 2;
-    header->name = name;
-    header->flags = flags;
-    header->trace_id = trace_id;
-    // The payload immediately follows the header.
-    header->payload.Set(header + 1);
-  } else if (flags &
-             (Message::kFlagExpectsResponse | Message::kFlagIsResponse)) {
-    // Version 1
-    internal::MessageHeaderV1* header;
-    AllocateHeaderFromBuffer(payload_buffer, &header);
-    header->version = 1;
-    header->name = name;
-    header->flags = flags;
-    header->trace_id = trace_id;
-  } else {
-    internal::MessageHeader* header;
-    AllocateHeaderFromBuffer(payload_buffer, &header);
-    header->version = 0;
-    header->name = name;
-    header->flags = flags;
-    header->trace_id = trace_id;
-  }
+                        internal::Buffer* payload_buffer,
+                        int64_t creation_timeticks_us) {
+  internal::MessageHeaderV3* header;
+  AllocateHeaderFromBuffer(payload_buffer, &header);
+  header->version = 3;
+  header->name = name;
+  header->flags = flags;
+  header->trace_nonce = trace_nonce;
+  // The payload immediately follows the header.
+  header->payload.Set(UNSAFE_TODO(header + 1));
+  header->creation_timeticks_us = creation_timeticks_us;
 }
 
 void CreateSerializedMessageObject(uint32_t name,
                                    uint32_t flags,
+                                   uint32_t trace_nonce,
                                    size_t payload_size,
                                    size_t payload_interface_id_count,
                                    MojoCreateMessageFlags create_message_flags,
                                    std::vector<ScopedHandle>* handles,
                                    ScopedMessageHandle* out_handle,
-                                   internal::Buffer* out_buffer) {
-  uint32_t trace_id =
-      static_cast<uint32_t>(base::trace_event::GetNextGlobalTraceId());
-  TRACE_EVENT_WITH_FLOW0("toplevel.flow", "mojo::Message Send", trace_id,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
-
+                                   internal::Buffer* out_buffer,
+                                   size_t estimated_payload_size,
+                                   int64_t creation_timeticks_us) {
   ScopedMessageHandle handle;
   MojoResult rv = CreateMessage(&handle, create_message_flags);
   DCHECK_EQ(MOJO_RESULT_OK, rv);
@@ -97,30 +178,42 @@ void CreateSerializedMessageObject(uint32_t name,
 
   void* buffer;
   uint32_t buffer_size;
-  size_t total_size = internal::ComputeSerializedMessageSize(
-      flags, payload_size, payload_interface_id_count);
+  const size_t total_size = internal::ComputeSerializedMessageSize(
+      payload_size, payload_interface_id_count);
+  const size_t total_allocation_size = internal::EstimateSerializedMessageSize(
+      name, payload_size, total_size, estimated_payload_size);
+
   DCHECK(base::IsValueInRangeForNumericType<uint32_t>(total_size));
   DCHECK(!handles ||
          base::IsValueInRangeForNumericType<uint32_t>(handles->size()));
+
+  if (estimated_payload_size > payload_size) {
+    rv = MojoReserveMessageCapacity(
+        handle->value(), static_cast<uint32_t>(total_allocation_size), nullptr);
+    DCHECK_EQ(MOJO_RESULT_OK, rv);
+  }
+
   rv = MojoAppendMessageData(
       handle->value(), static_cast<uint32_t>(total_size),
       handles ? reinterpret_cast<MojoHandle*>(handles->data()) : nullptr,
       handles ? static_cast<uint32_t>(handles->size()) : 0, nullptr, &buffer,
       &buffer_size);
-  DCHECK_EQ(MOJO_RESULT_OK, rv);
+  // TODO(crbug.com/40785088): Relax this assertion or fail more gracefully.
+  CHECK_EQ(MOJO_RESULT_OK, rv);
   if (handles) {
     // Handle ownership has been taken by MojoAppendMessageData.
-    for (size_t i = 0; i < handles->size(); ++i)
-      ignore_result(handles->at(i).release());
+    for (size_t i = 0; i < handles->size(); ++i) {
+      std::ignore = handles->at(i).release();
+    }
   }
 
   internal::Buffer payload_buffer(handle.get(), total_size, buffer,
                                   buffer_size);
 
   // Make sure we zero the memory first!
-  memset(payload_buffer.data(), 0, total_size);
-  WriteMessageHeader(name, flags, trace_id, payload_interface_id_count,
-                     &payload_buffer);
+  UNSAFE_TODO(memset(payload_buffer.data(), 0, buffer_size));
+  WriteMessageHeader(name, flags, trace_nonce, payload_interface_id_count,
+                     &payload_buffer, creation_timeticks_us);
 
   *out_handle = std::move(handle);
   *out_buffer = std::move(payload_buffer);
@@ -136,13 +229,13 @@ void SerializeUnserializedContext(MojoMessageHandle message,
                       *context->header());
   context->Serialize(new_message);
 
-  // TODO(crbug.com/753433): Support lazy serialization of associated endpoint
+  // TODO(crbug.com/41338252): Support lazy serialization of associated endpoint
   // handles.
   new_message.SerializeHandles(/*group_controller=*/nullptr);
 
   // Finalize the serialized message state and release ownership back to the
   // caller.
-  ignore_result(new_message.TakeMojoMessage().release());
+  std::ignore = new_message.TakeMojoMessage().release();
 }
 
 void DestroyUnserializedContext(uintptr_t context) {
@@ -152,6 +245,8 @@ void DestroyUnserializedContext(uintptr_t context) {
 Message CreateUnserializedMessage(
     std::unique_ptr<internal::UnserializedMessageContext> context,
     MojoCreateMessageFlags create_message_flags) {
+  context->header()->trace_nonce =
+      static_cast<uint32_t>(base::trace_event::GetNextGlobalTraceId());
   ScopedMessageHandle handle;
   MojoResult rv = CreateMessage(&handle, create_message_flags);
   DCHECK_EQ(MOJO_RESULT_OK, rv);
@@ -169,7 +264,7 @@ Message CreateUnserializedMessage(
 
 Message::Message() = default;
 
-Message::Message(Message&& other)
+Message::Message(Message&& other) noexcept
     : handle_(std::move(other.handle_)),
       payload_buffer_(std::move(other.payload_buffer_)),
       handles_(std::move(other.handles_)),
@@ -197,10 +292,25 @@ Message::Message(uint32_t name,
                  size_t payload_size,
                  size_t payload_interface_id_count,
                  MojoCreateMessageFlags create_message_flags,
-                 std::vector<ScopedHandle>* handles) {
+                 std::vector<ScopedHandle>* handles,
+                 size_t estimated_payload_size) {
+  int64_t creation_timeticks_us = 0;
+  // Sub-sample end to end time histogram on the sender side to reduce overhead.
+  if (base::TimeTicks::IsConsistentAcrossProcesses() &&
+      base::ShouldRecordSubsampledMetric(0.001)) {
+    creation_timeticks_us =
+        (base::TimeTicks::Now() - base::TimeTicks()).InMicroseconds();
+  }
+  uint32_t trace_nonce =
+      static_cast<uint32_t>(base::trace_event::GetNextGlobalTraceId());
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("mojom"), "mojo::Message::Message",
+              perfetto::Flow::Global(::mojo::GetTraceId(name, trace_nonce)),
+              "name", name, "flags", flags, "trace_nonce", trace_nonce);
+
   CreateSerializedMessageObject(
-      name, flags, payload_size, payload_interface_id_count,
-      create_message_flags, handles, &handle_, &payload_buffer_);
+      name, flags, trace_nonce, payload_size, payload_interface_id_count,
+      create_message_flags, handles, &handle_, &payload_buffer_,
+      estimated_payload_size, creation_timeticks_us);
   transferable_ = true;
   serialized_ = true;
 }
@@ -209,32 +319,55 @@ Message::Message(uint32_t name,
                  uint32_t flags,
                  size_t payload_size,
                  size_t payload_interface_id_count,
-                 std::vector<ScopedHandle>* handles)
+                 std::vector<ScopedHandle>* handles,
+                 size_t estimated_payload_size)
     : Message(name,
               flags,
               payload_size,
               payload_interface_id_count,
               MOJO_CREATE_MESSAGE_FLAG_NONE,
-              handles) {}
+              handles,
+              estimated_payload_size) {}
+
+Message::Message(uint32_t name,
+                 uint32_t flags,
+                 MojoCreateMessageFlags create_message_flags,
+                 size_t estimated_payload_size)
+    : Message(name,
+              flags,
+              0,
+              0,
+              create_message_flags,
+              nullptr,
+              estimated_payload_size) {}
+
+Message::Message(uint32_t name, uint32_t flags, size_t estimated_payload_size)
+    : Message(name,
+              flags,
+              MOJO_CREATE_MESSAGE_FLAG_NONE,
+              estimated_payload_size) {}
 
 Message::Message(ScopedMessageHandle handle,
                  const internal::MessageHeaderV1& header)
     : handle_(std::move(handle)), transferable_(true) {
-  const uint32_t trace_id =
+  const uint32_t trace_nonce =
       static_cast<uint32_t>(base::trace_event::GetNextGlobalTraceId());
-  TRACE_EVENT_WITH_FLOW0("toplevel.flow", "mojo::Message Send", trace_id,
-                         TRACE_EVENT_FLAG_FLOW_OUT);
+  TRACE_EVENT(
+      "mojom", "mojo::Message::Message_FromHandle",
+      perfetto::Flow::Global(::mojo::GetTraceId(header.name, trace_nonce)),
+      "this", this);
 
   void* buffer;
   uint32_t buffer_size;
   MojoResult attach_result = MojoAppendMessageData(
       handle_.get().value(), 0, nullptr, 0, nullptr, &buffer, &buffer_size);
-  if (attach_result != MOJO_RESULT_OK)
+  if (attach_result != MOJO_RESULT_OK) {
     return;
+  }
 
   payload_buffer_ = internal::Buffer(handle_.get(), 0, buffer, buffer_size);
-  WriteMessageHeader(header.name, header.flags, trace_id,
-                     /*payload_interface_id_count=*/0, &payload_buffer_);
+  WriteMessageHeaderV1(header.name, header.flags, trace_nonce,
+                       &payload_buffer_);
 
   // We need to copy additional header data which may have been set after
   // original message construction, as this codepath may be reached at some
@@ -257,7 +390,7 @@ Message::Message(base::span<const uint8_t> payload,
 
   void* buffer;
   uint32_t buffer_size;
-  DCHECK(base::IsValueInRangeForNumericType<uint32_t>(payload.size()));
+  CHECK(base::IsValueInRangeForNumericType<uint32_t>(payload.size()));
   DCHECK(base::IsValueInRangeForNumericType<uint32_t>(handles.size()));
   MojoAppendMessageDataOptions options;
   options.struct_size = sizeof(options);
@@ -266,16 +399,48 @@ Message::Message(base::span<const uint8_t> payload,
       handle_->value(), static_cast<uint32_t>(payload.size()),
       reinterpret_cast<MojoHandle*>(handles.data()),
       static_cast<uint32_t>(handles.size()), &options, &buffer, &buffer_size);
-  DCHECK_EQ(MOJO_RESULT_OK, rv);
+
+  // TODO(crbug.com/40785088): Relax this assertion or fail more gracefully.
+  CHECK_EQ(MOJO_RESULT_OK, rv);
+
   // Handle ownership has been taken by MojoAppendMessageData.
-  for (auto& handle : handles)
-    ignore_result(handle.release());
+  for (auto& handle : handles) {
+    std::ignore = handle.release();
+  }
 
   payload_buffer_ = internal::Buffer(buffer, payload.size(), payload.size());
-  std::copy(payload.begin(), payload.end(),
-            static_cast<uint8_t*>(payload_buffer_.data()));
+  std::ranges::copy(payload, static_cast<uint8_t*>(payload_buffer_.data()));
   transferable_ = true;
   serialized_ = true;
+}
+
+Message::Message(ScopedMessageHandle message_handle,
+                 std::vector<ScopedHandle> handles)
+    : handle_(std::move(message_handle)),
+      handles_(std::move(handles)),
+      transferable_(false),
+      serialized_(true) {
+  DCHECK(handle_.is_valid());
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("mojom"),
+              "mojo::Message::Message_FromExtractedHandle", "this", this);
+
+  void* buffer = nullptr;
+  uint32_t num_bytes = 0;
+  MojoGetMessageDataOptions options;
+  options.struct_size = sizeof(options);
+  options.flags = MOJO_GET_MESSAGE_DATA_FLAG_IGNORE_HANDLES;
+  MojoResult rv = MojoGetMessageData(handle_->value(), &options, &buffer,
+                                     &num_bytes, nullptr, nullptr);
+  CHECK_EQ(MOJO_RESULT_OK, rv);
+  // Verify that `handle_` has no remaining unextracted handles
+  // We should get OK if there were never any handles, and
+  // NOT_FOUND if there were handles that got extracted previously.
+  DCHECK_EQ(handles_.empty() ? MOJO_RESULT_OK : MOJO_RESULT_NOT_FOUND,
+            MojoGetMessageData(handle_->value(), nullptr, nullptr, nullptr,
+                               nullptr, nullptr));
+  CHECK(buffer);
+  CHECK_GE(num_bytes, sizeof(internal::MessageHeader));
+  payload_buffer_ = internal::Buffer(buffer, num_bytes, num_bytes);
 }
 
 // static
@@ -329,7 +494,7 @@ Message Message::CreateFromMessageHandle(ScopedMessageHandle* message_handle) {
 
 Message::~Message() = default;
 
-Message& Message::operator=(Message&& other) {
+Message& Message::operator=(Message&& other) noexcept {
   handle_ = std::move(other.handle_);
   payload_buffer_ = std::move(other.payload_buffer_);
   handles_ = std::move(other.handles_);
@@ -358,9 +523,10 @@ void Message::Reset() {
   heap_profiler_tag_ = nullptr;
 }
 
-const uint8_t* Message::payload() const {
-  if (version() < 2)
-    return data() + header()->num_bytes;
+NOINLINE const uint8_t* Message::payload() const {
+  if (version() < 2) {
+    return UNSAFE_TODO(data() + header())->num_bytes;
+  }
 
   DCHECK(!header_v2()->payload.is_null());
   return static_cast<const uint8_t*>(header_v2()->payload.Get());
@@ -376,8 +542,10 @@ uint32_t Message::payload_num_bytes() const {
         reinterpret_cast<uintptr_t>(header_v2()->payload.Get());
     auto payload_end =
         reinterpret_cast<uintptr_t>(header_v2()->payload_interface_ids.Get());
-    if (!payload_end)
-      payload_end = reinterpret_cast<uintptr_t>(data() + data_num_bytes());
+    if (!payload_end) {
+      payload_end =
+          reinterpret_cast<uintptr_t>(UNSAFE_TODO(data() + data_num_bytes()));
+    }
     DCHECK_GE(payload_end, payload_begin);
     num_bytes = payload_end - payload_begin;
   }
@@ -408,8 +576,19 @@ ScopedMessageHandle Message::TakeMojoMessage() {
   return handle;
 }
 
-void Message::NotifyBadMessage(const std::string& error) {
+ScopedMessageHandle Message::TakeMessageHandleForRust() {
+  DCHECK(serialized_);
+  DCHECK(handles()->empty());
+  DCHECK(associated_endpoint_handles()->empty());
+  payload_buffer_.Seal();
+  auto handle = std::move(handle_);
+  Reset();
+  return handle;
+}
+
+void Message::NotifyBadMessage(std::string_view error) {
   DCHECK(handle_.is_valid());
+  BadMessageCrashKeyScope scope(this);
   mojo::NotifyBadMessage(handle_.get(), error);
 }
 
@@ -423,7 +602,11 @@ void Message::SerializeHandles(AssociatedGroupController* group_controller) {
   if (mutable_associated_endpoint_handles()->empty()) {
     // Attaching only non-associated handles is easier since we don't have to
     // modify the message header. Faster path for that.
-    payload_buffer_.AttachHandles(mutable_handles());
+    bool attached = payload_buffer_.AttachHandles(mutable_handles());
+
+    // TODO(crbug.com/40785088): Relax this assertion or fail more gracefully.
+    CHECK(attached);
+
     return;
   }
 
@@ -438,15 +621,15 @@ void Message::SerializeHandles(AssociatedGroupController* group_controller) {
   mojo::Message new_message(name(), header()->flags, payload_size,
                             num_endpoint_handles, mutable_handles());
   new_message.header()->interface_id = header()->interface_id;
-  new_message.header()->trace_id = header()->trace_id;
+  new_message.header()->trace_nonce = header()->trace_nonce;
   if (header()->version >= 1) {
     new_message.header_v1()->request_id = header_v1()->request_id;
   }
   new_message.set_receiver_connection_group(receiver_connection_group());
   *new_message.mutable_associated_endpoint_handles() =
       std::move(*mutable_associated_endpoint_handles());
-  memcpy(new_message.payload_buffer()->AllocateAndGet(payload_size), payload(),
-         payload_size);
+  UNSAFE_TODO(memcpy(new_message.payload_buffer()->AllocateAndGet(payload_size),
+                     payload(), payload_size));
   *this = std::move(new_message);
 
   DCHECK(group_controller);
@@ -464,7 +647,7 @@ void Message::SerializeHandles(AssociatedGroupController* group_controller) {
     ScopedInterfaceEndpointHandle& handle =
         (*mutable_associated_endpoint_handles())[i];
     DCHECK(handle.pending_association());
-    handles_fragment->storage()[i] =
+    UNSAFE_TODO(handles_fragment->storage()[i]) =
         group_controller->AssociateInterface(std::move(handle));
   }
   mutable_associated_endpoint_handles()->clear();
@@ -472,22 +655,25 @@ void Message::SerializeHandles(AssociatedGroupController* group_controller) {
 
 bool Message::DeserializeAssociatedEndpointHandles(
     AssociatedGroupController* group_controller) {
-  if (!serialized_)
+  if (!serialized_) {
     return true;
+  }
 
   auto& endpoint_handles = *mutable_associated_endpoint_handles();
   endpoint_handles.clear();
 
   uint32_t num_ids = payload_num_interface_ids();
-  if (num_ids == 0)
+  if (num_ids == 0) {
     return true;
+  }
 
   endpoint_handles.reserve(num_ids);
   uint32_t* ids = header_v2()->payload_interface_ids.Get()->storage();
   bool result = true;
   for (uint32_t i = 0; i < num_ids; ++i) {
-    auto handle = group_controller->CreateLocalEndpointHandle(ids[i]);
-    if (IsValidInterfaceId(ids[i]) && !handle.is_valid()) {
+    auto handle =
+        group_controller->CreateLocalEndpointHandle(UNSAFE_TODO(ids[i]));
+    if (IsValidInterfaceId(UNSAFE_TODO(ids[i])) && !handle.is_valid()) {
       // |ids[i]| itself is valid but handle creation failed. In that case, mark
       // deserialization as failed but continue to deserialize the rest of
       // handles.
@@ -495,15 +681,29 @@ bool Message::DeserializeAssociatedEndpointHandles(
     }
 
     endpoint_handles.push_back(std::move(handle));
-    ids[i] = kInvalidInterfaceId;
+    UNSAFE_TODO(ids[i]) = kInvalidInterfaceId;
   }
   return result;
 }
 
+void Message::NotifyPeerClosureForSerializedHandles(
+    AssociatedGroupController* group_controller) {
+  const uint32_t num_ids = payload_num_interface_ids();
+  if (num_ids == 0) {
+    return;
+  }
+
+  const uint32_t* ids = header_v2()->payload_interface_ids.Get()->storage();
+  for (uint32_t i = 0; i < num_ids; ++i) {
+    group_controller->NotifyLocalEndpointOfPeerClosure(UNSAFE_TODO(ids[i]));
+  }
+}
+
 void Message::SerializeIfNecessary() {
   MojoResult rv = MojoSerializeMessage(handle_->value(), nullptr);
-  if (rv == MOJO_RESULT_FAILED_PRECONDITION)
+  if (rv == MOJO_RESULT_FAILED_PRECONDITION) {
     return;
+  }
 
   // Reconstruct this Message instance from the serialized message's handle.
   ScopedMessageHandle handle = std::move(handle_);
@@ -511,20 +711,21 @@ void Message::SerializeIfNecessary() {
 }
 
 std::unique_ptr<internal::UnserializedMessageContext>
-Message::TakeUnserializedContext(
-    const internal::UnserializedMessageContext::Tag* tag) {
+Message::TakeUnserializedContext(uintptr_t tag) {
   DCHECK(handle_.is_valid());
   uintptr_t context_value = 0;
   MojoResult rv =
       MojoGetMessageContext(handle_->value(), nullptr, &context_value);
-  if (rv == MOJO_RESULT_NOT_FOUND)
+  if (rv == MOJO_RESULT_NOT_FOUND) {
     return nullptr;
+  }
   DCHECK_EQ(MOJO_RESULT_OK, rv);
 
   auto* context =
       reinterpret_cast<internal::UnserializedMessageContext*>(context_value);
-  if (context->tag() != tag)
+  if (context->tag() != tag) {
     return nullptr;
+  }
 
   // Detach the context from the message.
   rv = MojoSetMessageContext(handle_->value(), 0, nullptr, nullptr, nullptr);
@@ -543,19 +744,34 @@ Message::Message(ScopedMessageHandle message_handle,
   *mutable_handles() = std::move(attached_handles);
 }
 
-bool MessageReceiver::PrefersSerializedMessages() {
-  return false;
+uint64_t Message::GetTraceId() const {
+  return ::mojo::GetTraceId(header()->name, header()->trace_nonce);
 }
 
-PassThroughFilter::PassThroughFilter() {}
+void Message::WriteIntoTrace(perfetto::TracedValue ctx) const {
+  perfetto::TracedDictionary dict = std::move(ctx).WriteDictionary();
 
-PassThroughFilter::~PassThroughFilter() {}
+  if (header()) {
+    dict.Add("name", header()->name);
+    dict.Add("flags", header()->flags);
+    dict.Add("trace_nonce", header()->trace_nonce);
+  }
+}
 
+int64_t Message::creation_timeticks_us() const {
+  if (version() < 3) {
+    return 0;
+  }
+  return header_v3()->creation_timeticks_us;
+}
+
+// static
 bool PassThroughFilter::Accept(Message* message) {
+  TRACE_EVENT(TRACE_DISABLED_BY_DEFAULT("mojom"), "PassThroughFilter::Accept");
   return true;
 }
 
-void ReportBadMessage(const std::string& error) {
+void ReportBadMessage(std::string_view error) {
   internal::MessageDispatchContext* context =
       internal::MessageDispatchContext::current();
   DCHECK(context);
@@ -569,28 +785,43 @@ ReportBadMessageCallback GetBadMessageCallback() {
   return context->GetBadMessageCallback();
 }
 
+bool IsInMessageDispatch() {
+  return internal::MessageDispatchContext::current();
+}
+
 namespace internal {
 
 MessageHeaderV2::MessageHeaderV2() = default;
 
 MessageDispatchContext::MessageDispatchContext(Message* message)
     : outer_context_(current()), message_(message) {
-  g_sls_message_dispatch_context.Get().emplace(this);
+  SetMessageDispatchContext(this);
 }
 
 MessageDispatchContext::~MessageDispatchContext() {
   DCHECK_EQ(current(), this);
-  g_sls_message_dispatch_context.Get().emplace(outer_context_);
+  SetMessageDispatchContext(outer_context_);
 }
 
 // static
 MessageDispatchContext* MessageDispatchContext::current() {
-  return g_sls_message_dispatch_context.Get().GetOrCreateValue();
+  return GetMessageDispatchContext();
 }
 
 ReportBadMessageCallback MessageDispatchContext::GetBadMessageCallback() {
   DCHECK(!message_->IsNull());
   return base::BindOnce(&DoNotifyBadMessage, std::move(*message_));
+}
+
+base::span<const DeserializationError> MessageDispatchContext::error_trace()
+    const {
+  return base::span(error_trace_).first(error_trace_count_);
+}
+
+void AddDeserializationError(const DeserializationError& error) {
+  if (auto* context = MessageDispatchContext::current()) {
+    context->AddError(error);
+  }
 }
 
 }  // namespace internal

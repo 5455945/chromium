@@ -1,14 +1,18 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include "components/download/internal/background_service/proto_conversions.h"
 
 #include <memory>
 #include <utility>
 
+#include "base/feature_list.h"
 #include "base/time/time.h"
-#include "components/download/internal/background_service/proto_conversions.h"
+#include "components/download/public/background_service/features.h"
 #include "net/http/http_request_headers.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "services/network/public/mojom/fetch_api.mojom-shared.h"
 
 namespace download {
 
@@ -29,7 +33,6 @@ protodb::Entry_State ProtoConversions::RequestStateToProto(Entry::State state) {
   }
 
   NOTREACHED();
-  return protodb::Entry_State_NEW;
 }
 
 Entry::State ProtoConversions::RequestStateFromProto(
@@ -48,7 +51,6 @@ Entry::State ProtoConversions::RequestStateFromProto(
   }
 
   NOTREACHED();
-  return Entry::State::NEW;
 }
 
 protodb::DownloadClient ProtoConversions::DownloadClientToProto(
@@ -74,12 +76,13 @@ protodb::DownloadClient ProtoConversions::DownloadClientToProto(
       return protodb::DownloadClient::PLUGIN_VM_IMAGE;
     case DownloadClient::OPTIMIZATION_GUIDE_PREDICTION_MODELS:
       return protodb::DownloadClient::OPTIMIZATION_GUIDE_PREDICTION_MODELS;
+    case DownloadClient::BRUSCHETTA:
+      return protodb::DownloadClient::BRUSCHETTA;
     case DownloadClient::BOUNDARY:
       return protodb::DownloadClient::BOUNDARY;
   }
 
   NOTREACHED();
-  return protodb::DownloadClient::INVALID;
 }
 
 DownloadClient ProtoConversions::DownloadClientFromProto(
@@ -105,12 +108,13 @@ DownloadClient ProtoConversions::DownloadClientFromProto(
       return DownloadClient::PLUGIN_VM_IMAGE;
     case protodb::DownloadClient::OPTIMIZATION_GUIDE_PREDICTION_MODELS:
       return DownloadClient::OPTIMIZATION_GUIDE_PREDICTION_MODELS;
+    case protodb::DownloadClient::BRUSCHETTA:
+      return DownloadClient::BRUSCHETTA;
     case protodb::DownloadClient::BOUNDARY:
       return DownloadClient::BOUNDARY;
   }
 
   NOTREACHED();
-  return DownloadClient::INVALID;
 }
 
 SchedulingParams::NetworkRequirements
@@ -126,7 +130,6 @@ ProtoConversions::NetworkRequirementsFromProto(
   }
 
   NOTREACHED();
-  return SchedulingParams::NetworkRequirements::NONE;
 }
 
 protodb::SchedulingParams_NetworkRequirements
@@ -144,7 +147,6 @@ ProtoConversions::NetworkRequirementsToProto(
   }
 
   NOTREACHED();
-  return protodb::SchedulingParams_NetworkRequirements_NONE;
 }
 
 SchedulingParams::BatteryRequirements
@@ -160,7 +162,6 @@ ProtoConversions::BatteryRequirementsFromProto(
   }
 
   NOTREACHED();
-  return SchedulingParams::BatteryRequirements::BATTERY_INSENSITIVE;
 }
 
 protodb::SchedulingParams_BatteryRequirements
@@ -178,7 +179,6 @@ ProtoConversions::BatteryRequirementsToProto(
   }
 
   NOTREACHED();
-  return protodb::SchedulingParams_BatteryRequirements_BATTERY_INSENSITIVE;
 }
 
 SchedulingParams::Priority ProtoConversions::SchedulingPriorityFromProto(
@@ -195,7 +195,6 @@ SchedulingParams::Priority ProtoConversions::SchedulingPriorityFromProto(
   }
 
   NOTREACHED();
-  return SchedulingParams::Priority::LOW;
 }
 
 protodb::SchedulingParams_Priority ProtoConversions::SchedulingPriorityToProto(
@@ -214,7 +213,6 @@ protodb::SchedulingParams_Priority ProtoConversions::SchedulingPriorityToProto(
   }
 
   NOTREACHED();
-  return protodb::SchedulingParams_Priority_LOW;
 }
 
 SchedulingParams ProtoConversions::SchedulingParamsFromProto(
@@ -250,6 +248,21 @@ RequestParams ProtoConversions::RequestParamsFromProto(
   request_params.method = proto.method();
   request_params.fetch_error_body = proto.fetch_error_body();
   request_params.require_safety_checks = proto.require_safety_checks();
+  if (proto.has_credentials_mode()) {
+    request_params.credentials_mode =
+        static_cast<::network::mojom::CredentialsMode>(
+            proto.credentials_mode());
+  } else {
+    request_params.credentials_mode =
+        ::network::mojom::CredentialsMode::kInclude;
+  }
+
+  if (proto.has_fetch_request_mode() && proto.fetch_request_mode() >= 0 &&
+      proto.fetch_request_mode() <=
+          static_cast<int32_t>(::network::mojom::RequestMode::kMaxValue)) {
+    request_params.fetch_request_mode =
+        static_cast<::network::mojom::RequestMode>(proto.fetch_request_mode());
+  }
 
   for (int i = 0; i < proto.headers_size(); i++) {
     protodb::RequestHeader header = proto.headers(i);
@@ -265,14 +278,16 @@ void ProtoConversions::RequestParamsToProto(const RequestParams& request_params,
   proto->set_method(request_params.method);
   proto->set_fetch_error_body(request_params.fetch_error_body);
   proto->set_require_safety_checks(request_params.require_safety_checks);
+  proto->set_credentials_mode(
+      static_cast<int32_t>(request_params.credentials_mode));
+  proto->set_fetch_request_mode(
+      static_cast<int32_t>(request_params.fetch_request_mode));
 
-  int i = 0;
   net::HttpRequestHeaders::Iterator iter(request_params.request_headers);
   while (iter.GetNext()) {
     protodb::RequestHeader* header = proto->add_headers();
     header->set_key(iter.name());
     header->set_value(iter.value());
-    i++;
   }
 }
 
@@ -284,6 +299,20 @@ Entry ProtoConversions::EntryFromProto(const protodb::Entry& proto) {
   entry.scheduling_params =
       SchedulingParamsFromProto(proto.scheduling_params());
   entry.request_params = RequestParamsFromProto(proto.request_params());
+
+  // Upgrade legacy Background Fetch entries to use kCors instead of the default
+  // kNavigate mode to enforce proper CORS restrictions upon resumption.
+  // Note: This intentionally breaks backwards compatibility for legacy
+  // `no-cors` fetches by unconditionally upgrading them to `kCors`,
+  // prioritizing security over resumption of existing insecure suspended
+  // downloads.
+  if (base::FeatureList::IsEnabled(kBackgroundFetchCorsEnforcement) &&
+      entry.client == DownloadClient::BACKGROUND_FETCH &&
+      !proto.request_params().has_fetch_request_mode()) {
+    entry.request_params.fetch_request_mode =
+        ::network::mojom::RequestMode::kCors;
+  }
+
   entry.state = RequestStateFromProto(proto.state());
   entry.target_file_path =
       base::FilePath::FromUTF8Unsafe(proto.target_file_path());
@@ -307,6 +336,10 @@ Entry ProtoConversions::EntryFromProto(const protodb::Entry& proto) {
   }
   entry.did_received_response = proto.did_received_response();
   entry.require_response_headers = proto.require_response_headers();
+
+  for (const auto& kv : proto.custom_data()) {
+    entry.custom_data[kv.key()] = kv.value();
+  }
 
   return entry;
 }
@@ -336,6 +369,11 @@ protodb::Entry ProtoConversions::EntryToProto(const Entry& entry) {
     proto.set_response_headers(entry.response_headers->raw_headers());
   proto.set_did_received_response(entry.did_received_response);
   proto.set_require_response_headers(entry.require_response_headers);
+  for (const auto& kv : entry.custom_data) {
+    auto* custom_data_proto = proto.add_custom_data();
+    custom_data_proto->set_key(kv.first);
+    custom_data_proto->set_value(kv.second);
+  }
 
   return proto;
 }

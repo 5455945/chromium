@@ -1,8 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "gpu/vulkan/vulkan_util.h"
+
+#include <tuple>
 
 #include "base/logging.h"
 #include "gpu/vulkan/vulkan_function_pointers.h"
@@ -38,7 +40,7 @@ VkSemaphore ImportVkSemaphoreHandle(VkDevice vk_device,
   }
 
   // If import is successful, the VkSemaphore takes the ownership of the fd.
-  ignore_result(win32_handle.Take());
+  std::ignore = win32_handle.Take();
 
   return semaphore;
 }
@@ -61,6 +63,23 @@ SemaphoreHandle GetVkSemaphoreHandle(
   }
 
   return SemaphoreHandle(handle_type, base::win::ScopedHandle(handle));
+}
+
+bool IsVkOpaqueExternalSemaphoreSupported(VulkanDeviceQueue* device_queue) {
+  return IsVkExternalSemaphoreHandleTypeSupported(
+      device_queue, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+}
+
+VkSemaphore CreateVkOpaqueExternalSemaphore(VkDevice vk_device) {
+  return CreateExternalVkSemaphore(
+      vk_device, VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
+}
+
+SemaphoreHandle ExportVkOpaqueExternalSemaphore(VkDevice vk_device,
+                                                VkSemaphore vk_semaphore) {
+  return GetVkSemaphoreHandle(
+      vk_device, vk_semaphore,
+      VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_OPAQUE_WIN32_BIT);
 }
 
 }  // namespace gpu

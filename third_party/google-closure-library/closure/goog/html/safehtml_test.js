@@ -1,16 +1,8 @@
-// Copyright 2013 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /** @fileoverview Unit tests for SafeHtml and its builders. */
 
@@ -18,7 +10,6 @@ goog.module('goog.html.safeHtmlTest');
 goog.setTestOnly();
 
 const Const = goog.require('goog.string.Const');
-const Dir = goog.require('goog.i18n.bidi.Dir');
 const PropertyReplacer = goog.require('goog.testing.PropertyReplacer');
 const SafeHtml = goog.require('goog.html.SafeHtml');
 const SafeScript = goog.require('goog.html.SafeScript');
@@ -43,24 +34,26 @@ testSuite({
     stubs.reset();
   },
 
+  testConstructor_throwsOnBadToken() {
+    assertThrows(() => new (/** @type {?} */ (SafeHtml))(''));
+    assertThrows(() => new (/** @type {?} */ (SafeHtml.EMPTY)).constructor(''));
+  },
+
   testSafeHtml() {
     // TODO(xtof): Consider using SafeHtmlBuilder instead of newSafeHtmlForTest,
     // when available.
     let safeHtml = testing.newSafeHtmlForTest('Hello <em>World</em>');
     assertSameHtml('Hello <em>World</em>', safeHtml);
     assertEquals('Hello <em>World</em>', SafeHtml.unwrap(safeHtml));
-    assertEquals('SafeHtml{Hello <em>World</em>}', String(safeHtml));
-    assertNull(safeHtml.getDirection());
+    assertEquals('Hello <em>World</em>', String(safeHtml));
 
-    safeHtml = testing.newSafeHtmlForTest('World <em>Hello</em>', Dir.RTL);
+    safeHtml = testing.newSafeHtmlForTest('World <em>Hello</em>');
     assertSameHtml('World <em>Hello</em>', safeHtml);
     assertEquals('World <em>Hello</em>', SafeHtml.unwrap(safeHtml));
-    assertEquals('SafeHtml{World <em>Hello</em>}', String(safeHtml));
-    assertEquals(Dir.RTL, safeHtml.getDirection());
+    assertEquals('World <em>Hello</em>', String(safeHtml));
 
     // Interface markers are present.
     assertTrue(safeHtml.implementsGoogStringTypedString);
-    assertTrue(safeHtml.implementsGoogI18nBidiDirectionalString);
 
     // Pre-defined constant.
     assertSameHtml('', SafeHtml.EMPTY);
@@ -70,13 +63,10 @@ testSuite({
   /** @suppress {checkTypes} */
   testUnwrap() {
     const privateFieldName = 'privateDoNotAccessOrElseSafeHtmlWrappedValue_';
-    const markerFieldName = 'SAFE_HTML_TYPE_MARKER_GOOG_HTML_SECURITY_PRIVATE_';
     const propNames = googObject.getKeys(SafeHtml.htmlEscape(''));
     assertContains(privateFieldName, propNames);
-    assertContains(markerFieldName, propNames);
     const evil = {};
     evil[privateFieldName] = '<script>evil()</script';
-    evil[markerFieldName] = {};
 
     const exception = assertThrows(() => {
       SafeHtml.unwrap(evil);
@@ -84,17 +74,26 @@ testSuite({
     assertContains('expected object of type SafeHtml', exception.message);
   },
 
-  testUnwrapTrustedHTML() {
-    let safeValue = SafeHtml.htmlEscape('HTML');
-    let trustedValue = SafeHtml.unwrapTrustedHTML(safeValue);
+  testUnwrapTrustedHTML_policyIsNull() {
+    stubs.set(trustedtypes, 'getPolicyPrivateDoNotAccessOrElse', function() {
+      return null;
+    });
+    const safeValue = SafeHtml.htmlEscape('HTML');
+    const trustedValue = SafeHtml.unwrapTrustedHTML(safeValue);
+    assertEquals('string', typeof trustedValue);
     assertEquals(safeValue.getTypedStringValue(), trustedValue);
-    stubs.set(trustedtypes, 'PRIVATE_DO_NOT_ACCESS_OR_ELSE_POLICY', policy);
-    safeValue = SafeHtml.htmlEscape('HTML');
-    trustedValue = SafeHtml.unwrapTrustedHTML(safeValue);
+  },
+
+  testUnwrapTrustedHTML_policyIsSet() {
+    stubs.set(trustedtypes, 'getPolicyPrivateDoNotAccessOrElse', function() {
+      return policy;
+    });
+    const safeValue = SafeHtml.htmlEscape('HTML');
+    const trustedValue = SafeHtml.unwrapTrustedHTML(safeValue);
     assertEquals(safeValue.getTypedStringValue(), trustedValue.toString());
     assertTrue(
-        goog.global.TrustedHTML ? trustedValue instanceof TrustedHTML :
-                                  typeof trustedValue === 'string');
+        globalThis.TrustedHTML ? trustedValue instanceof TrustedHTML :
+                                 typeof trustedValue === 'string');
   },
 
   testHtmlEscape() {
@@ -107,16 +106,7 @@ testSuite({
     assertSameHtml(
         'Hello &lt;em&gt;&quot;&#39;&amp;World&lt;/em&gt;', safeHtml);
     assertEquals(
-        'SafeHtml{Hello &lt;em&gt;&quot;&#39;&amp;World&lt;/em&gt;}',
-        String(safeHtml));
-
-    // Creating from a SafeUrl escapes and retains the known direction (which is
-    // fixed to RTL for URLs).
-    const safeUrl =
-        SafeUrl.fromConstant(Const.from('http://example.com/?foo&bar'));
-    const escapedUrl = SafeHtml.htmlEscape(safeUrl);
-    assertSameHtml('http://example.com/?foo&amp;bar', escapedUrl);
-    assertEquals(Dir.LTR, escapedUrl.getDirection());
+        'Hello &lt;em&gt;&quot;&#39;&amp;World&lt;/em&gt;', String(safeHtml));
 
     // Creating SafeHtml from a goog.string.Const escapes as well (i.e., the
     // value is treated like any other string). To create HTML markup from
@@ -163,12 +153,6 @@ testSuite({
     assertSameHtml(
         '<hr style="border: /* &quot; */ 0;">',
         SafeHtml.create('hr', {'style': style}));
-
-    assertEquals(Dir.NEUTRAL, SafeHtml.create('span').getDirection());
-    assertNull(SafeHtml.create('span', {'dir': 'x'}).getDirection());
-    assertEquals(
-        Dir.NEUTRAL,
-        SafeHtml.create('span', {'dir': 'ltr'}, 'a').getDirection());
 
     assertThrows(() => {
       SafeHtml.create('script');
@@ -324,6 +308,16 @@ testSuite({
         SafeHtml.createIframe(null, null, {'sandbox': null}, '<'));
   },
 
+  /** @suppress {checkTypes} suppression added to enable type checking */
+  testSafeHtmlCreateIframe_withMonkeypatchedObjectPrototype() {
+    stubs.set(Object.prototype, 'foo', 'bar');
+    const url = TrustedResourceUrl.fromConstant(
+        Const.from('https://google.com/trusted<'));
+    assertSameHtml(
+        '<iframe src="https://google.com/trusted&lt;"></iframe>',
+        SafeHtml.createIframe(url, null, {'sandbox': null}));
+  },
+
   /** @suppress {checkTypes} */
   testSafeHtmlcreateSandboxIframe() {
     function assertSameHtmlIfSupportsSandbox(
@@ -380,6 +374,10 @@ testSuite({
         () => SafeHtml.createSandboxIframe(null, null, null, '<'));
   },
 
+  /**
+     @suppress {strictPrimitiveOperators} suppression added to enable type
+     checking
+   */
   testSafeHtmlCanUseIframeSandbox() {
     // We know that the IE < 10 do not support the sandbox attribute, so use
     // them as a reference.
@@ -408,26 +406,41 @@ testSuite({
     scriptHtml = SafeHtml.createScript(SafeScript.EMPTY, {'id': null});
     assertSameHtml('<script></script>', scriptHtml);
 
+    // Can create JSON scripts by setting the type attribute
+    const jsonScript = SafeScript.fromJson({
+      '@context': 'https://schema.org/',
+      '@type': 'Test',
+      'name': 'JSON Script',
+    });
+    scriptHtml =
+        SafeHtml.createScript(jsonScript, {type: 'application/ld+json'});
+    assertSameHtml(
+        [
+          '<script type="application/ld+json">',
+          '{"@context":"https://schema.org/","@type":"Test","name":"JSON Script"}',
+          '</script>',
+        ].join(''),
+        scriptHtml);
+
     // Set attribute to invalid value.
     let exception = assertThrows(() => {
       SafeHtml.createScript(SafeScript.EMPTY, {'invalid.': 'cantdothis'});
     });
     assertContains('Invalid attribute name', exception.message);
 
-    // Cannot override type attribute.
-    exception = assertThrows(() => {
-      SafeHtml.createScript(SafeScript.EMPTY, {'Type': 'cantdothis'});
-    });
-    assertContains('Cannot set "type"', exception.message);
-
     // Cannot set src attribute.
     exception = assertThrows(() => {
       SafeHtml.createScript(SafeScript.EMPTY, {'src': 'cantdothis'});
     });
     assertContains('Cannot set "src"', exception.message);
+  },
 
-    // Directionality.
-    assertEquals(Dir.NEUTRAL, scriptHtml.getDirection());
+  /** @suppress {checkTypes} suppression added to enable type checking */
+  testSafeHtmlCreateScript_withMonkeypatchedObjectPrototype() {
+    stubs.set(Object.prototype, 'foo', 'bar');
+    stubs.set(Object.prototype, 'type', 'baz');
+    const scriptHtml = SafeHtml.createScript(SafeScript.EMPTY, {'id': null});
+    assertSameHtml('<script></script>', scriptHtml);
   },
 
   /** @suppress {checkTypes} */
@@ -537,15 +550,6 @@ testSuite({
       SafeHtml.createStyle(SafeStyleSheet.EMPTY, {'Type': 'cantdothis'});
     });
     assertContains('Cannot override "type"', exception.message);
-
-    // Directionality.
-    assertEquals(Dir.NEUTRAL, styleHtml.getDirection());
-  },
-
-  testSafeHtmlCreateWithDir() {
-    const ltr = Dir.LTR;
-
-    assertEquals(ltr, SafeHtml.createWithDir(ltr, 'br').getDirection());
   },
 
   testSafeHtmlJoin() {
@@ -553,9 +557,6 @@ testSuite({
     assertSameHtml('Hello<br>World', SafeHtml.join(br, ['Hello', 'World']));
     assertSameHtml('Hello<br>World', SafeHtml.join(br, ['Hello', ['World']]));
     assertSameHtml('Hello<br>', SafeHtml.join('Hello', ['', br]));
-
-    const ltr = testing.newSafeHtmlForTest('', Dir.LTR);
-    assertEquals(Dir.LTR, SafeHtml.join(br, [ltr, ltr]).getDirection());
   },
 
   testSafeHtmlConcat() {
@@ -571,17 +572,6 @@ testSuite({
     assertSameHtml('a<br>c', SafeHtml.concat(['a', br, 'c']));
     assertSameHtml('a<br>c', SafeHtml.concat('a', [br, 'c']));
     assertSameHtml('a<br>c', SafeHtml.concat(['a'], br, ['c']));
-
-    const ltr = testing.newSafeHtmlForTest('', Dir.LTR);
-    const rtl = testing.newSafeHtmlForTest('', Dir.RTL);
-    const neutral = testing.newSafeHtmlForTest('', Dir.NEUTRAL);
-    const unknown = testing.newSafeHtmlForTest('');
-    assertEquals(Dir.NEUTRAL, SafeHtml.concat().getDirection());
-    assertEquals(Dir.LTR, SafeHtml.concat(ltr, ltr).getDirection());
-    assertEquals(Dir.LTR, SafeHtml.concat(ltr, neutral, ltr).getDirection());
-    assertNull(SafeHtml.concat(ltr, unknown).getDirection());
-    assertNull(SafeHtml.concat(ltr, rtl).getDirection());
-    assertNull(SafeHtml.concat(ltr, [rtl]).getDirection());
   },
 
   testHtmlEscapePreservingNewlines() {
@@ -619,17 +609,7 @@ testSuite({
         'a &#160;b', SafeHtml.htmlEscapePreservingNewlinesAndSpaces('a  b'));
   },
 
-  testSafeHtmlConcatWithDir() {
-    const ltr = Dir.LTR;
-    const rtl = Dir.RTL;
-    const br = testing.newSafeHtmlForTest('<br>');
-
-    assertEquals(ltr, SafeHtml.concatWithDir(ltr).getDirection());
-    assertEquals(
-        ltr,
-        SafeHtml.concatWithDir(ltr, testing.newSafeHtmlForTest('', rtl))
-            .getDirection());
-
-    assertSameHtml('a<br>c', SafeHtml.concatWithDir(ltr, 'a', br, 'c'));
+  testComment() {
+    assertSameHtml('<!--&lt;script&gt;-->', SafeHtml.comment('<script>'));
   },
 });

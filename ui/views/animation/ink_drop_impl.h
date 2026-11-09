@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,20 @@
 #define UI_VIEWS_ANIMATION_INK_DROP_IMPL_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/macros.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/memory/raw_ptr.h"
+#include "base/time/time.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/views/animation/ink_drop.h"
 #include "ui/views/animation/ink_drop_highlight_observer.h"
 #include "ui/views/animation/ink_drop_ripple_observer.h"
 #include "ui/views/views_export.h"
+
+namespace ui {
+class LayerNotDrawn;
+}  // namespace ui
 
 namespace views {
 namespace test {
@@ -48,19 +53,28 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // Constructs an ink drop that will attach the ink drop to the given
   // |ink_drop_host|. |host_size| is used to set the size of the ink drop layer.
   //
-  // By default the highlight will be made visible while |this| is hovered but
-  // not focused.
+  // |show_highlight_on_hover| and |show_highlight_on_focus| say whether the
+  // highlight is made visible while |this| is hovered or focused; by default
+  // it is shown while hovered but not while focused. Both can be changed
+  // later with SetShowHighlightOnHover() and SetShowHighlightOnFocus().
   InkDropImpl(InkDropHost* ink_drop_host,
               const gfx::Size& host_size,
-              AutoHighlightMode auto_highlight_mode);
+              AutoHighlightMode auto_highlight_mode,
+              bool show_highlight_on_hover = true,
+              bool show_highlight_on_focus = false);
+
+  InkDropImpl(const InkDropImpl&) = delete;
+  InkDropImpl& operator=(const InkDropImpl&) = delete;
+
   ~InkDropImpl() override;
 
-  const absl::optional<base::TimeDelta>& hover_highlight_fade_duration() const {
+  const std::optional<base::TimeDelta>& hover_highlight_fade_duration() const {
     return hover_highlight_fade_duration_;
   }
 
   // InkDrop:
   void HostSizeChanged(const gfx::Size& new_size) override;
+  void HostViewThemeChanged() override;
   void HostTransformChanged(const gfx::Transform& new_transform) override;
   InkDropState GetTargetInkDropState() const override;
   void AnimateToState(InkDropState ink_drop_state) override;
@@ -98,6 +112,9 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // anywhere else may be a sign that a new state should exist.
   class HighlightState {
    public:
+    HighlightState(const HighlightState&) = delete;
+    HighlightState& operator=(const HighlightState&) = delete;
+
     virtual ~HighlightState() = default;
 
     // Called when |this| becomes the current state. Allows subclasses to
@@ -147,9 +164,7 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
 
    private:
     // Used by |this| to create the new states to transition to.
-    HighlightStateFactory* const state_factory_;
-
-    DISALLOW_COPY_AND_ASSIGN(HighlightState);
+    const raw_ptr<HighlightStateFactory> state_factory_;
   };
 
   // Creates the different HighlightStates instances. A factory is used to make
@@ -158,6 +173,9 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
    public:
     HighlightStateFactory(AutoHighlightMode highlight_mode,
                           InkDropImpl* ink_drop);
+
+    HighlightStateFactory(const HighlightStateFactory&) = delete;
+    HighlightStateFactory& operator=(const HighlightStateFactory&) = delete;
 
     // Returns the initial state.
     std::unique_ptr<HighlightState> CreateStartState();
@@ -175,9 +193,7 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
     AutoHighlightMode highlight_mode_;
 
     // The ink drop to invoke highlight changes on.
-    InkDropImpl* ink_drop_;
-
-    DISALLOW_COPY_AND_ASSIGN(HighlightStateFactory);
+    raw_ptr<InkDropImpl> ink_drop_;
   };
 
   class DestroyingHighlightState;
@@ -256,9 +272,12 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // builds.
   void ExitHighlightState();
 
+  // Recreate the ripple and highlight.
+  void RecreateRippleAndHighlight();
+
   // The host of the ink drop. Used to create the ripples and highlights, and to
   // add/remove the root layer to/from it.
-  InkDropHost* const ink_drop_host_;
+  const raw_ptr<InkDropHost> ink_drop_host_;
 
   // Used by |this| to initialize the starting |highlight_state_| and by the
   // current |highlight_state_| to create the next state.
@@ -267,7 +286,7 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   // The root Layer that parents the InkDropRipple layers and the
   // InkDropHighlight layers. The |root_layer_| is the one that is added and
   // removed from the |ink_drop_host_|.
-  std::unique_ptr<ui::Layer> root_layer_;
+  std::unique_ptr<ui::LayerNotDrawn> root_layer_;
 
   // True when the |root_layer_| has been added to the |ink_drop_host_|.
   bool root_layer_added_to_host_ = false;
@@ -298,7 +317,7 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
   std::unique_ptr<HighlightState> highlight_state_;
 
   // Overrides the default hover highlight fade durations when set.
-  absl::optional<base::TimeDelta> hover_highlight_fade_duration_;
+  std::optional<base::TimeDelta> hover_highlight_fade_duration_;
 
   // Used to ensure highlight state transitions are not triggered when exiting
   // the current state.
@@ -306,8 +325,6 @@ class VIEWS_EXPORT InkDropImpl : public InkDrop,
 
   // Used to fail DCHECKS to catch unexpected behavior during tear down.
   bool destroying_ = false;
-
-  DISALLOW_COPY_AND_ASSIGN(InkDropImpl);
 };
 
 }  // namespace views

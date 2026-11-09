@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,7 @@
 #include <numeric>
 
 #include "ash/hud_display/hud_constants.h"
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/base/metadata/metadata_impl_macros.h"
@@ -20,38 +20,35 @@ namespace hud_display {
 ////////////////////////////////////////////////////////////////////////////////
 // CpuGraphPageView, public:
 
-BEGIN_METADATA(CpuGraphPageView, GraphPageViewBase)
-END_METADATA
-
 CpuGraphPageView::CpuGraphPageView(const base::TimeDelta refresh_interval)
-    : cpu_other_(kDefaultGraphWidth,
-                 Graph::Baseline::BASELINE_BOTTOM,
-                 Graph::Fill::SOLID,
-                 Graph::Style::LINES,
+    : cpu_other_(kHUDGraphWidth,
+                 Graph::Baseline::kBaselineBottom,
+                 Graph::Fill::kSolid,
+                 Graph::Style::kLines,
                  SkColorSetA(SK_ColorMAGENTA, kHUDAlpha)),
-      cpu_system_(kDefaultGraphWidth,
-                  Graph::Baseline::BASELINE_BOTTOM,
-                  Graph::Fill::SOLID,
-                  Graph::Style::LINES,
+      cpu_system_(kHUDGraphWidth,
+                  Graph::Baseline::kBaselineBottom,
+                  Graph::Fill::kSolid,
+                  Graph::Style::kLines,
                   SkColorSetA(SK_ColorRED, kHUDAlpha)),
-      cpu_user_(kDefaultGraphWidth,
-                Graph::Baseline::BASELINE_BOTTOM,
-                Graph::Fill::SOLID,
-                Graph::Style::LINES,
+      cpu_user_(kHUDGraphWidth,
+                Graph::Baseline::kBaselineBottom,
+                Graph::Fill::kSolid,
+                Graph::Style::kLines,
                 SkColorSetA(SK_ColorBLUE, kHUDAlpha)),
-      cpu_idle_(kDefaultGraphWidth,
-                Graph::Baseline::BASELINE_BOTTOM,
-                Graph::Fill::SOLID,
-                Graph::Style::LINES,
+      cpu_idle_(kHUDGraphWidth,
+                Graph::Baseline::kBaselineBottom,
+                Graph::Fill::kSolid,
+                Graph::Style::kLines,
                 SkColorSetA(SK_ColorDKGRAY, kHUDAlpha)) {
   const int data_width = cpu_other_.max_data_points();
   // Verical ticks are drawn every 10% (10/100 interval).
   constexpr float vertical_ticks_interval = (10 / 100.0);
   // -XX seconds on the left, 100% top, 0 seconds on the right, 0% on the
   // bottom. Seconds and Gigabytes are dimensions. Number of data points is
-  // cpu_other_.GetDataBufferSize(), horizontal grid ticks are drawn every 10
+  // cpu_other_.GetDataBufferSize(), horizontal tick marks are drawn every 10
   // seconds.
-  CreateGrid(
+  CreateReferenceLines(
       /*left=*/static_cast<int>(-data_width * refresh_interval.InSecondsF()),
       /*top=*/100, /*right=*/0, /*bottom=*/0,
       /*x_unit=*/u"s",
@@ -61,8 +58,8 @@ CpuGraphPageView::CpuGraphPageView(const base::TimeDelta refresh_interval)
       vertical_ticks_interval);
 
   Legend::Formatter formatter = base::BindRepeating([](float value) {
-    return base::ASCIIToUTF16(base::StringPrintf(
-        "%d %%", std::min(100, std::max(0, (int)(value * 100)))));
+    return base::ASCIIToUTF16(
+        base::StringPrintf("%d %%", std::clamp((int)(value * 100), 0, 100)));
   });
 
   const std::vector<Legend::Entry> legend(
@@ -89,8 +86,8 @@ void CpuGraphPageView::OnPaint(gfx::Canvas* canvas) {
 
   // Layout graphs.
   gfx::Rect rect = GetContentsBounds();
-  // Adjust to grid width.
-  rect.Inset(kGridLineWidth, kGridLineWidth);
+  // Adjust bounds to not overlap with bordering reference lines.
+  rect.Inset(kHUDGraphReferenceLineWidth);
   cpu_other_.Layout(rect, nullptr /* base*/);
   cpu_system_.Layout(rect, &cpu_other_);
   cpu_user_.Layout(rect, &cpu_system_);
@@ -108,8 +105,9 @@ void CpuGraphPageView::UpdateData(const DataSource::Snapshot& snapshot) {
   const float total = snapshot.cpu_idle_part + snapshot.cpu_user_part +
                       snapshot.cpu_system_part + snapshot.cpu_other_part;
   // Nothing to do if data is not available yet (sum < 1%).
-  if (total < 0.01)
+  if (total < 0.01) {
     return;
+  }
 
   // Assume total already equals 1, no need to re-weight.
 
@@ -122,6 +120,9 @@ void CpuGraphPageView::UpdateData(const DataSource::Snapshot& snapshot) {
 
   RefreshLegendValues();
 }
+
+BEGIN_METADATA(CpuGraphPageView)
+END_METADATA
 
 }  // namespace hud_display
 }  // namespace ash

@@ -1,8 +1,12 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/gfx/mojom/display_color_spaces_mojom_traits.h"
+
+#include "base/notreached.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "skia/public/mojom/skcolorspace_primaries_mojom_traits.h"
 
 namespace mojo {
 
@@ -19,26 +23,21 @@ EnumTraits<gfx::mojom::ContentColorUsage, gfx::ContentColorUsage>::ToMojom(
       return gfx::mojom::ContentColorUsage::kHDR;
   }
   NOTREACHED();
-  return gfx::mojom::ContentColorUsage::kSRGB;
 }
 
 // static
-bool EnumTraits<gfx::mojom::ContentColorUsage, gfx::ContentColorUsage>::
-    FromMojom(gfx::mojom::ContentColorUsage input,
-              gfx::ContentColorUsage* output) {
+gfx::ContentColorUsage
+EnumTraits<gfx::mojom::ContentColorUsage, gfx::ContentColorUsage>::FromMojom(
+    gfx::mojom::ContentColorUsage input) {
   switch (input) {
     case gfx::mojom::ContentColorUsage::kSRGB:
-      *output = gfx::ContentColorUsage::kSRGB;
-      return true;
+      return gfx::ContentColorUsage::kSRGB;
     case gfx::mojom::ContentColorUsage::kWideColorGamut:
-      *output = gfx::ContentColorUsage::kWideColorGamut;
-      return true;
+      return gfx::ContentColorUsage::kWideColorGamut;
     case gfx::mojom::ContentColorUsage::kHDR:
-      *output = gfx::ContentColorUsage::kHDR;
-      return true;
+      return gfx::ContentColorUsage::kHDR;
   }
   NOTREACHED();
-  return false;
 }
 
 // static
@@ -49,10 +48,10 @@ StructTraits<gfx::mojom::DisplayColorSpacesDataView, gfx::DisplayColorSpaces>::
 }
 
 // static
-base::span<const gfx::BufferFormat>
-StructTraits<gfx::mojom::DisplayColorSpacesDataView, gfx::DisplayColorSpaces>::
-    buffer_formats(const gfx::DisplayColorSpaces& input) {
-  return input.buffer_formats_;
+base::span<const viz::SharedImageFormat> StructTraits<
+    gfx::mojom::DisplayColorSpacesDataView,
+    gfx::DisplayColorSpaces>::formats(const gfx::DisplayColorSpaces& input) {
+  return input.formats_;
 }
 
 // static
@@ -60,20 +59,23 @@ bool StructTraits<
     gfx::mojom::DisplayColorSpacesDataView,
     gfx::DisplayColorSpaces>::Read(gfx::mojom::DisplayColorSpacesDataView input,
                                    gfx::DisplayColorSpaces* out) {
-  base::span<gfx::BufferFormat> buffer_formats(out->buffer_formats_);
-  if (!input.ReadBufferFormats(&buffer_formats))
+  base::span<viz::SharedImageFormat> formats(out->formats_);
+  if (!input.ReadFormats(&formats)) {
     return false;
+  }
 
   base::span<gfx::ColorSpace> color_spaces(out->color_spaces_);
   if (!input.ReadColorSpaces(&color_spaces))
     return false;
 
-  out->SetSDRWhiteLevel(input.sdr_white_level());
-
-  absl::optional<gfx::HDRStaticMetadata> hdr_static_metadata(
-      out->hdr_static_metadata_);
-  if (!input.ReadHdrStaticMetadata(&hdr_static_metadata))
+  SkColorSpacePrimaries primaries = {0.f};
+  if (!input.ReadPrimaries(&primaries))
     return false;
+  out->SetPrimaries(primaries);
+
+  out->SetSDRMaxLuminanceNits(input.sdr_max_luminance_nits());
+  out->SetHDRMaxLuminanceRelative(input.hdr_max_luminance_relative());
+  out->set_srgb_is_gamma22(input.srgb_is_gamma22());
 
   return true;
 }

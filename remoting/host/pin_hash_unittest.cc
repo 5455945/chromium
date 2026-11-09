@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,11 @@
 
 namespace remoting {
 
-class PinHashTest : public testing::Test {
-};
+class PinHashTest : public testing::Test {};
 
 TEST_F(PinHashTest, KnownHashValue) {
   std::string hash = MakeHostPinHash("Host ID", "1234");
-  ASSERT_EQ("hmac:bk6RVRFLpLO89mr4QPHSg8CemUUtI90r2F0VfvTmWLI=", hash);
+  ASSERT_EQ(hash, "hmac:bk6RVRFLpLO89mr4QPHSg8CemUUtI90r2F0VfvTmWLI=");
 }
 
 TEST_F(PinHashTest, VerifyHostPinHash) {
@@ -23,15 +22,12 @@ TEST_F(PinHashTest, VerifyHostPinHash) {
   std::string host_id2("Host ID 2");
   std::string pin1("1234");
   std::string pin2("4321");
-  ASSERT_TRUE(VerifyHostPinHash(MakeHostPinHash(host_id1, pin1),
-                                host_id1,
-                                pin1));
-  ASSERT_FALSE(VerifyHostPinHash(MakeHostPinHash(host_id1, pin1),
-                                 host_id2,
-                                 pin1));
-  ASSERT_FALSE(VerifyHostPinHash(MakeHostPinHash(host_id1, pin1),
-                                 host_id1,
-                                 pin2));
+  ASSERT_TRUE(
+      VerifyHostPinHash(MakeHostPinHash(host_id1, pin1), host_id1, pin1));
+  ASSERT_FALSE(
+      VerifyHostPinHash(MakeHostPinHash(host_id1, pin1), host_id2, pin1));
+  ASSERT_FALSE(
+      VerifyHostPinHash(MakeHostPinHash(host_id1, pin1), host_id1, pin2));
 }
 
 }  // namespace remoting

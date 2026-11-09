@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,11 @@
 #include <algorithm>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback.h"
-#include "base/callback_helpers.h"
 #include "base/check.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -19,6 +19,17 @@
 #include "chrome/test/chromedriver/chrome/status.h"
 
 const char kChromeCmdLineFile[] = "/data/local/tmp/chrome-command-line";
+
+namespace {
+
+// Runtime permissions granted before launch unless the user overrides them via
+// the androidGrantPermissions capability. `pm clear` resets runtime grants, so
+// without this Chrome would prompt for notification permission on startup.
+constexpr const char* kDefaultGrantPermissions[] = {
+    "android.permission.POST_NOTIFICATIONS",
+};
+
+}  // namespace
 
 Device::Device(const std::string& device_serial,
                Adb* adb,
@@ -33,19 +44,24 @@ Device::~Device() {
 
 // Only allow completely alpha exec names.
 bool IsValidExecName(const std::string& exec_name) {
-  return std::find_if_not(exec_name.begin(), exec_name.end(), [](char ch) {
-           return base::IsAsciiAlpha(ch);
-         }) == exec_name.end();
+  return std::ranges::all_of(exec_name, &base::IsAsciiAlpha<char>);
 }
 
-Status Device::SetUp(const std::string& package,
-                     const std::string& activity,
-                     const std::string& process,
-                     const std::string& device_socket,
-                     const std::string& exec_name,
-                     const std::string& args,
-                     bool use_running_app,
-                     int* devtools_port) {
+Status Device::SetUp(
+    const std::string& package,
+    const std::string& activity,
+    const std::string& process,
+    const std::string& device_socket,
+    const std::string& exec_name,
+    const std::string& args,
+    bool use_running_app,
+    bool keep_app_data_dir,
+    const std::optional<std::vector<std::string>>& grant_permissions,
+    int* devtools_port,
+    const std::string& prefs_file,
+    const base::DictValue* custom_prefs,
+    const std::string& local_state_file,
+    const base::DictValue* custom_local_state) {
   if (!active_package_.empty())
     return Status(kUnknownError,
         active_package_ + " was launched and has not been quit");
@@ -87,13 +103,6 @@ Status Device::SetUp(const std::string& package,
     // |args| as the executable name, and not an argument (in other words,
     // args[0] is effectively ignored as a command line switch).
     known_exec_name = "webview";
-  } else if (package.find("weblayer") != std::string::npos) {
-    command_line_file = "/data/local/tmp/weblayer-command-line";
-    // This name isn't really important, what is important is that it's
-    // non-empty. If empty, it means weblayer treats the the first value of
-    // |args| as the executable name, and not an argument (in other words,
-    // args[0] is effectively ignored as a command line switch).
-    known_exec_name = "weblayer_shell";
   }
 
   if (!use_running_app) {
@@ -113,9 +122,11 @@ Status Device::SetUp(const std::string& package,
         return status;
     }
 
-    status = adb_->ClearAppData(serial_, package);
-    if (status.IsError())
-      return status;
+    if (!keep_app_data_dir) {
+      status = adb_->ClearAppData(serial_, package);
+      if (status.IsError())
+        return status;
+    }
 
     if (!known_activity.empty()) {
       if (!activity.empty() ||
@@ -123,8 +134,7 @@ Status Device::SetUp(const std::string& package,
         return Status(kUnknownError, "known package " + package +
                       " does not accept activity/process");
     } else if (activity.empty()) {
-      return Status(kUnknownError,
-                    "WebView/WebLayer apps require activity name");
+      return Status(kUnknownError, "WebView apps require activity name");
     }
 
     if (!command_line_file.empty()) {
@@ -137,6 +147,32 @@ Status Device::SetUp(const std::string& package,
             status);
     }
 
+    if (custom_prefs) {
+      status = adb_->SetPreferences(serial_, prefs_file, custom_prefs);
+
+      if (status.IsError())
+        return Status(kUnknownError,
+                      "Failed to set Chrome's preferences file on device " +
+                          serial_,
+                      status);
+    }
+
+    if (custom_local_state) {
+      status =
+          adb_->SetLocalState(serial_, local_state_file, custom_local_state);
+
+      if (status.IsError())
+        return Status(kUnknownError,
+                      "Failed to set Chrome's local state file on device " +
+                          serial_,
+                      status);
+    }
+
+    status = GrantPermissions(package, grant_permissions);
+    if (status.IsError()) {
+      return status;
+    }
+
     status = adb_->Launch(serial_, package,
                           known_activity.empty() ? activity : known_activity);
     if (status.IsError())
@@ -146,6 +182,31 @@ Status Device::SetUp(const std::string& package,
   }
   return this->ForwardDevtoolsPort(package, process, &known_device_socket,
                                    devtools_port);
+}
+
+Status Device::GrantPermissions(
+    const std::string& package,
+    const std::optional<std::vector<std::string>>& grant_permissions) {
+  if (grant_permissions.has_value()) {
+    // Permissions explicitly requested by the user must be granted.
+    for (const std::string& permission : *grant_permissions) {
+      Status status = adb_->GrantPermission(serial_, package, permission);
+      if (status.IsError()) {
+        return status;
+      }
+    }
+    return Status(kOk);
+  }
+  // The default grants are best effort: they fail on OS versions that predate
+  // the permission, or for packages that don't request it.
+  for (const char* permission : kDefaultGrantPermissions) {
+    Status status = adb_->GrantPermission(serial_, package, permission);
+    if (status.IsError()) {
+      VLOG(0) << "Ignoring failure to grant default permission: "
+              << status.message();
+    }
+  }
+  return Status(kOk);
 }
 
 Status Device::ForwardDevtoolsPort(const std::string& package,
@@ -171,18 +232,11 @@ Status Device::ForwardDevtoolsPort(const std::string& package,
     // their PID, which Chrome DevTools accepts and we also should.
     std::string webview_pattern =
         base::StringPrintf("@webview_devtools_remote_.*%d", pid);
-    std::string weblayer_pattern =
-        base::StringPrintf("@weblayer_devtools_remote_.*%d", pid);
     status = adb_->GetSocketByPattern(serial_, webview_pattern, &socket_name);
-    if (status.IsError()) {
-      status =
-          adb_->GetSocketByPattern(serial_, weblayer_pattern, &socket_name);
-    }
     if (status.IsError()) {
       if (socket_name.empty()) {
         status.AddDetails(
-            "make sure the app has its WebView/WebLayer "
-            "configured for debugging");
+            "make sure the app has its WebView configured for debugging");
       }
       return status;
     }
@@ -217,7 +271,7 @@ DeviceManager::DeviceManager(Adb* adb) : adb_(adb) {
   CHECK(adb_);
 }
 
-DeviceManager::~DeviceManager() {}
+DeviceManager::~DeviceManager() = default;
 
 Status DeviceManager::AcquireDevice(std::unique_ptr<Device>* device) {
   std::vector<std::string> devices;
@@ -250,9 +304,9 @@ Status DeviceManager::AcquireSpecificDevice(const std::string& device_serial,
   if (status.IsError())
     return status;
 
-  if (!base::Contains(devices, device_serial))
-    return Status(kUnknownError,
-        "Device " + device_serial + " is not online");
+  if (!std::ranges::contains(devices, device_serial)) {
+    return Status(kUnknownError, "Device " + device_serial + " is not online");
+  }
 
   base::AutoLock lock(devices_lock_);
   if (IsDeviceLocked(device_serial)) {
@@ -278,5 +332,5 @@ Device* DeviceManager::LockDevice(const std::string& device_serial) {
 }
 
 bool DeviceManager::IsDeviceLocked(const std::string& device_serial) {
-  return base::Contains(active_devices_, device_serial);
+  return std::ranges::contains(active_devices_, device_serial);
 }

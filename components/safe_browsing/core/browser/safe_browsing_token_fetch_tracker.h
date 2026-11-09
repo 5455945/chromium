@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,17 +7,17 @@
 
 #include <memory>
 
-#include "base/callback.h"
 #include "base/containers/flat_map.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/thread_checker.h"
+#include "base/sequence_checker.h"
 #include "build/build_config.h"
 #include "components/safe_browsing/core/browser/safe_browsing_token_fetcher.h"
 
 namespace safe_browsing {
 
 // Exposed for unittests.
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 constexpr int kTokenFetchTimeoutDelayFromMilliseconds = 50;
 #else
 constexpr int kTokenFetchTimeoutDelayFromMilliseconds = 1000;
@@ -57,7 +57,7 @@ class SafeBrowsingTokenFetchTracker {
       OnTokenFetchTimeoutCallback on_token_fetch_timeout_callback);
   void Finish(int request_id, const std::string& access_token);
 
-  THREAD_CHECKER(thread_checker_);
+  SEQUENCE_CHECKER(sequence_checker_);
 
   // The count of requests sent. This is used as an ID for requests.
   int requests_sent_ = 0;

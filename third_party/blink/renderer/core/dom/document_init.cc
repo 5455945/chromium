@@ -29,7 +29,9 @@
 
 #include "third_party/blink/renderer/core/dom/document_init.h"
 
+#include "base/uuid.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
+#include "third_party/blink/public/common/tokens/tokens.h"
 #include "third_party/blink/public/mojom/security_context/insecure_request_policy.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_implementation.h"
@@ -42,6 +44,7 @@
 #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
 #include "third_party/blink/renderer/core/html/html_view_source_document.h"
 #include "third_party/blink/renderer/core/html/image_document.h"
+#include "third_party/blink/renderer/core/html/json_document.h"
 #include "third_party/blink/renderer/core/html/media/html_media_element.h"
 #include "third_party/blink/renderer/core/html/media/media_document.h"
 #include "third_party/blink/renderer/core/html/plugin_document.h"
@@ -65,13 +68,16 @@ DocumentInit::DocumentInit(const DocumentInit&) = default;
 
 DocumentInit::~DocumentInit() = default;
 
-DocumentInit& DocumentInit::ForTest() {
+DocumentInit& DocumentInit::ForTest(ExecutionContext& execution_context) {
   DCHECK(!execution_context_);
   DCHECK(!window_);
+  DCHECK(!agent_);
 #if DCHECK_IS_ON()
   DCHECK(!for_test_);
   for_test_ = true;
 #endif
+  execution_context_ = &execution_context;
+  agent_ = execution_context.GetAgent();
   return *this;
 }
 
@@ -83,18 +89,55 @@ bool DocumentInit::IsSrcdocDocument() const {
   return window_ && !window_->GetFrame()->IsMainFrame() && is_srcdoc_document_;
 }
 
+bool DocumentInit::IsAboutBlankDocument() const {
+  return window_ && url_.IsAboutBlankUrl();
+}
+
+const KURL& DocumentInit::FallbackBaseURL() const {
+  DCHECK(IsSrcdocDocument() || IsAboutBlankDocument() ||
+         IsInitialEmptyDocument() || is_for_javascript_url_ ||
+         is_for_discard_ || fallback_base_url_.IsEmpty())
+      << " url = " << url_ << ", fallback_base_url = " << fallback_base_url_;
+  return fallback_base_url_;
+}
+
 DocumentInit& DocumentInit::WithWindow(LocalDOMWindow* window,
                                        Document* owner_document) {
   DCHECK(!window_);
   DCHECK(!execution_context_);
+  DCHECK(!agent_);
 #if DCHECK_IS_ON()
   DCHECK(!for_test_);
 #endif
   DCHECK(window);
   window_ = window;
   execution_context_ = window;
+  agent_ = window->GetAgent();
   owner_document_ = owner_document;
   return *this;
+}
+
+DocumentInit& DocumentInit::WithAgent(Agent& agent) {
+  DCHECK(!agent_);
+#if DCHECK_IS_ON()
+  DCHECK(!for_test_);
+#endif
+  agent_ = &agent;
+  return *this;
+}
+
+Agent& DocumentInit::GetAgent() const {
+  DCHECK(agent_);
+  return *agent_;
+}
+
+DocumentInit& DocumentInit::WithToken(const DocumentToken& token) {
+  token_ = token;
+  return *this;
+}
+
+const std::optional<DocumentToken>& DocumentInit::GetToken() const {
+  return token_;
 }
 
 DocumentInit& DocumentInit::ForInitialEmptyDocument(bool empty) {
@@ -110,19 +153,24 @@ DocumentInit& DocumentInit::ForPrerendering(bool is_prerendering) {
 // static
 DocumentInit::Type DocumentInit::ComputeDocumentType(
     LocalFrame* frame,
-    const KURL& url,
     const String& mime_type,
     bool* is_for_external_handler) {
-  if (frame && frame->InViewSourceMode())
+  if (frame && frame->InViewSourceMode()) {
     return Type::kViewSource;
+  }
 
   // Plugins cannot take HTML and XHTML from us, and we don't even need to
   // initialize the plugin database for those.
-  if (mime_type == "text/html")
+  if (mime_type == "text/html") {
     return Type::kHTML;
-
-  if (mime_type == "application/xhtml+xml")
+  }
+  if (mime_type == "application/xhtml+xml") {
     return Type::kXHTML;
+  }
+
+  if (mime_type == "image/svg+xml") {
+    return Type::kSVG;
+  }
 
   // multipart/x-mixed-replace is only supported for images.
   if (MIMETypeRegistry::IsSupportedImageResourceMIMEType(mime_type) ||
@@ -130,11 +178,13 @@ DocumentInit::Type DocumentInit::ComputeDocumentType(
     return Type::kImage;
   }
 
-  if (HTMLMediaElement::GetSupportsType(ContentType(mime_type)))
+  if (HTMLMediaElement::GetSupportsType(ContentType(mime_type))) {
     return Type::kMedia;
+  }
 
-  if (frame && frame->GetPage() && frame->Loader().AllowPlugins()) {
-    PluginData* plugin_data = GetPluginData(frame, url);
+  if (frame && frame->GetPage() && frame->Loader().AllowPlugins())
+      [[unlikely]] {
+    PluginData* plugin_data = GetPluginData(frame);
 
     // Everything else except text/plain can be overridden by plugins.
     // Disallowing plugins to use text/plain prevents plugins from hijacking a
@@ -151,7 +201,6 @@ DocumentInit::Type DocumentInit::ComputeDocumentType(
           *is_for_external_handler = true;
         return Type::kHTML;
       }
-
       return Type::kPlugin;
     }
   }
@@ -162,31 +211,21 @@ DocumentInit::Type DocumentInit::ComputeDocumentType(
     return Type::kText;
   }
 
-  if (mime_type == "image/svg+xml")
-    return Type::kSVG;
-
-  if (MIMETypeRegistry::IsXMLMIMEType(mime_type))
+  if (MIMETypeRegistry::IsXMLMIMEType(mime_type)) {
     return Type::kXML;
+  }
 
   return Type::kHTML;
 }
 
 // static
-PluginData* DocumentInit::GetPluginData(LocalFrame* frame, const KURL& url) {
-  // If the document is being created for the main frame,
-  // frame()->tree().top()->securityContext() returns nullptr.
-  // For that reason, the origin must be retrieved directly from |url|.
-  if (frame->IsMainFrame())
-    return frame->GetPage()->GetPluginData(SecurityOrigin::Create(url).get());
-
-  const SecurityOrigin* main_frame_origin =
-      frame->Tree().Top().GetSecurityContext()->GetSecurityOrigin();
-  return frame->GetPage()->GetPluginData(main_frame_origin);
+PluginData* DocumentInit::GetPluginData(LocalFrame* frame) {
+  return frame->GetPage()->GetPluginData();
 }
 
 DocumentInit& DocumentInit::WithTypeFrom(const String& mime_type) {
   mime_type_ = mime_type;
-  type_ = ComputeDocumentType(window_ ? window_->GetFrame() : nullptr, Url(),
+  type_ = ComputeDocumentType(window_ ? window_->GetFrame() : nullptr,
                               mime_type_, &is_for_external_handler_);
   return *this;
 }
@@ -195,6 +234,7 @@ DocumentInit& DocumentInit::WithExecutionContext(
     ExecutionContext* execution_context) {
   DCHECK(!execution_context_);
   DCHECK(!window_);
+  DCHECK(!agent_);
 #if DCHECK_IS_ON()
   DCHECK(!for_test_);
 #endif
@@ -221,13 +261,13 @@ const KURL& DocumentInit::GetCookieUrl() const {
   //
   // TODO(https://crbug.com/1176291): Correctly inherit the `cookie_url` from
   // the initiator.
-  if (cookie_url.IsAboutBlankURL()) {
+  if (cookie_url.IsAboutBlankUrl()) {
     // Signify a cookie-averse document [1] with an null URL.  See how
     // CookiesJar::GetCookies and other methods check `cookie_url` against
     // KURL::IsEmpty.
     //
     // [1] https://html.spec.whatwg.org/#cookie-averse-document-object
-    const KURL& kCookieAverseUrl = NullURL();
+    const KURL& kCookieAverseUrl = NullUrl();
 
     return kCookieAverseUrl;
   }
@@ -240,11 +280,23 @@ DocumentInit& DocumentInit::WithSrcdocDocument(bool is_srcdoc_document) {
   return *this;
 }
 
-
-DocumentInit& DocumentInit::WithWebBundleClaimedUrl(
-    const KURL& web_bundle_claimed_url) {
-  web_bundle_claimed_url_ = web_bundle_claimed_url;
+DocumentInit& DocumentInit::WithFallbackBaseURL(const KURL& fallback_base_url) {
+  fallback_base_url_ = fallback_base_url;
   return *this;
+}
+
+DocumentInit& DocumentInit::WithJavascriptURL(bool is_for_javascript_url) {
+  is_for_javascript_url_ = is_for_javascript_url;
+  return *this;
+}
+
+DocumentInit& DocumentInit::ForDiscard(bool is_for_discard) {
+  is_for_discard_ = is_for_discard;
+  return *this;
+}
+
+bool DocumentInit::IsForDiscard() const {
+  return is_for_discard_;
 }
 
 DocumentInit& DocumentInit::WithUkmSourceId(ukm::SourceId ukm_source_id) {
@@ -252,9 +304,16 @@ DocumentInit& DocumentInit::WithUkmSourceId(ukm::SourceId ukm_source_id) {
   return *this;
 }
 
+DocumentInit& DocumentInit::WithBaseAuctionNonce(
+    base::Uuid base_auction_nonce) {
+  base_auction_nonce_ = base_auction_nonce;
+  return *this;
+}
+
 Document* DocumentInit::CreateDocument() const {
 #if DCHECK_IS_ON()
-  DCHECK(execution_context_ || for_test_);
+  DCHECK(execution_context_);
+  DCHECK(agent_);
 #endif
   switch (type_) {
     case Type::kHTML:
@@ -279,15 +338,17 @@ Document* DocumentInit::CreateDocument() const {
       return MakeGarbageCollected<XMLDocument>(*this);
     case Type::kViewSource:
       return MakeGarbageCollected<HTMLViewSourceDocument>(*this);
-    case Type::kText:
+    case Type::kText: {
+      if (MIMETypeRegistry::IsJSONMimeType(mime_type_)) {
+        return MakeGarbageCollected<JSONDocument>(*this);
+      }
       return MakeGarbageCollected<TextDocument>(*this);
+    }
     case Type::kUnspecified:
-      FALLTHROUGH;
     default:
       break;
   }
   NOTREACHED();
-  return nullptr;
 }
 
 }  // namespace blink

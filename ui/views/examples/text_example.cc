@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,21 +7,28 @@
 #include <memory>
 #include <utility>
 
-#include "base/cxx17_backports.h"
 #include "base/strings/utf_string_conversions.h"
+#include "ui/base/l10n/l10n_util.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/color/color_id.h"
+#include "ui/color/color_provider.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
-#include "ui/native_theme/native_theme.h"
+#include "ui/views/accessibility/view_accessibility.h"
 #include "ui/views/border.h"
 #include "ui/views/controls/button/checkbox.h"
 #include "ui/views/controls/combobox/combobox.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/examples/example_combobox_model.h"
-#include "ui/views/layout/grid_layout.h"
+#include "ui/views/examples/grit/views_examples_resources.h"
+#include "ui/views/layout/box_layout.h"
+#include "ui/views/layout/fill_layout.h"
+#include "ui/views/layout/table_layout.h"
 #include "ui/views/view.h"
+#include "ui/views/view_class_properties.h"
 
-namespace views {
-namespace examples {
+namespace views::examples {
 
 namespace {
 
@@ -30,16 +37,19 @@ constexpr int kNumColumns = 10;
 
 // Toggles bit |flag| on |flags| based on state of |checkbox|.
 void SetFlagFromCheckbox(Checkbox* checkbox, int* flags, int flag) {
-  if (checkbox->GetChecked())
+  if (checkbox->GetChecked()) {
     *flags |= flag;
-  else
+  } else {
     *flags &= ~flag;
+  }
 }
 
 }  // namespace
 
 // TextExample's content view, which draws stylized string.
 class TextExample::TextExampleView : public View {
+  METADATA_HEADER(TextExampleView, View)
+
  public:
   TextExampleView() = default;
   TextExampleView(const TextExampleView&) = delete;
@@ -49,8 +59,8 @@ class TextExample::TextExampleView : public View {
   void OnPaint(gfx::Canvas* canvas) override {
     View::OnPaint(canvas);
     const gfx::Rect bounds = GetContentsBounds();
-    const SkColor color = GetNativeTheme()->GetSystemColor(
-        ui::NativeTheme::kColorId_TextfieldDefaultColor);
+    const SkColor color =
+        GetColorProvider()->GetColor(ui::kColorTextfieldForeground);
     canvas->DrawStringRectWithFlags(text_, font_list_, color, bounds, flags_);
   }
 
@@ -87,8 +97,7 @@ class TextExample::TextExampleView : public View {
   void OnThemeChanged() override {
     View::OnThemeChanged();
     SetBorder(CreateSolidBorder(
-        1, GetNativeTheme()->GetSystemColor(
-               ui::NativeTheme::kColorId_UnfocusedBorderColor)));
+        1, GetColorProvider()->GetColor(ui::kColorFocusableBorderUnfocused)));
   }
 
  private:
@@ -109,107 +118,107 @@ class TextExample::TextExampleView : public View {
   gfx::ElideBehavior elide_ = gfx::NO_ELIDE;
 };
 
-TextExample::TextExample() : ExampleBase("Text Styles") {}
+BEGIN_METADATA(TextExample, TextExampleView)
+END_METADATA
+
+TextExample::TextExample()
+    : ExampleBase(l10n_util::GetStringUTF8(IDS_TEXT_STYLE_LABEL).c_str()) {}
 
 TextExample::~TextExample() = default;
 
-Checkbox* TextExample::AddCheckbox(GridLayout* layout, const char* name) {
-  return layout->AddView(std::make_unique<Checkbox>(
+Checkbox* TextExample::AddCheckbox(View* parent, const char* name) {
+  return parent->AddChildView(std::make_unique<Checkbox>(
       base::ASCIIToUTF16(name),
       base::BindRepeating(&TextExample::UpdateStyle, base::Unretained(this))));
 }
 
-Combobox* TextExample::AddCombobox(GridLayout* layout,
-                                   const char* name,
-                                   const char* const* strings,
-                                   int count,
+Combobox* TextExample::AddCombobox(View* parent,
+                                   std::u16string name,
+                                   base::span<const char* const> items,
                                    void (TextExample::*combobox_callback)()) {
-  layout->StartRow(0, 0);
-  layout->AddView(std::make_unique<Label>(base::ASCIIToUTF16(name)));
-  auto* combobox = layout->AddView(
-      std::make_unique<Combobox>(
-          std::make_unique<ExampleComboboxModel>(strings, count)),
-      kNumColumns - 1, 1);
+  parent->AddChildView(std::make_unique<Label>(name));
+  auto* combobox = parent->AddChildView(std::make_unique<Combobox>(
+      std::make_unique<ExampleComboboxModel>(items)));
+  combobox->SetProperty(kTableColAndRowSpanKey, gfx::Size(kNumColumns - 1, 1));
   combobox->SetCallback(
       base::BindRepeating(combobox_callback, base::Unretained(this)));
+  combobox->GetViewAccessibility().SetName(name);
   return combobox;
 }
 
 void TextExample::CreateExampleView(View* container) {
-  GridLayout* layout =
-      container->SetLayoutManager(std::make_unique<views::GridLayout>());
+  auto* box_layout = container->SetLayoutManager(std::make_unique<BoxLayout>(
+      BoxLayout::Orientation::kVertical, gfx::Insets(8), 20, false));
+  auto* table_container = container->AddChildView(std::make_unique<View>());
+  TableLayout* layout =
+      table_container->SetLayoutManager(std::make_unique<TableLayout>());
+  layout->AddColumn(LayoutAlignment::kStart, LayoutAlignment::kStretch, 0.1f,
+                    TableLayout::ColumnSize::kUsePreferred, 0, 0);
+  for (int i = 0; i < kNumColumns - 1; i++) {
+    layout->AddColumn(LayoutAlignment::kStretch, LayoutAlignment::kStretch,
+                      0.1f, TableLayout::ColumnSize::kUsePreferred, 0, 0);
+  }
+  layout->AddRows(6, TableLayout::kFixedSize);
 
-  layout->AddPaddingRow(0, 8);
-
-  ColumnSet* column_set = layout->AddColumnSet(0);
-  column_set->AddPaddingColumn(0, 8);
-  column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 0.1f,
-                        GridLayout::ColumnSize::kUsePreferred, 0, 0);
-  for (int i = 0; i < kNumColumns - 1; i++)
-    column_set->AddColumn(GridLayout::FILL, GridLayout::FILL, 0.1f,
-                          GridLayout::ColumnSize::kUsePreferred, 0, 0);
-  column_set->AddPaddingColumn(0, 8);
-
-  constexpr const char* kHorizontalAligments[] = {
+  constexpr auto kHorizontalAligments = std::to_array<const char* const>({
       "Default",
       "Left",
       "Center",
       "Right",
-  };
-  h_align_cb_ = AddCombobox(layout, "H-Align", kHorizontalAligments,
-                            base::size(kHorizontalAligments),
+  });
+  h_align_cb_ = AddCombobox(table_container, u"H-Align", kHorizontalAligments,
                             &TextExample::AlignComboboxChanged);
 
-  constexpr const char* kElideBehaviors[] = {"Elide", "No Elide"};
-  eliding_cb_ = AddCombobox(layout, "Eliding", kElideBehaviors,
-                            base::size(kElideBehaviors),
+  constexpr auto kElideBehaviors =
+      std::to_array<const char* const>({"Elide", "No Elide"});
+  eliding_cb_ = AddCombobox(table_container, u"Eliding", kElideBehaviors,
                             &TextExample::ElideComboboxChanged);
 
-  constexpr const char* kPrefixOptions[] = {
+  constexpr auto kPrefixOptions = std::to_array<const char* const>({
       "Default",
       "Show",
       "Hide",
-  };
-  prefix_cb_ =
-      AddCombobox(layout, "Prefix", kPrefixOptions, base::size(kPrefixOptions),
-                  &TextExample::PrefixComboboxChanged);
+  });
+  prefix_cb_ = AddCombobox(table_container, u"Prefix", kPrefixOptions,
+                           &TextExample::PrefixComboboxChanged);
 
-  constexpr const char* kTextExamples[] = {
+  constexpr auto kTextExamples = std::to_array<const char* const>({
       "Short",
       "Long",
       "Ampersands",
       "RTL Hebrew",
-  };
-  text_cb_ =
-      AddCombobox(layout, "Example Text", kTextExamples,
-                  base::size(kTextExamples), &TextExample::TextComboboxChanged);
+  });
+  text_cb_ = AddCombobox(table_container, u"Example Text", kTextExamples,
+                         &TextExample::TextComboboxChanged);
 
-  constexpr const char* kWeightLabels[] = {
-      "Thin",     "Extra Light", "Light",      "Normal", "Medium",
-      "Semibold", "Bold",        "Extra Bold", "Black",
-  };
-  weight_cb_ = AddCombobox(layout, "Font Weight", kWeightLabels,
-                           base::size(kWeightLabels),
+  constexpr auto kWeightLabels = std::to_array<const char* const>({
+      "Thin",
+      "Extra Light",
+      "Light",
+      "Normal",
+      "Medium",
+      "Semibold",
+      "Bold",
+      "Extra Bold",
+      "Black",
+  });
+  weight_cb_ = AddCombobox(table_container, u"Font Weight", kWeightLabels,
                            &TextExample::WeightComboboxChanged);
   weight_cb_->SelectValue(u"Normal");
 
-  layout->StartRow(0, 0);
-  multiline_checkbox_ = AddCheckbox(layout, "Multiline");
-  break_checkbox_ = AddCheckbox(layout, "Character Break");
-  italic_checkbox_ = AddCheckbox(layout, "Italic");
-  underline_checkbox_ = AddCheckbox(layout, "Underline");
+  multiline_checkbox_ = AddCheckbox(table_container, "Multiline");
+  break_checkbox_ = AddCheckbox(table_container, "Character Break");
+  italic_checkbox_ = AddCheckbox(table_container, "Italic");
+  underline_checkbox_ = AddCheckbox(table_container, "Underline");
+  strike_checkbox_ = AddCheckbox(table_container, "Strike");
 
-  layout->AddPaddingRow(0, 20);
+  auto* fill_container = container->AddChildView(std::make_unique<View>());
+  box_layout->SetFlexForView(fill_container, 1);
+  fill_container->SetLayoutManager(std::make_unique<FillLayout>());
+  fill_container->SetBorder(CreateEmptyBorder(gfx::Insets::VH(0, 8)));
 
-  column_set = layout->AddColumnSet(1);
-  column_set->AddPaddingColumn(0, 16);
-  column_set->AddColumn(GridLayout::FILL, GridLayout::FILL, 1,
-                        GridLayout::ColumnSize::kUsePreferred, 0, 0);
-  column_set->AddPaddingColumn(0, 16);
-
-  layout->StartRow(1, 1);
-  text_view_ = layout->AddView(std::make_unique<TextExampleView>());
-  layout->AddPaddingRow(0, 8);
+  text_view_ =
+      fill_container->AddChildView(std::make_unique<TextExampleView>());
 
   TextComboboxChanged();  // Sets initial text content.
 }
@@ -222,6 +231,7 @@ void TextExample::UpdateStyle() {
                       gfx::Canvas::CHARACTER_BREAKABLE);
   SetFlagFromCheckbox(italic_checkbox_, &style, gfx::Font::ITALIC);
   SetFlagFromCheckbox(underline_checkbox_, &style, gfx::Font::UNDERLINE);
+  SetFlagFromCheckbox(strike_checkbox_, &style, gfx::Font::STRIKE_THROUGH);
   text_view_->SetFlags(flags);
   text_view_->SetStyle(style);
 }
@@ -230,7 +240,7 @@ void TextExample::AlignComboboxChanged() {
   int flags = text_view_->GetFlags() &
               ~(gfx::Canvas::TEXT_ALIGN_LEFT | gfx::Canvas::TEXT_ALIGN_CENTER |
                 gfx::Canvas::TEXT_ALIGN_RIGHT);
-  switch (h_align_cb_->GetSelectedIndex()) {
+  switch (h_align_cb_->GetSelectedIndex().value()) {
     case 0:
       break;
     case 1:
@@ -247,7 +257,7 @@ void TextExample::AlignComboboxChanged() {
 }
 
 void TextExample::TextComboboxChanged() {
-  switch (text_cb_->GetSelectedIndex()) {
+  switch (text_cb_->GetSelectedIndex().value()) {
     case 0:
       text_view_->SetText(u"The quick brown fox jumps over the lazy dog.");
       break;
@@ -281,7 +291,7 @@ void TextExample::TextComboboxChanged() {
 }
 
 void TextExample::ElideComboboxChanged() {
-  switch (eliding_cb_->GetSelectedIndex()) {
+  switch (eliding_cb_->GetSelectedIndex().value()) {
     case 0:
       text_view_->SetElide(gfx::ELIDE_TAIL);
       break;
@@ -294,7 +304,7 @@ void TextExample::ElideComboboxChanged() {
 void TextExample::PrefixComboboxChanged() {
   int flags = text_view_->GetFlags() &
               ~(gfx::Canvas::SHOW_PREFIX | gfx::Canvas::HIDE_PREFIX);
-  switch (prefix_cb_->GetSelectedIndex()) {
+  switch (prefix_cb_->GetSelectedIndex().value()) {
     case 0:
       break;
     case 1:
@@ -308,15 +318,18 @@ void TextExample::PrefixComboboxChanged() {
 }
 
 void TextExample::WeightComboboxChanged() {
-  constexpr gfx::Font::Weight kFontWeights[]{
-      gfx::Font::Weight::THIN,   gfx::Font::Weight::EXTRA_LIGHT,
-      gfx::Font::Weight::LIGHT,  gfx::Font::Weight::NORMAL,
-      gfx::Font::Weight::MEDIUM, gfx::Font::Weight::SEMIBOLD,
-      gfx::Font::Weight::BOLD,   gfx::Font::Weight::EXTRA_BOLD,
+  constexpr auto kFontWeights = std::to_array<gfx::Font::Weight>({
+      gfx::Font::Weight::THIN,
+      gfx::Font::Weight::EXTRA_LIGHT,
+      gfx::Font::Weight::LIGHT,
+      gfx::Font::Weight::NORMAL,
+      gfx::Font::Weight::MEDIUM,
+      gfx::Font::Weight::SEMIBOLD,
+      gfx::Font::Weight::BOLD,
+      gfx::Font::Weight::EXTRA_BOLD,
       gfx::Font::Weight::BLACK,
-  };
-  text_view_->SetWeight(kFontWeights[weight_cb_->GetSelectedIndex()]);
+  });
+  text_view_->SetWeight(kFontWeights[weight_cb_->GetSelectedIndex().value()]);
 }
 
-}  // namespace examples
-}  // namespace views
+}  // namespace views::examples

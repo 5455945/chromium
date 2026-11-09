@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,16 @@
 #include <memory>
 #include <vector>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "base/win/scoped_handle.h"
 #include "services/device/usb/scoped_winusb_handle.h"
 #include "services/device/usb/usb_device_handle.h"
+
+struct _USB_NODE_CONNECTION_INFORMATION_EX;
 
 namespace base {
 class RefCountedBytes;
@@ -28,9 +30,17 @@ namespace device {
 
 class UsbDeviceWin;
 
+// Creates the per-request manual-reset event used by ObjectWatcher and WinUSB.
+base::win::ScopedHandle CreateUsbRequestEvent();
+
 // UsbDeviceHandle class provides basic I/O related functionalities.
 class UsbDeviceHandleWin : public UsbDeviceHandle {
  public:
+  class Request;
+
+  UsbDeviceHandleWin(const UsbDeviceHandleWin&) = delete;
+  UsbDeviceHandleWin& operator=(const UsbDeviceHandleWin&) = delete;
+
   scoped_refptr<UsbDevice> GetDevice() const override;
   void Close() override;
   void SetConfiguration(int configuration_value,
@@ -80,9 +90,13 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
   // Constructor used to build a connection to the device.
   UsbDeviceHandleWin(scoped_refptr<UsbDeviceWin> device);
 
-  // Constructor used to build a connection to the device's parent hub.
-  UsbDeviceHandleWin(scoped_refptr<UsbDeviceWin> device,
-                     base::win::ScopedHandle handle);
+  // Constructor used to build a connection to the device's parent hub. To avoid
+  // bugs in USB hub drivers a single global sequenced task runner is used for
+  // all calls to the driver.
+  UsbDeviceHandleWin(
+      scoped_refptr<UsbDeviceWin> device,
+      base::win::ScopedHandle handle,
+      scoped_refptr<base::SequencedTaskRunner> blocking_task_runner);
 
   ~UsbDeviceHandleWin() override;
 
@@ -92,19 +106,22 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
 
  private:
   struct Interface;
-  class Request;
 
   using OpenInterfaceCallback = base::OnceCallback<void(Interface*)>;
 
   struct Interface {
     Interface();
+
+    Interface(const Interface&) = delete;
+    Interface& operator=(const Interface&) = delete;
+
     ~Interface();
 
     // This may be nullptr in the rare case of a device which doesn't have any
     // interfaces. In that case the Windows API still considers the device to
     // have a single function which is represented here by initializing
     // |interface_number| and |first_interface| to create a fake interface 0.
-    const mojom::UsbInterfaceInfo* info = nullptr;
+    raw_ptr<const mojom::UsbInterfaceInfo> info = nullptr;
 
     // These fields are copied from |info| and initialized to 0 in case it is
     // nullptr.
@@ -129,12 +146,10 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
 
     // Closures to execute when |function_path| has been populated.
     std::vector<OpenInterfaceCallback> ready_callbacks;
-
-    DISALLOW_COPY_AND_ASSIGN(Interface);
   };
 
   struct Endpoint {
-    const mojom::UsbInterfaceInfo* interface;
+    raw_ptr<const mojom::UsbInterfaceInfo, DanglingUntriaged> interface;
     mojom::UsbTransferType type;
   };
 
@@ -182,7 +197,7 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
   std::unique_ptr<Request> UnlinkRequest(Request* request);
   void GotNodeConnectionInformation(
       TransferCallback callback,
-      void* node_connection_info,
+      std::unique_ptr<_USB_NODE_CONNECTION_INFORMATION_EX> node_connection_info,
       scoped_refptr<base::RefCountedBytes> buffer,
       std::pair<DWORD, DWORD> result_and_bytes_transferred);
   void GotDescriptorFromNodeConnection(
@@ -222,8 +237,6 @@ class UsbDeviceHandleWin : public UsbDeviceHandle {
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
 
   base::WeakPtrFactory<UsbDeviceHandleWin> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(UsbDeviceHandleWin);
 };
 
 }  // namespace device

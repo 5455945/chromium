@@ -1,6 +1,8 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+#include <optional>
 
 #include "base/feature_list.h"
 #include "base/values.h"
@@ -15,19 +17,19 @@
 #include "content/public/test/browser_test.h"
 #include "sandbox/policy/features.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace policy {
 
 class AudioSandboxEnabledTest
     : public InProcessBrowserTest,
       public ::testing::WithParamInterface<
-          /*policy::key::kAllowAudioSandbox=*/absl::optional<bool>> {
+          /*policy::key::kAllowAudioSandbox=*/std::optional<bool>> {
  public:
   // InProcessBrowserTest implementation:
   void SetUp() override {
-    EXPECT_CALL(policy_provider_, IsInitializationComplete(testing::_))
-        .WillRepeatedly(testing::Return(true));
+    policy_provider_.SetDefaultReturns(
+        true /* is_initialization_complete_return */,
+        true /* is_first_policy_load_complete_return */);
     policy::PolicyMap values;
     if (GetParam().has_value()) {
       values.Set(policy::key::kAudioSandboxEnabled,
@@ -43,11 +45,11 @@ class AudioSandboxEnabledTest
   }
 
  private:
-  policy::MockConfigurationPolicyProvider policy_provider_;
+  testing::NiceMock<policy::MockConfigurationPolicyProvider> policy_provider_;
 };
 
 IN_PROC_BROWSER_TEST_P(AudioSandboxEnabledTest, IsRespected) {
-  absl::optional<bool> enable_sandbox_via_policy = GetParam();
+  std::optional<bool> enable_sandbox_via_policy = GetParam();
   bool is_sandbox_enabled_by_default =
       base::FeatureList::IsEnabled(features::kAudioServiceSandbox);
 
@@ -68,6 +70,6 @@ INSTANTIATE_TEST_SUITE_P(
 INSTANTIATE_TEST_SUITE_P(
     NotSet,
     AudioSandboxEnabledTest,
-    ::testing::Values(/*policy::key::kAudioSandboxEnabled=*/absl::nullopt));
+    ::testing::Values(/*policy::key::kAudioSandboxEnabled=*/std::nullopt));
 
 }  // namespace policy

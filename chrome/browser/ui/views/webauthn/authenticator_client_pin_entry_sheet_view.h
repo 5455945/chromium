@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,20 +6,32 @@
 #define CHROME_BROWSER_UI_VIEWS_WEBAUTHN_AUTHENTICATOR_CLIENT_PIN_ENTRY_SHEET_VIEW_H_
 
 #include <memory>
+#include <string>
+#include <utility>
 
-#include "base/macros.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_client_pin_entry_view.h"
 #include "chrome/browser/ui/views/webauthn/authenticator_request_sheet_view.h"
 #include "chrome/browser/ui/webauthn/sheet_models.h"
+#include "ui/base/metadata/metadata_header_macros.h"
+#include "ui/views/view.h"
 
 // Web Authentication request dialog sheet view for entering an authenticator
 // PIN.
 class AuthenticatorClientPinEntrySheetView
     : public AuthenticatorRequestSheetView,
       public AuthenticatorClientPinEntryView::Delegate {
+  METADATA_HEADER(AuthenticatorClientPinEntrySheetView,
+                  AuthenticatorRequestSheetView)
+
  public:
   explicit AuthenticatorClientPinEntrySheetView(
       std::unique_ptr<AuthenticatorClientPinEntrySheetModel> model);
+
+  AuthenticatorClientPinEntrySheetView(
+      const AuthenticatorClientPinEntrySheetView&) = delete;
+  AuthenticatorClientPinEntrySheetView& operator=(
+      const AuthenticatorClientPinEntrySheetView&) = delete;
+
   ~AuthenticatorClientPinEntrySheetView() override;
 
  private:
@@ -32,8 +44,6 @@ class AuthenticatorClientPinEntrySheetView
   // AuthenticatorClientPinEntryView::Delegate:
   void OnPincodeChanged(std::u16string pincode) override;
   void OnConfirmationChanged(std::u16string pincode) override;
-
-  DISALLOW_COPY_AND_ASSIGN(AuthenticatorClientPinEntrySheetView);
 };
 
 #endif  // CHROME_BROWSER_UI_VIEWS_WEBAUTHN_AUTHENTICATOR_CLIENT_PIN_ENTRY_SHEET_VIEW_H_

@@ -1,12 +1,13 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_INTERPOLABLE_ASPECT_RATIO_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_ANIMATION_INTERPOLABLE_ASPECT_RATIO_H_
 
-#include <memory>
+#include "base/notreached.h"
 #include "third_party/blink/renderer/core/animation/interpolable_value.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/style/style_aspect_ratio.h"
 
 namespace blink {
@@ -15,39 +16,40 @@ namespace blink {
 // interpolation.
 class CORE_EXPORT InterpolableAspectRatio final : public InterpolableValue {
  public:
-  explicit InterpolableAspectRatio(const FloatSize& ratio);
-  explicit InterpolableAspectRatio(std::unique_ptr<InterpolableValue> value)
-      : value_(std::move(value)) {}
+  explicit InterpolableAspectRatio(const gfx::SizeF& ratio);
+  explicit InterpolableAspectRatio(InterpolableValue* value) : value_(value) {}
 
-  static std::unique_ptr<InterpolableAspectRatio> MaybeCreate(
-      const StyleAspectRatio&);
+  static InterpolableAspectRatio* MaybeCreate(const StyleAspectRatio&);
 
-  FloatSize GetRatio() const;
+  gfx::SizeF GetRatio() const;
 
   // InterpolableValue implementation:
   void Interpolate(const InterpolableValue& to,
                    const double progress,
                    InterpolableValue& result) const final;
   bool IsAspectRatio() const final { return true; }
-  bool Equals(const InterpolableValue& other) const final {
-    NOTREACHED();
-    return false;
-  }
+  bool Equals(const InterpolableValue& other) const final { NOTREACHED(); }
   void Scale(double scale) final;
   void Add(const InterpolableValue& other) final;
   void AssertCanInterpolateWith(const InterpolableValue& other) const final;
 
+  void Trace(Visitor* v) const override {
+    InterpolableValue::Trace(v);
+    v->Trace(value_);
+  }
+
  private:
   InterpolableAspectRatio* RawClone() const final {
-    return new InterpolableAspectRatio(value_->Clone());
+    return MakeGarbageCollected<InterpolableAspectRatio>(value_->Clone());
   }
   InterpolableAspectRatio* RawCloneAndZero() const final {
-    return new InterpolableAspectRatio(value_->CloneAndZero());
+    return MakeGarbageCollected<InterpolableAspectRatio>(
+        value_->CloneAndZero());
   }
 
   // Interpolable aspect ratio value is stored and interpolated as the log of
   // the real aspect ratio.
-  std::unique_ptr<InterpolableValue> value_;
+  Member<InterpolableValue> value_;
 };
 
 template <>

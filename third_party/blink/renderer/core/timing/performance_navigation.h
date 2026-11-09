@@ -34,12 +34,12 @@
 #include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
+class ScriptObject;
 class ScriptState;
-class ScriptValue;
 
 // Legacy support for NT1(https://www.w3.org/TR/navigation-timing/).
 class CORE_EXPORT PerformanceNavigation final : public ScriptWrappable,
@@ -59,7 +59,7 @@ class CORE_EXPORT PerformanceNavigation final : public ScriptWrappable,
   uint8_t type() const;
   uint16_t redirectCount() const;
 
-  ScriptValue toJSONForBinding(ScriptState*) const;
+  ScriptObject toJSONForBinding(ScriptState*) const;
 
   void Trace(Visitor*) const override;
 };

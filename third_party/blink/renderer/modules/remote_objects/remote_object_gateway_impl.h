@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,7 @@
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "third_party/blink/public/mojom/remote_objects/remote_objects.mojom-blink.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/heap/persistent.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
@@ -62,16 +62,15 @@ class MODULES_EXPORT RemoteObjectGatewayImpl
 
  private:
   // mojom::blink::RemoteObjectGateway
-  void AddNamedObject(const WTF::String& name, int32_t id) override;
-  void RemoveNamedObject(const WTF::String& name) override;
+  void AddNamedObject(const String& name, int32_t id) override;
+  void RemoveNamedObject(const String& name) override;
 
-  void InjectNamed(const WTF::String& object_name, int32_t object_id);
+  void InjectNamed(const String& object_name, int32_t object_id);
 
   HashMap<String, int32_t> named_objects_;
-  HashMap<int32_t,
-          RemoteObject*,
-          WTF::IntHash<int32_t>,
-          WTF::UnsignedWithZeroKeyHashTraits<int32_t>>
+  HeapHashMap<int32_t,
+              WeakMember<RemoteObject>,
+              IntWithZeroKeyHashTraits<int32_t>>
       remote_objects_;
 
   HeapMojoReceiver<mojom::blink::RemoteObjectGateway,

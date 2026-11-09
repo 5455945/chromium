@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/check.h"
-#include "base/strings/abseil_string_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/trace_event/memory_usage_estimator.h"
 
@@ -17,7 +16,7 @@ namespace net {
 namespace {
 
 // GOAWAY frame debug data is only buffered up to this many bytes.
-size_t kGoAwayDebugDataMaxSize = 1024;
+constexpr size_t kGoAwayDebugDataMaxSize = 1024;
 
 }  // namespace
 
@@ -25,13 +24,11 @@ BufferedSpdyFramer::BufferedSpdyFramer(uint32_t max_header_list_size,
                                        const NetLogWithSource& net_log,
                                        TimeFunc time_func)
     : spdy_framer_(spdy::SpdyFramer::ENABLE_COMPRESSION),
-      visitor_(nullptr),
-      frames_received_(0),
       max_header_list_size_(max_header_list_size),
       net_log_(net_log),
       time_func_(time_func) {
   // Do not bother decoding response header payload above the limit.
-  deframer_.GetHpackDecoder()->set_max_decode_buffer_size_bytes(
+  deframer_.GetHpackDecoder().set_max_decode_buffer_size_bytes(
       max_header_list_size_);
 }
 
@@ -56,6 +53,7 @@ void BufferedSpdyFramer::OnError(
 }
 
 void BufferedSpdyFramer::OnHeaders(spdy::SpdyStreamId stream_id,
+                                   size_t payload_length,
                                    bool has_priority,
                                    int weight,
                                    spdy::SpdyStreamId parent_stream_id,
@@ -185,9 +183,9 @@ bool BufferedSpdyFramer::OnGoAwayFrameData(const char* goaway_data,
     }
     return true;
   }
-  visitor_->OnGoAway(goaway_fields_->last_accepted_stream_id,
-                     goaway_fields_->error_code, goaway_fields_->debug_data);
-  goaway_fields_.reset();
+  std::unique_ptr<GoAwayFields> fields = std::move(goaway_fields_);
+  visitor_->OnGoAway(fields->last_accepted_stream_id, fields->error_code,
+                     fields->debug_data);
   return true;
 }
 
@@ -210,13 +208,13 @@ void BufferedSpdyFramer::OnPushPromise(spdy::SpdyStreamId stream_id,
 
 void BufferedSpdyFramer::OnAltSvc(
     spdy::SpdyStreamId stream_id,
-    absl::string_view origin,
+    std::string_view origin,
     const spdy::SpdyAltSvcWireFormat::AlternativeServiceVector& altsvc_vector) {
-  visitor_->OnAltSvc(stream_id, base::StringViewToStringPiece(origin),
-                     altsvc_vector);
+  visitor_->OnAltSvc(stream_id, origin, altsvc_vector);
 }
 
 void BufferedSpdyFramer::OnContinuation(spdy::SpdyStreamId stream_id,
+                                        size_t payload_length,
                                         bool end) {}
 
 bool BufferedSpdyFramer::OnUnknownFrame(spdy::SpdyStreamId stream_id,
@@ -229,11 +227,7 @@ size_t BufferedSpdyFramer::ProcessInput(const char* data, size_t len) {
 }
 
 void BufferedSpdyFramer::UpdateHeaderDecoderTableSize(uint32_t value) {
-  deframer_.GetHpackDecoder()->ApplyHeaderTableSizeSetting(value);
-}
-
-void BufferedSpdyFramer::Reset() {
-  deframer_.Reset();
+  deframer_.GetHpackDecoder().ApplyHeaderTableSizeSetting(value);
 }
 
 http2::Http2DecoderAdapter::SpdyFramerError
@@ -268,8 +262,8 @@ std::unique_ptr<spdy::SpdySerializedFrame> BufferedSpdyFramer::CreateRstStream(
 std::unique_ptr<spdy::SpdySerializedFrame> BufferedSpdyFramer::CreateSettings(
     const spdy::SettingsMap& values) const {
   spdy::SpdySettingsIR settings_ir;
-  for (auto it = values.begin(); it != values.end(); ++it) {
-    settings_ir.AddSetting(it->first, it->second);
+  for (const auto& it : values) {
+    settings_ir.AddSetting(it.first, it.second);
   }
   return std::make_unique<spdy::SpdySerializedFrame>(
       spdy_framer_.SerializeSettings(settings_ir));
@@ -301,7 +295,7 @@ std::unique_ptr<spdy::SpdySerializedFrame> BufferedSpdyFramer::CreateDataFrame(
     const char* data,
     uint32_t len,
     spdy::SpdyDataFlags flags) {
-  spdy::SpdyDataIR data_ir(stream_id, absl::string_view(data, len));
+  spdy::SpdyDataIR data_ir(stream_id, std::string_view(data, len));
   data_ir.set_fin((flags & spdy::DATA_FLAG_FIN) != 0);
   return std::make_unique<spdy::SpdySerializedFrame>(
       spdy_framer_.SerializeData(data_ir));

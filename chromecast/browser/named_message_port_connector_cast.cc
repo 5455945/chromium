@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,7 @@
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
 #include "chromecast/browser/cast_web_contents.h"
+#include "components/cast/message_port/blink_message_port_adapter.h"
 #include "components/cast/message_port/cast/message_port_cast.h"
 #include "components/cast/named_message_port_connector/grit/named_message_port_connector_resources.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -26,7 +27,7 @@ NamedMessagePortConnectorCast::NamedMessagePortConnectorCast(
     : cast_web_contents_(cast_web_contents) {
   DCHECK(cast_web_contents_);
 
-  CastWebContents::Observer::Observe(cast_web_contents_);
+  CastWebContentsObserver::Observe(cast_web_contents_);
 
   // Register the port connection JS script for early injection.
   std::string bindings_script_string =
@@ -40,7 +41,7 @@ NamedMessagePortConnectorCast::NamedMessagePortConnectorCast(
 }
 
 NamedMessagePortConnectorCast::~NamedMessagePortConnectorCast() {
-  CastWebContents::Observer::Observe(nullptr);
+  CastWebContentsObserver::Observe(nullptr);
 }
 
 void NamedMessagePortConnectorCast::OnPageLoaded() {
@@ -51,28 +52,25 @@ void NamedMessagePortConnectorCast::OnPageLoaded() {
 
   std::vector<blink::WebMessagePort> ports;
   ports.push_back(
-      cast_api_bindings::MessagePortCast::FromMessagePort(port.get())
-          ->TakePort());
+      cast_api_bindings::BlinkMessagePortAdapter::FromServerPlatformMessagePort(
+          std::move(port)));
   cast_web_contents_->PostMessageToMainFrame("*", connect_message,
                                              std::move(ports));
 }
 
-void NamedMessagePortConnectorCast::OnPageStateChanged(
-    CastWebContents* cast_web_contents) {
-  auto page_state = cast_web_contents->page_state();
-
+void NamedMessagePortConnectorCast::PageStateChanged(PageState page_state) {
   switch (page_state) {
-    case CastWebContents::PageState::DESTROYED:
-    case CastWebContents::PageState::ERROR:
-      CastWebContents::Observer::Observe(nullptr);
+    case PageState::DESTROYED:
+    case PageState::ERROR:
+      CastWebContentsObserver::Observe(nullptr);
       cast_web_contents_ = nullptr;
       break;
-    case CastWebContents::PageState::LOADED:
+    case PageState::LOADED:
       OnPageLoaded();
       break;
-    case CastWebContents::PageState::IDLE:
-    case CastWebContents::PageState::LOADING:
-    case CastWebContents::PageState::CLOSED:
+    case PageState::IDLE:
+    case PageState::LOADING:
+    case PageState::CLOSED:
       break;
   }
 }

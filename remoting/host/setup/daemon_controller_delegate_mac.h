@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "remoting/base/auto_thread.h"
 #include "remoting/base/auto_thread_task_runner.h"
 #include "remoting/host/setup/daemon_controller.h"
@@ -22,19 +21,25 @@ class PermissionWizard;
 class DaemonControllerDelegateMac : public DaemonController::Delegate {
  public:
   DaemonControllerDelegateMac();
+
+  DaemonControllerDelegateMac(const DaemonControllerDelegateMac&) = delete;
+  DaemonControllerDelegateMac& operator=(const DaemonControllerDelegateMac&) =
+      delete;
+
   ~DaemonControllerDelegateMac() override;
 
   // DaemonController::Delegate interface.
   DaemonController::State GetState() override;
-  std::unique_ptr<base::DictionaryValue> GetConfig() override;
+  std::optional<base::DictValue> GetConfig() override;
   void CheckPermission(bool it2me, DaemonController::BoolCallback) override;
-  void SetConfigAndStart(std::unique_ptr<base::DictionaryValue> config,
+  void SetConfigAndStart(base::DictValue config,
                          bool consent,
                          DaemonController::CompletionCallback done) override;
-  void UpdateConfig(std::unique_ptr<base::DictionaryValue> config,
+  void UpdateConfig(base::DictValue config,
                     DaemonController::CompletionCallback done) override;
   void Stop(DaemonController::CompletionCallback done) override;
   DaemonController::UsageStatsConsent GetUsageStatsConsent() override;
+  bool is_privileged() const override;
 
  private:
   std::unique_ptr<mac::PermissionWizard> permission_wizard_;
@@ -43,8 +48,6 @@ class DaemonControllerDelegateMac : public DaemonController::Delegate {
   // thread.
   scoped_refptr<AutoThreadTaskRunner> io_task_runner_;
   AutoThread io_thread_;
-
-  DISALLOW_COPY_AND_ASSIGN(DaemonControllerDelegateMac);
 };
 
 }  // namespace remoting

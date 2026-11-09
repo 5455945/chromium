@@ -35,19 +35,36 @@ class CSSValue;
 class Element;
 class ExceptionState;
 class ExecutionContext;
+class CSSPropertyValueSet;
 class MutableCSSPropertyValueSet;
 class StyleSheetContents;
 
-class AbstractPropertySetCSSStyleDeclaration : public CSSStyleDeclaration {
+class CORE_EXPORT AbstractPropertySetCSSStyleDeclaration
+    : public CSSStyleDeclaration {
  public:
   virtual Element* ParentElement() const { return nullptr; }
   StyleSheetContents* ContextStyleSheet() const;
-  AbstractPropertySetCSSStyleDeclaration(ExecutionContext* context)
+  explicit AbstractPropertySetCSSStyleDeclaration(ExecutionContext* context)
       : CSSStyleDeclaration(context) {}
+
+  // Some subclasses only allow a subset of the properties, for example
+  // CSSPositionTryDescriptors only allows inset and sizing properties.
+  virtual bool IsPropertyValid(CSSPropertyID) const = 0;
+
+  const CSSPropertyValueSet& GetPropertyValueSet() const;
 
   void Trace(Visitor*) const override;
 
+  String GetPropertyValueInternal(CSSPropertyID) final;
+  void SetPropertyInternal(CSSPropertyID,
+                           const String& custom_property_name,
+                           StringView value,
+                           bool important,
+                           SecureContextMode,
+                           ExceptionState&) final;
+
  private:
+  bool IsAbstractPropertySet() const final { return true; }
   CSSRule* parentRule() const override { return nullptr; }
   unsigned length() const final;
   String item(unsigned index) const final;
@@ -61,31 +78,54 @@ class AbstractPropertySetCSSStyleDeclaration : public CSSStyleDeclaration {
                    const String& priority,
                    ExceptionState&) final;
   String removeProperty(const String& property_name, ExceptionState&) final;
-  String CssFloat() const;
-  void SetCSSFloat(const String&, ExceptionState&);
-  String cssText() const final;
+  void QuietlyRemoveProperty(const String& property_name) final;
+  String cssText() const override;
   void setCSSText(const ExecutionContext*,
                   const String&,
                   ExceptionState&) final;
   const CSSValue* GetPropertyCSSValueInternal(CSSPropertyID) final;
   const CSSValue* GetPropertyCSSValueInternal(
-      AtomicString custom_property_name) final;
-  String GetPropertyValueInternal(CSSPropertyID) final;
-  void SetPropertyInternal(CSSPropertyID,
-                           const String& custom_property_name,
-                           const String& value,
-                           bool important,
-                           SecureContextMode,
-                           ExceptionState&) final;
+      const AtomicString& custom_property_name) final;
+  String GetPropertyValueWithHint(const String& property_name,
+                                  unsigned index) final;
+  String GetPropertyPriorityWithHint(const String& property_name,
+                                     unsigned index) final;
 
   bool CssPropertyMatches(CSSPropertyID, const CSSValue&) const final;
 
  protected:
-  enum MutationType { kNoChanges, kPropertyChanged };
+  enum MutationType {
+    kNoChanges,
+    // Only properties that were independent changed, so that if there are
+    // no other changes and this is on the inline style, it may be
+    // possible to reuse an already-computed style and just apply
+    // the new changes on top of it.
+    kIndependentPropertyChanged,
+    kPropertyChanged
+  };
   virtual void WillMutate() {}
   virtual void DidMutate(MutationType) {}
   virtual MutableCSSPropertyValueSet& PropertySet() const = 0;
+  virtual void SetCSSTextInternal(const String&, SecureContextMode);
+  virtual void PrepareCustomProperty(AtomicString&, StringView, bool&) {}
+  virtual AtomicString HygienicToAuthoredCustomPropertyName(
+      const AtomicString& name) const {
+    return name;
+  }
+  virtual AtomicString AuthoredToHygienicCustomPropertyName(
+      const AtomicString& name) const {
+    return name;
+  }
   virtual bool IsKeyframeStyle() const { return false; }
+  bool FastPathSetProperty(CSSPropertyID unresolved_property,
+                           double value) override;
+};
+
+template <>
+struct DowncastTraits<AbstractPropertySetCSSStyleDeclaration> {
+  static bool AllowFrom(const CSSStyleDeclaration& declaration) {
+    return declaration.IsAbstractPropertySet();
+  }
 };
 
 }  // namespace blink

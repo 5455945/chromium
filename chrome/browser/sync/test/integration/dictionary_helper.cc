@@ -1,14 +1,12 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/sync/test/integration/dictionary_helper.h"
 
-#include <algorithm>
 #include <set>
 
 #include "base/format_macros.h"
-#include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/spellchecker/spellcheck_custom_dictionary.h"
@@ -17,11 +15,17 @@
 #include "chrome/browser/sync/test/integration/dictionary_load_observer.h"
 #include "chrome/browser/sync/test/integration/sync_datatype_helper.h"
 #include "chrome/browser/sync/test/integration/sync_test.h"
+#include "components/sync/test/fake_server.h"
 #include "content/public/test/test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 class DictionarySyncIntegrationTestHelper {
  public:
+  DictionarySyncIntegrationTestHelper(
+      const DictionarySyncIntegrationTestHelper&) = delete;
+  DictionarySyncIntegrationTestHelper& operator=(
+      const DictionarySyncIntegrationTestHelper&) = delete;
+
   // Same as SpellcheckCustomDictionary::AddWord/RemoveWord, except does not
   // write to disk.
   static bool ApplyChange(SpellcheckCustomDictionary* dictionary,
@@ -32,36 +36,31 @@ class DictionarySyncIntegrationTestHelper {
     dictionary->Sync(*change);
     return !result;
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(DictionarySyncIntegrationTestHelper);
 };
-
 
 namespace dictionary_helper {
 namespace {
 
-SpellcheckCustomDictionary* GetDictionary(int index) {
-  return SpellcheckServiceFactory::GetForContext(
-      sync_datatype_helper::test()->GetProfile(index))->GetCustomDictionary();
-}
-
 void LoadDictionary(SpellcheckCustomDictionary* dictionary) {
-  if (dictionary->IsLoaded())
+  if (dictionary->IsLoaded()) {
     return;
+  }
   base::RunLoop run_loop;
-  DictionaryLoadObserver observer(
-      content::GetDeferredQuitTaskForRunLoop(&run_loop));
-  dictionary->AddObserver(&observer);
+  DictionaryLoadObserver observer(dictionary, run_loop.QuitClosure());
   dictionary->Load();
-  content::RunThisRunLoop(&run_loop);
-  dictionary->RemoveObserver(&observer);
+  run_loop.Run();
   ASSERT_TRUE(dictionary->IsLoaded());
 }
 
 }  // namespace
 
-const std::set<std::string>& GetDictionaryWords(int profile_index) {
+SpellcheckCustomDictionary* GetDictionary(int index) {
+  return SpellcheckServiceFactory::GetForContext(
+             sync_datatype_helper::test()->GetProfile(index))
+      ->GetCustomDictionary();
+}
+
+std::set<std::string> GetDictionaryWords(int profile_index) {
   return GetDictionary(profile_index)->GetWords();
 }
 
@@ -97,6 +96,28 @@ bool RemoveWord(int index, const std::string& word) {
   bool result = DictionarySyncIntegrationTestHelper::ApplyChange(
       GetDictionary(index), &dictionary_change);
   return result;
+}
+
+void InjectWordToFakeServer(const std::string& word,
+                            fake_server::FakeServer* fake_server) {
+  sync_pb::EntitySpecifics specifics;
+  specifics.mutable_dictionary()->set_word(word);
+  fake_server->InjectEntity(
+      syncer::PersistentUniqueClientEntity::CreateFromSpecificsForTesting(
+          /*non_unique_name=*/word,
+          /*client_tag=*/word, specifics,
+          /*creation_time=*/0, /*last_modified_time=*/0));
+}
+
+bool HasWordInFakeServer(const std::string& word,
+                         fake_server::FakeServer* fake_server) {
+  for (const sync_pb::SyncEntity& entity :
+       fake_server->GetSyncEntitiesByDataType(syncer::DICTIONARY)) {
+    if (entity.specifics().dictionary().word() == word) {
+      return true;
+    }
+  }
+  return false;
 }
 
 DictionaryChecker::DictionaryChecker(

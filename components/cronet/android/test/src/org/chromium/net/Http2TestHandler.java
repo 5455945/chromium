@@ -1,17 +1,8 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.net;
-
-import org.chromium.base.Log;
-
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.UnsupportedEncodingException;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
 
 import static io.netty.buffer.Unpooled.copiedBuffer;
 import static io.netty.buffer.Unpooled.unreleasableBuffer;
@@ -35,9 +26,17 @@ import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Settings;
 import io.netty.util.CharsetUtil;
 
-/**
- * HTTP/2 test handler for Cronet BidirectionalStream tests.
- */
+import org.chromium.base.Log;
+
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.util.HashMap;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+
+/** HTTP/2 test handler for Cronet BidirectionalStream tests. */
 public final class Http2TestHandler extends Http2ConnectionHandler implements Http2FrameListener {
     // Some Url Paths that have special meaning.
     public static final String ECHO_ALL_HEADERS_PATH = "/echoallheaders";
@@ -45,10 +44,10 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     public static final String ECHO_METHOD_PATH = "/echomethod";
     public static final String ECHO_STREAM_PATH = "/echostream";
     public static final String ECHO_TRAILERS_PATH = "/echotrailers";
-    public static final String SERVE_SIMPLE_BROTLI_RESPONSE = "/simplebrotli";
     public static final String REPORTING_COLLECTOR_PATH = "/reporting-collector";
     public static final String SUCCESS_WITH_NEL_HEADERS_PATH = "/success-with-nel";
     public static final String COMBINED_HEADERS_PATH = "/combinedheaders";
+    public static final String HANGING_REQUEST_PATH = "/hanging-request";
 
     private static final String TAG = Http2TestHandler.class.getSimpleName();
     private static final Http2FrameLogger sLogger =
@@ -56,14 +55,13 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     private static final ByteBuf RESPONSE_BYTES =
             unreleasableBuffer(copiedBuffer("HTTP/2 Test Server", CharsetUtil.UTF_8));
 
-    private HashMap<Integer, RequestResponder> mResponderMap = new HashMap<>();
+    private final HashMap<Integer, RequestResponder> mResponderMap = new HashMap<>();
 
-    private ReportingCollector mReportingCollector;
-    private String mServerUrl;
+    private final ReportingCollector mReportingCollector;
+    private final String mServerUrl;
+    private final CountDownLatch mHangingUrlLatch;
 
-    /**
-     * Builder for HTTP/2 test handler.
-     */
+    /** Builder for HTTP/2 test handler. */
     public static final class Builder
             extends AbstractHttp2ConnectionHandlerBuilder<Http2TestHandler, Builder> {
         public Builder() {
@@ -80,33 +78,60 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
             return this;
         }
 
+        public Builder setHangingUrlLatch(CountDownLatch hangingUrlLatch) {
+            mHangingUrlLatch = hangingUrlLatch;
+            return this;
+        }
+
         @Override
         public Http2TestHandler build() {
             return super.build();
         }
 
         @Override
-        protected Http2TestHandler build(Http2ConnectionDecoder decoder,
-                Http2ConnectionEncoder encoder, Http2Settings initialSettings) {
-            Http2TestHandler handler = new Http2TestHandler(
-                    decoder, encoder, initialSettings, mReportingCollector, mServerUrl);
+        protected Http2TestHandler build(
+                Http2ConnectionDecoder decoder,
+                Http2ConnectionEncoder encoder,
+                Http2Settings initialSettings) {
+            Http2TestHandler handler =
+                    new Http2TestHandler(
+                            decoder,
+                            encoder,
+                            initialSettings,
+                            mReportingCollector,
+                            mServerUrl,
+                            mHangingUrlLatch);
             frameListener(handler);
             return handler;
         }
 
         private ReportingCollector mReportingCollector;
         private String mServerUrl;
+        private CountDownLatch mHangingUrlLatch;
     }
 
     private class RequestResponder {
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
-            encoder().writeHeaders(ctx, streamId, createResponseHeadersFromRequestHeaders(headers),
-                    0, endOfStream, ctx.newPromise());
+            encoder()
+                    .writeHeaders(
+                            ctx,
+                            streamId,
+                            createResponseHeadersFromRequestHeaders(headers),
+                            0,
+                            endOfStream,
+                            ctx.newPromise());
             ctx.flush();
         }
 
-        int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
+        int onDataRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                ByteBuf data,
+                int padding,
                 boolean endOfStream) {
             int processed = data.readableBytes() + padding;
             encoder().writeData(ctx, streamId, data.retain(), 0, true, ctx.newPromise());
@@ -117,8 +142,14 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
         void sendResponseString(ChannelHandlerContext ctx, int streamId, String responseString) {
             ByteBuf content = ctx.alloc().buffer();
             ByteBufUtil.writeAscii(content, responseString);
-            encoder().writeHeaders(
-                    ctx, streamId, createDefaultResponseHeaders(), 0, false, ctx.newPromise());
+            encoder()
+                    .writeHeaders(
+                            ctx,
+                            streamId,
+                            createDefaultResponseHeaders(),
+                            0,
+                            false,
+                            ctx.newPromise());
             encoder().writeData(ctx, streamId, content, 0, true, ctx.newPromise());
             ctx.flush();
         }
@@ -126,16 +157,29 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
 
     private class EchoStreamResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             // Send a frame for the response headers.
-            encoder().writeHeaders(ctx, streamId, createResponseHeadersFromRequestHeaders(headers),
-                    0, endOfStream, ctx.newPromise());
+            encoder()
+                    .writeHeaders(
+                            ctx,
+                            streamId,
+                            createResponseHeadersFromRequestHeaders(headers),
+                            0,
+                            endOfStream,
+                            ctx.newPromise());
             ctx.flush();
         }
 
         @Override
-        int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
+        int onDataRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                ByteBuf data,
+                int padding,
                 boolean endOfStream) {
             int processed = data.readableBytes() + padding;
             encoder().writeData(ctx, streamId, data.retain(), 0, endOfStream, ctx.newPromise());
@@ -146,7 +190,10 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
 
     private class CombinedHeadersResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             ByteBuf content = ctx.alloc().buffer();
             ByteBufUtil.writeAscii(content, "GET");
@@ -160,9 +207,26 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
         }
     }
 
+    private class HangingRequestResponder extends RequestResponder {
+        @Override
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
+                Http2Headers headers) {
+            try {
+                mHangingUrlLatch.await();
+            } catch (InterruptedException e) {
+            }
+        }
+    }
+
     private class EchoHeaderResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             String[] splitPath = headers.path().toString().split("\\?");
             if (splitPath.length <= 1) {
@@ -182,7 +246,10 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
 
     private class EchoAllHeadersResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             StringBuilder response = new StringBuilder();
             for (Map.Entry<CharSequence, CharSequence> header : headers) {
@@ -194,7 +261,10 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
 
     private class EchoMethodResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             sendResponseString(ctx, streamId, headers.method().toString());
         }
@@ -202,47 +272,47 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
 
     private class EchoTrailersResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
-            encoder().writeHeaders(
-                    ctx, streamId, createDefaultResponseHeaders(), 0, false, ctx.newPromise());
-            encoder().writeData(
-                    ctx, streamId, RESPONSE_BYTES.duplicate(), 0, false, ctx.newPromise());
-            Http2Headers responseTrailers = createResponseHeadersFromRequestHeaders(headers).add(
-                    "trailer", "value1", "Value2");
+            encoder()
+                    .writeHeaders(
+                            ctx,
+                            streamId,
+                            createDefaultResponseHeaders(),
+                            0,
+                            false,
+                            ctx.newPromise());
+            encoder()
+                    .writeData(
+                            ctx, streamId, RESPONSE_BYTES.duplicate(), 0, false, ctx.newPromise());
+            Http2Headers responseTrailers =
+                    createResponseHeadersFromRequestHeaders(headers)
+                            .add("trailer", "value1", "Value2");
             encoder().writeHeaders(ctx, streamId, responseTrailers, 0, true, ctx.newPromise());
-            ctx.flush();
-        }
-    }
-
-    // A RequestResponder that serves a simple Brotli-encoded response.
-    private class ServeSimpleBrotliResponder extends RequestResponder {
-        @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
-                Http2Headers headers) {
-            Http2Headers responseHeaders = new DefaultHttp2Headers().status(OK.codeAsText());
-            byte[] quickfoxCompressed = {0x0b, 0x15, -0x80, 0x54, 0x68, 0x65, 0x20, 0x71, 0x75,
-                    0x69, 0x63, 0x6b, 0x20, 0x62, 0x72, 0x6f, 0x77, 0x6e, 0x20, 0x66, 0x6f, 0x78,
-                    0x20, 0x6a, 0x75, 0x6d, 0x70, 0x73, 0x20, 0x6f, 0x76, 0x65, 0x72, 0x20, 0x74,
-                    0x68, 0x65, 0x20, 0x6c, 0x61, 0x7a, 0x79, 0x20, 0x64, 0x6f, 0x67, 0x03};
-            ByteBuf content = copiedBuffer(quickfoxCompressed);
-            responseHeaders.add("content-encoding", "br");
-            encoder().writeHeaders(ctx, streamId, responseHeaders, 0, false, ctx.newPromise());
-            encoder().writeData(ctx, streamId, content, 0, true, ctx.newPromise());
             ctx.flush();
         }
     }
 
     // A RequestResponder that implements a Reporting collector.
     private class ReportingCollectorResponder extends RequestResponder {
-        private ByteArrayOutputStream mPartialPayload = new ByteArrayOutputStream();
+        private final ByteArrayOutputStream mPartialPayload = new ByteArrayOutputStream();
 
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {}
 
         @Override
-        int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
+        int onDataRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                ByteBuf data,
+                int padding,
                 boolean endOfStream) {
             int processed = data.readableBytes() + padding;
             try {
@@ -276,7 +346,10 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     // A RequestResponder that serves a successful response with Reporting and NEL headers
     private class SuccessWithNELHeadersResponder extends RequestResponder {
         @Override
-        void onHeadersRead(ChannelHandlerContext ctx, int streamId, boolean endOfStream,
+        void onHeadersRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                boolean endOfStream,
                 Http2Headers headers) {
             Http2Headers responseHeaders = new DefaultHttp2Headers().status(OK.codeAsText());
             responseHeaders.add("report-to", getReportToHeader());
@@ -286,14 +359,19 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
         }
 
         @Override
-        int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
+        int onDataRead(
+                ChannelHandlerContext ctx,
+                int streamId,
+                ByteBuf data,
+                int padding,
                 boolean endOfStream) {
             int processed = data.readableBytes() + padding;
             return processed;
         }
 
         private String getReportToHeader() {
-            return String.format("{\"group\": \"nel\", \"max_age\": 86400, "
+            return String.format(
+                    "{\"group\": \"nel\", \"max_age\": 86400, "
                             + "\"endpoints\": [{\"url\": \"%s%s\"}]}",
                     mServerUrl, REPORTING_COLLECTOR_PATH);
         }
@@ -321,12 +399,17 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
         return responseHeaders;
     }
 
-    private Http2TestHandler(Http2ConnectionDecoder decoder, Http2ConnectionEncoder encoder,
-            Http2Settings initialSettings, ReportingCollector reportingCollector,
-            String serverUrl) {
+    private Http2TestHandler(
+            Http2ConnectionDecoder decoder,
+            Http2ConnectionEncoder encoder,
+            Http2Settings initialSettings,
+            ReportingCollector reportingCollector,
+            String serverUrl,
+            CountDownLatch hangingUrlLatch) {
         super(decoder, encoder, initialSettings);
         mReportingCollector = reportingCollector;
         mServerUrl = serverUrl;
+        mHangingUrlLatch = hangingUrlLatch;
     }
 
     @Override
@@ -338,8 +421,9 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     }
 
     @Override
-    public int onDataRead(ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding,
-            boolean endOfStream) throws Http2Exception {
+    public int onDataRead(
+            ChannelHandlerContext ctx, int streamId, ByteBuf data, int padding, boolean endOfStream)
+            throws Http2Exception {
         RequestResponder responder = mResponderMap.get(streamId);
         if (endOfStream) {
             mResponderMap.remove(streamId);
@@ -348,8 +432,13 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     }
 
     @Override
-    public void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers,
-            int padding, boolean endOfStream) throws Http2Exception {
+    public void onHeadersRead(
+            ChannelHandlerContext ctx,
+            int streamId,
+            Http2Headers headers,
+            int padding,
+            boolean endOfStream)
+            throws Http2Exception {
         String path = headers.path().toString();
         RequestResponder responder;
         if (path.startsWith(ECHO_STREAM_PATH)) {
@@ -362,14 +451,14 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
             responder = new EchoHeaderResponder();
         } else if (path.startsWith(ECHO_METHOD_PATH)) {
             responder = new EchoMethodResponder();
-        } else if (path.startsWith(SERVE_SIMPLE_BROTLI_RESPONSE)) {
-            responder = new ServeSimpleBrotliResponder();
         } else if (path.startsWith(REPORTING_COLLECTOR_PATH)) {
             responder = new ReportingCollectorResponder();
         } else if (path.startsWith(SUCCESS_WITH_NEL_HEADERS_PATH)) {
             responder = new SuccessWithNELHeadersResponder();
         } else if (path.startsWith(COMBINED_HEADERS_PATH)) {
             responder = new CombinedHeadersResponder();
+        } else if (path.startsWith(HANGING_REQUEST_PATH)) {
+            responder = new HangingRequestResponder();
         } else {
             responder = new RequestResponder();
         }
@@ -382,15 +471,27 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     }
 
     @Override
-    public void onHeadersRead(ChannelHandlerContext ctx, int streamId, Http2Headers headers,
-            int streamDependency, short weight, boolean exclusive, int padding, boolean endOfStream)
+    public void onHeadersRead(
+            ChannelHandlerContext ctx,
+            int streamId,
+            Http2Headers headers,
+            int streamDependency,
+            short weight,
+            boolean exclusive,
+            int padding,
+            boolean endOfStream)
             throws Http2Exception {
         onHeadersRead(ctx, streamId, headers, padding, endOfStream);
     }
 
     @Override
-    public void onPriorityRead(ChannelHandlerContext ctx, int streamId, int streamDependency,
-            short weight, boolean exclusive) throws Http2Exception {}
+    public void onPriorityRead(
+            ChannelHandlerContext ctx,
+            int streamId,
+            int streamDependency,
+            short weight,
+            boolean exclusive)
+            throws Http2Exception {}
 
     @Override
     public void onRstStreamRead(ChannelHandlerContext ctx, int streamId, long errorCode)
@@ -410,18 +511,29 @@ public final class Http2TestHandler extends Http2ConnectionHandler implements Ht
     public void onPingAckRead(ChannelHandlerContext ctx, ByteBuf data) throws Http2Exception {}
 
     @Override
-    public void onPushPromiseRead(ChannelHandlerContext ctx, int streamId, int promisedStreamId,
-            Http2Headers headers, int padding) throws Http2Exception {}
+    public void onPushPromiseRead(
+            ChannelHandlerContext ctx,
+            int streamId,
+            int promisedStreamId,
+            Http2Headers headers,
+            int padding)
+            throws Http2Exception {}
 
     @Override
-    public void onGoAwayRead(ChannelHandlerContext ctx, int lastStreamId, long errorCode,
-            ByteBuf debugData) throws Http2Exception {}
+    public void onGoAwayRead(
+            ChannelHandlerContext ctx, int lastStreamId, long errorCode, ByteBuf debugData)
+            throws Http2Exception {}
 
     @Override
     public void onWindowUpdateRead(ChannelHandlerContext ctx, int streamId, int windowSizeIncrement)
             throws Http2Exception {}
 
     @Override
-    public void onUnknownFrame(ChannelHandlerContext ctx, byte frameType, int streamId,
-            Http2Flags flags, ByteBuf payload) throws Http2Exception {}
+    public void onUnknownFrame(
+            ChannelHandlerContext ctx,
+            byte frameType,
+            int streamId,
+            Http2Flags flags,
+            ByteBuf payload)
+            throws Http2Exception {}
 }

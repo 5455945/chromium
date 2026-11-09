@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,33 +8,40 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
+#include "base/memory/weak_ptr.h"
+#include "base/time/time.h"
+#include "base/values.h"
 #include "url/gurl.h"
 
-namespace base {
-class Value;
-}
-
 namespace content {
+class NavigationHandle;
 class WebContents;
 }
 
 namespace security_interstitials {
 class SecurityInterstitialControllerClient;
 
+// Represents a single interstitial, which is associated to either a subframe or
+// main frame.
+// TODO(crbug.com/369755672): Rename to SecurityInterstitialDocument.
 class SecurityInterstitialPage {
  public:
   // An identifier used to identify a SecurityInterstitialPage.
   typedef const void* TypeID;
 
-  // |request_url| is the URL which triggered the interstitial page. For
-  // SafeBrowsing interstitials, it can be a main frame or a subresource URL.
-  // For SSL interstitials, it's always the main frame URL.
+  // |request_url| is the URL which triggered the interstitial document.
   SecurityInterstitialPage(
       content::WebContents* web_contents,
       const GURL& request_url,
       std::unique_ptr<SecurityInterstitialControllerClient> controller);
+
+  SecurityInterstitialPage(const SecurityInterstitialPage&) = delete;
+  SecurityInterstitialPage& operator=(const SecurityInterstitialPage&) = delete;
+
   virtual ~SecurityInterstitialPage();
+
+  // Called when the interstitial is committed.
+  void OnInterstitialShown();
 
   // Prevents creating the actual interstitial view for testing.
   void DontCreateViewForTesting();
@@ -53,12 +60,21 @@ class SecurityInterstitialPage {
   // Invoked when the user interacts with the interstitial.
   virtual void CommandReceived(const std::string& command) {}
 
+  // If `this` was created for a post commit error page,
+  // `error_page_navigation_handle` is the navigation created for this blocking
+  // page.
+  virtual void CreatedPostCommitErrorPageNavigation(
+      content::NavigationHandle* error_page_navigation_handle) {}
+
+  // Returns the controller client handling this page.
+  SecurityInterstitialControllerClient* controller() const;
+
   // Return the interstitial type for testing.
   virtual TypeID GetTypeForTesting();
 
  protected:
   // Populates the strings used to generate the HTML from the template.
-  virtual void PopulateInterstitialStrings(base::Value* load_time_data) = 0;
+  virtual void PopulateInterstitialStrings(base::DictValue& load_time_data) = 0;
 
   virtual int GetHTMLTemplateId();
 
@@ -67,8 +83,6 @@ class SecurityInterstitialPage {
 
   content::WebContents* web_contents() const;
   GURL request_url() const;
-
-  SecurityInterstitialControllerClient* controller() const;
 
   // Update metrics when the interstitial is closed.
   void UpdateMetricsAfterSecurityInterstitial();
@@ -79,19 +93,16 @@ class SecurityInterstitialPage {
   // The WebContents with which this interstitial page is
   // associated. Not available in ~SecurityInterstitialPage, since it
   // can be destroyed before this class is destroyed.
-  content::WebContents* web_contents_;
+  base::WeakPtr<content::WebContents> web_contents_;
   const GURL request_url_;
   // Whether the interstitial should create a view.
   bool create_view_;
 
   // Store some data about the initial state of extended reporting opt-in.
-  bool on_show_extended_reporting_pref_exists_;
   bool on_show_extended_reporting_pref_value_;
 
   // For subclasses that don't have their own ControllerClients yet.
   std::unique_ptr<SecurityInterstitialControllerClient> controller_;
-
-  DISALLOW_COPY_AND_ASSIGN(SecurityInterstitialPage);
 };
 
 }  // security_interstitials

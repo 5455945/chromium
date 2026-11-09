@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "net/cert/cert_status_flags.h"
 #include "net/cert/x509_certificate.h"
 
@@ -40,9 +39,11 @@ class ErrorInfo {
     CERT_PINNED_KEY_MISSING = 13,
     CERT_VALIDITY_TOO_LONG = 14,
     CERTIFICATE_TRANSPARENCY_REQUIRED = 15,
-    CERT_SYMANTEC_LEGACY = 16,
+    // CERT_SYMANTEC_LEGACY = 16,
     CERT_KNOWN_INTERCEPTION_BLOCKED = 17,
     LEGACY_TLS = 18,
+    CERT_NON_UNIQUE_NAME = 19,
+    CERT_SELF_SIGNED_LOCAL_NETWORK = 20,
     END_OF_ENUM
   };
 

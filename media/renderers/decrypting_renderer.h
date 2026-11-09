@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,10 +7,12 @@
 
 #include <memory>
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/sequenced_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "media/base/pipeline.h"
 #include "media/base/renderer.h"
 
@@ -29,15 +31,16 @@ class RendererClient;
 // implementation.
 //
 // All methods are pass-through except Initialize() and SetCdm().
-//
-// The caller must guarantee that DecryptingRenderer will never be initialized
-// with a |media_resource| of type MediaResource::Type::URL.
 class MEDIA_EXPORT DecryptingRenderer : public Renderer {
  public:
   DecryptingRenderer(
       std::unique_ptr<Renderer> renderer,
       MediaLog* media_log,
-      const scoped_refptr<base::SingleThreadTaskRunner> media_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner> media_task_runner);
+
+  DecryptingRenderer(const DecryptingRenderer&) = delete;
+  DecryptingRenderer& operator=(const DecryptingRenderer&) = delete;
+
   ~DecryptingRenderer() override;
 
   // Renderer implementation:
@@ -45,21 +48,20 @@ class MEDIA_EXPORT DecryptingRenderer : public Renderer {
                   RendererClient* client,
                   PipelineStatusCallback init_cb) override;
   void SetCdm(CdmContext* cdm_context, CdmAttachedCB cdm_attached_cb) override;
-  void SetLatencyHint(absl::optional<base::TimeDelta> latency_hint) override;
+  void SetLatencyHint(std::optional<base::TimeDelta> latency_hint) override;
   void SetPreservesPitch(bool preserves_pitch) override;
-  void SetAutoplayInitiated(bool autoplay_initiated) override;
+  void SetWasPlayedWithUserActivationAndHighMediaEngagement(
+      bool was_played_with_user_activation_and_high_media_engagement) override;
 
   void Flush(base::OnceClosure flush_cb) override;
   void StartPlayingFrom(base::TimeDelta time) override;
   void SetPlaybackRate(double playback_rate) override;
   void SetVolume(float volume) override;
   base::TimeDelta GetMediaTime() override;
-  void OnSelectedVideoTracksChanged(
-      const std::vector<DemuxerStream*>& enabled_tracks,
-      base::OnceClosure change_completed_cb) override;
-  void OnEnabledAudioTracksChanged(
-      const std::vector<DemuxerStream*>& enabled_tracks,
-      base::OnceClosure change_completed_cb) override;
+  void OnTracksChanged(DemuxerStream::Type track_type,
+                       DemuxerStream* enabled_track,
+                       base::OnceClosure change_completed_cb) override;
+  RendererType GetRendererType() override;
 
   bool HasDecryptingMediaResourceForTesting() const;
 
@@ -76,20 +78,17 @@ class MEDIA_EXPORT DecryptingRenderer : public Renderer {
   void OnWaiting(WaitingReason reason);
 
   const std::unique_ptr<Renderer> renderer_;
-  MediaLog* const media_log_;
-  const scoped_refptr<base::SingleThreadTaskRunner> media_task_runner_;
-
+  const std::unique_ptr<MediaLog> media_log_;
+  const scoped_refptr<base::SequencedTaskRunner> media_task_runner_;
   bool waiting_for_cdm_ = false;
-  CdmContext* cdm_context_ = nullptr;
-  RendererClient* client_;
-  MediaResource* media_resource_;
+  raw_ptr<CdmContext> cdm_context_ = nullptr;
+  raw_ptr<RendererClient> client_;
+  raw_ptr<MediaResource> media_resource_;
   PipelineStatusCallback init_cb_;
 
   std::unique_ptr<DecryptingMediaResource> decrypting_media_resource_;
 
   base::WeakPtrFactory<DecryptingRenderer> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DecryptingRenderer);
 };
 
 }  // namespace media

@@ -1,16 +1,34 @@
-# Copyright 2014 The Chromium Authors. All rights reserved.
+# Copyright 2014 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/compiler/pgo/pgo.gni")
+import("//build/config/devtools.gni")
 import("//components/viz/common/debugger/viz_debugger.gni")
+import("//content/browser/devtools/features.gni")
+import("//device/bluetooth/emulation/buildflags.gni")
+import("//third_party/blink/public/public_features.gni")
 import("//third_party/inspector_protocol/inspector_protocol.gni")
 import("//third_party/protobuf/proto_library.gni")
 import("//tools/grit/grit_rule.gni")
 
-# Android and Fuchsia do not support DevTools front-end.
-if (!is_android && !is_fuchsia) {
+if (enable_devtools_frontend) {
+  source_set("devtools_resources_extern") {
+    sources = [ "devtools_resources.cc" ]
+
+    # This is to remove unnecessary dependency from compiles of targets depends
+    # on this target to grit action.
+    public = []
+
+    deps = [
+      ":devtools_resources",
+      "//base",
+      "//ui/base",
+    ]
+  }
+
   grit("devtools_resources") {
-    source = "$root_gen_dir/third_party/devtools-frontend/src/front_end/devtools_resources.grd"
+    source = "$root_gen_dir/$devtools_grd_location"
 
     # Required because the .grd is generated.
     enable_input_discovery_for_gn_analyze = false
@@ -39,17 +57,23 @@ if (!is_android && !is_fuchsia) {
   }
 }
 
-# Here we concatenate the viz_debugger.pdl into our browser protocol.
-# This technique is nearly identical to what is done for cros_protocol.pdl in chrome/browser/devtools
+# Here we concatenate the viz_debugger.pdl and native_profiling.pdl
+# into our browser protocol. This technique is nearly identical to what is
+# done for cros_protocol.pdl in chrome/browser/devtools
 _concatenated_protocol_path =
     "$root_gen_dir/content/browser/devtools/protocol.json"
+
 action("concatenate_protocols") {
   script = "//third_party/inspector_protocol/concatenate_protocols.py"
   deps = [ "//third_party/blink/public/devtools_protocol:protocol_version" ]
 
   _blink_protocol_path =
       "$root_gen_dir/third_party/blink/public/devtools_protocol/protocol.json"
-  inputs = [ _blink_protocol_path ]
+  inputs = [
+    _blink_protocol_path,
+    "//v8/include/js_protocol.pdl",
+    "//third_party/inspector_protocol/pdl.py",
+  ]
   output_file = _concatenated_protocol_path
   outputs = [ output_file ]
 
@@ -58,6 +82,12 @@ action("concatenate_protocols") {
     _visual_debugger_pdl = "//components/viz/common/debugger/viz_debugger.pdl"
     inputs += [ _visual_debugger_pdl ]
     args += [ rebase_path(_visual_debugger_pdl, root_build_dir) ]
+  }
+
+  if (use_clang_profiling_inside_sandbox && chrome_pgo_phase == 1) {
+    native_profiling_pdl = "//content/browser/native_profiling.pdl"
+    inputs += [ native_profiling_pdl ]
+    args += [ rebase_path(native_profiling_pdl, root_build_dir) ]
   }
 
   args += [ rebase_path(output_file, root_build_dir) ]
@@ -71,6 +101,7 @@ inspector_protocol_generate("protocol_sources") {
   config_file = "protocol_config.json"
   protocol_path = rebase_path(_concatenated_protocol_path, root_build_dir)
   config_values = [ "protocol.path=$protocol_path" ]
+  use_embedder_types = true
 
   inputs = [
     _concatenated_protocol_path,
@@ -83,16 +114,26 @@ inspector_protocol_generate("protocol_sources") {
     "protocol/audits.h",
     "protocol/background_service.cc",
     "protocol/background_service.h",
-    "protocol/base_string_adapter.cc",
-    "protocol/base_string_adapter.h",
     "protocol/browser.cc",
     "protocol/browser.h",
+    "protocol/device_access.cc",
+    "protocol/device_access.h",
+    "protocol/device_orientation.cc",
+    "protocol/device_orientation.h",
+    "protocol/digital_credentials.cc",
+    "protocol/digital_credentials.h",
     "protocol/dom.cc",
     "protocol/dom.h",
+    "protocol/debugger.cc",
+    "protocol/debugger.h",
     "protocol/emulation.cc",
     "protocol/emulation.h",
+    "protocol/fed_cm.cc",
+    "protocol/fed_cm.h",
     "protocol/fetch.cc",
     "protocol/fetch.h",
+    "protocol/find_in_page.cc",
+    "protocol/find_in_page.h",
     "protocol/forward.h",
     "protocol/input.cc",
     "protocol/input.h",
@@ -110,7 +151,8 @@ inspector_protocol_generate("protocol_sources") {
     "protocol/overlay.h",
     "protocol/page.cc",
     "protocol/page.h",
-    "protocol/protocol.cc",
+    "protocol/preload.cc",
+    "protocol/preload.h",
     "protocol/protocol.h",
     "protocol/runtime.cc",
     "protocol/runtime.h",
@@ -130,6 +172,8 @@ inspector_protocol_generate("protocol_sources") {
     "protocol/tethering.h",
     "protocol/tracing.cc",
     "protocol/tracing.h",
+    "protocol/web_mcp.cc",
+    "protocol/web_mcp.h",
     "protocol/web_authn.cc",
     "protocol/web_authn.h",
   ]
@@ -138,6 +182,27 @@ inspector_protocol_generate("protocol_sources") {
     outputs += [
       "protocol/visual_debugger.cc",
       "protocol/visual_debugger.h",
+    ]
+  }
+
+  if (chrome_pgo_phase == 1) {
+    outputs += [
+      "protocol/native_profiling.cc",
+      "protocol/native_profiling.h",
+    ]
+  }
+
+  if (enable_bluetooth_emulation) {
+    outputs += [
+      "protocol/bluetooth_emulation.cc",
+      "protocol/bluetooth_emulation.h",
+    ]
+  }
+
+  if (enable_smart_card) {
+    outputs += [
+      "protocol/smart_card_emulation.cc",
+      "protocol/smart_card_emulation.h",
     ]
   }
 }

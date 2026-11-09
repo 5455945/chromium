@@ -1,11 +1,21 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_CHROME_EXTENSION_HOST_DELEGATE_H_
 #define CHROME_BROWSER_EXTENSIONS_CHROME_EXTENSION_HOST_DELEGATE_H_
 
+#include <memory>
+
+#include "base/memory/weak_ptr.h"
 #include "extensions/browser/extension_host_delegate.h"
+#include "extensions/buildflags/buildflags.h"
+#include "extensions/common/extension_id.h"
+#include "ui/base/mojom/window_open_disposition.mojom-forward.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+
+class BrowserWindowInterface;
 
 namespace extensions {
 
@@ -17,26 +27,36 @@ class ChromeExtensionHostDelegate : public ExtensionHostDelegate {
 
   // ExtensionHostDelegate implementation.
   void OnExtensionHostCreated(content::WebContents* web_contents) override;
-  void OnMainFrameCreatedForBackgroundPage(ExtensionHost* host) override;
-  content::JavaScriptDialogManager* GetJavaScriptDialogManager() override;
   void CreateTab(std::unique_ptr<content::WebContents> web_contents,
-                 const std::string& extension_id,
-                 WindowOpenDisposition disposition,
-                 const gfx::Rect& initial_rect,
+                 const GURL& target_url,
+                 const ExtensionId& extension_id,
+                 ui::mojom::WindowOpenDisposition disposition,
+                 const blink::mojom::WindowFeatures& window_features,
                  bool user_gesture) override;
   void ProcessMediaAccessRequest(content::WebContents* web_contents,
                                  const content::MediaStreamRequest& request,
                                  content::MediaResponseCallback callback,
                                  const Extension* extension) override;
   bool CheckMediaAccessPermission(content::RenderFrameHost* render_frame_host,
-                                  const GURL& security_origin,
+                                  const url::Origin& security_origin,
                                   blink::mojom::MediaStreamType type,
                                   const Extension* extension) override;
   content::PictureInPictureResult EnterPictureInPicture(
-      content::WebContents* web_contents,
-      const viz::SurfaceId& surface_id,
-      const gfx::Size& natural_size) override;
+      content::WebContents* web_contents) override;
   void ExitPictureInPicture() override;
+
+ private:
+  // Callback function for `CreateTab()`.
+  void NavigateBrowser(bool browser_created,
+                       std::unique_ptr<content::WebContents> web_contents,
+                       GURL target_url,
+                       ExtensionId extension_id,
+                       ui::mojom::WindowOpenDisposition disposition,
+                       blink::mojom::WindowFeatures window_features,
+                       bool user_gesture,
+                       BrowserWindowInterface* browser);
+
+  base::WeakPtrFactory<ChromeExtensionHostDelegate> weak_factory_{this};
 };
 
 }  // namespace extensions

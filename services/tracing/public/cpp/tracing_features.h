@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,11 @@
 #ifndef SERVICES_TRACING_PUBLIC_CPP_TRACING_FEATURES_H_
 #define SERVICES_TRACING_PUBLIC_CPP_TRACING_FEATURES_H_
 
+#include <stddef.h>
+
 #include "base/component_export.h"
 #include "base/feature_list.h"
+#include "base/metrics/field_trial_params.h"
 
 namespace features {
 
@@ -19,22 +22,42 @@ extern const COMPONENT_EXPORT(TRACING_CPP) base::Feature
     kTracingServiceInProcess;
 
 extern const COMPONENT_EXPORT(TRACING_CPP) base::Feature
-    kBackgroundTracingProtoOutput;
-
-extern const COMPONENT_EXPORT(TRACING_CPP) base::Feature
     kEnablePerfettoSystemTracing;
 
 extern const COMPONENT_EXPORT(TRACING_CPP) base::Feature
-    kEnablePerfettoClientApiProducer;
+    kEnablePerfettoSystemBackgroundTracing;
+
+COMPONENT_EXPORT(TRACING_CPP)
+BASE_DECLARE_FEATURE_PARAM(int, kPerfettoSMBPageSizeBytes);
+
+COMPONENT_EXPORT(TRACING_CPP)
+BASE_DECLARE_FEATURE_PARAM(int, kPerfettoSharedMemorySizeBytes);
+
+COMPONENT_EXPORT(TRACING_CPP)
+BASE_DECLARE_FEATURE_PARAM(int, kPerfettoBrowserSharedMemorySizeBytes);
 
 }  // namespace features
 
 namespace tracing {
 
+// TODO(crbug.com/40574594): Figure out a good buffer size.
+inline constexpr size_t kDefaultSharedMemorySizeBytes =
+    4 * 1024 * 1024;  // 4 MB
+
+inline constexpr size_t kDefaultBrowserSharedMemorySizeBytes =
+    32 * 1024 * 1024;  // 32 MB
+
+inline constexpr size_t kDefaultSMBPageSizeBytes = 4 * 1024;
+
 // Returns true if the system tracing Perfetto producer should be setup. This
 // can be influenced by the feature above or other situations (like debug
 // android builds).
+// This function is safe to call even if feature flags are not yet initialized.
 bool COMPONENT_EXPORT(TRACING_CPP) ShouldSetupSystemTracing();
+
+// Returns true if the system tracing backend is available for background
+// tracing scenarios.
+bool COMPONENT_EXPORT(TRACING_CPP) SystemBackgroundTracingEnabled();
 
 }  // namespace tracing
 

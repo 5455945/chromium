@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -44,10 +44,8 @@ size_t GetMessageLength(uint8_t status_byte) {
     case 0xfe:
     case 0xff:
       return 1;
-    default:
-      NOTREACHED();
-      return 0;
   }
+  NOTREACHED();
 }
 
 bool IsDataByte(uint8_t data) {
@@ -80,7 +78,7 @@ bool IsValidWebMIDIData(const std::vector<uint8_t>& data) {
       if (data[i] == kEndOfSysExByte) {
         in_sysex = false;
         UMA_HISTOGRAM_COUNTS_1M("Media.Midi.SysExMessageSizeUpTo1MB",
-                                static_cast<base::HistogramBase::Sample>(
+                                static_cast<base::HistogramBase::Sample32>(
                                     i - sysex_start_offset + 1));
       } else if (!IsDataByte(current)) {
         return false;  // Error: |current| should have been data byte.

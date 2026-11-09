@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -43,9 +43,8 @@ String FontVariantEastAsian::ToString(EastAsianWidth width) {
 }
 
 String FontVariantEastAsian::ToString() const {
-  return String::Format(
-      "form=%s, width=%s, ruby=%s", ToString(Form()).Ascii().c_str(),
-      ToString(Width()).Ascii().c_str(), Ruby() ? "true" : "false");
+  return StrCat({"form=", ToString(Form()), ", width=", ToString(Width()),
+                 ", ruby=", String::Boolean(Ruby())});
 }
 
 }  // namespace blink

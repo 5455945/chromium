@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,10 +6,9 @@
 #define CONTENT_PUBLIC_BROWSER_NETWORK_CONTEXT_CLIENT_BASE_H_
 
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "content/common/content_export.h"
-#include "mojo/public/cpp/bindings/pending_remote.h"
-#include "services/network/public/mojom/network_context.mojom.h"
+#include "services/network/public/cpp/network_service_buildflags.h"
+#include "services/network/public/mojom/network_context_client.mojom.h"
 
 namespace content {
 
@@ -23,17 +22,18 @@ class CONTENT_EXPORT NetworkContextClientBase
   ~NetworkContextClientBase() override;
 
   // network::mojom::NetworkContextClient implementation:
-  void OnFileUploadRequested(int32_t process_id,
+  void OnFileUploadRequested(const network::OriginatingProcessId& process_id,
                              bool async,
                              const std::vector<base::FilePath>& file_paths,
+                             const GURL& destination_url,
                              OnFileUploadRequestedCallback callback) override;
   void OnCanSendReportingReports(
       const std::vector<url::Origin>& origins,
       OnCanSendReportingReportsCallback callback) override;
   void OnCanSendDomainReliabilityUpload(
-      const GURL& origin,
+      const url::Origin& origin,
       OnCanSendDomainReliabilityUploadCallback callback) override;
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   void OnGenerateHttpNegotiateAuthToken(
       const std::string& server_auth_token,
       bool can_delegate,
@@ -41,12 +41,11 @@ class CONTENT_EXPORT NetworkContextClientBase
       const std::string& spn,
       OnGenerateHttpNegotiateAuthTokenCallback callback) override;
 #endif
-#if BUILDFLAG(IS_CHROMEOS_ASH)
-  void OnTrustAnchorUsed() override;
+#if BUILDFLAG(IS_CT_SUPPORTED)
+  void OnCanSendSCTAuditingReport(
+      OnCanSendSCTAuditingReportCallback callback) override;
+  void OnNewSCTAuditingReportSent() override;
 #endif
-  void OnTrustTokenIssuanceDivertedToSystem(
-      network::mojom::FulfillTrustTokenIssuanceRequestPtr request,
-      OnTrustTokenIssuanceDivertedToSystemCallback callback) override;
 };
 
 }  // namespace content

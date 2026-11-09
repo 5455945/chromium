@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,49 +7,38 @@ package org.chromium.chrome.browser.compositor.layouts.components;
 import android.content.Context;
 import android.content.res.Resources;
 import android.graphics.Color;
-import android.graphics.RectF;
 
-import org.chromium.base.MathUtils;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.cc.input.OffsetTag;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /**
- * {@link LayoutTab} is used to keep track of a thumbnail's bitmap and position and to
- * draw itself onto the GL canvas at the desired Y Offset.
+ * {@link LayoutTab} is used to keep track of a thumbnail's bitmap and position and to draw itself
+ * onto the GL canvas at the desired Y Offset.
  */
+@NullMarked
 public class LayoutTab extends PropertyModel {
-    public static final float ALPHA_THRESHOLD = 1.0f / 255.0f;
-
-    // TODO(crbug.com/1070284): Make the following properties be part of the PropertyModel.
+    // TODO(crbug.com/40126260): Make the following properties be part of the PropertyModel.
     // Begin section --------------
     // Public Layout constants.
-    public static final float CLOSE_BUTTON_WIDTH_DP = 36.f;
     public static final float SHADOW_ALPHA_ON_LIGHT_BG = 0.8f;
     public static final float SHADOW_ALPHA_ON_DARK_BG = 1.0f;
 
     public static float sDpToPx;
     private static float sPxToDp;
+
     // End section --------------
 
-    // TODO(crbug.com/1070284): Maybe make this a ReadableIntPropertyKey
+    // TODO(crbug.com/40126260): Maybe make this a ReadableIntPropertyKey
     public static final WritableIntPropertyKey TAB_ID = new WritableIntPropertyKey();
 
-    // TODO(crbug.com/1070284): Maybe make this a ReadableIntPropertyKey
+    // TODO(crbug.com/40126260): Maybe make this a ReadableIntPropertyKey
     public static final WritableBooleanPropertyKey IS_INCOGNITO = new WritableBooleanPropertyKey();
 
     // Fields initialized in init()
     public static final WritableFloatPropertyKey SCALE = new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey TILT_X_IN_DEGREES = new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey TILT_Y_IN_DEGREES = new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey TILT_X_PIVOT_OFFSET =
-            new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey TILT_Y_PIVOT_OFFSET =
-            new WritableFloatPropertyKey();
 
     public static final WritableFloatPropertyKey X = new WritableFloatPropertyKey();
 
@@ -59,24 +48,13 @@ public class LayoutTab extends PropertyModel {
 
     public static final WritableFloatPropertyKey RENDER_Y = new WritableFloatPropertyKey();
 
-    // The top left X offset of the clipped rectangle.
-    public static final WritableFloatPropertyKey CLIPPED_X = new WritableFloatPropertyKey();
-
-    // The top left Y offset of the clipped rectangle.
-    public static final WritableFloatPropertyKey CLIPPED_Y = new WritableFloatPropertyKey();
-
     public static final WritableFloatPropertyKey CLIPPED_WIDTH = new WritableFloatPropertyKey();
 
     public static final WritableFloatPropertyKey CLIPPED_HEIGHT = new WritableFloatPropertyKey();
 
     public static final WritableFloatPropertyKey ALPHA = new WritableFloatPropertyKey();
 
-    public static final WritableFloatPropertyKey SATURATION = new WritableFloatPropertyKey();
-
     public static final WritableFloatPropertyKey BORDER_ALPHA = new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey BORDER_CLOSE_BUTTON_ALPHA =
-            new WritableFloatPropertyKey();
 
     public static final WritableFloatPropertyKey BORDER_SCALE = new WritableFloatPropertyKey();
 
@@ -91,15 +69,6 @@ public class LayoutTab extends PropertyModel {
     public static final WritableFloatPropertyKey MAX_CONTENT_HEIGHT =
             new WritableFloatPropertyKey();
 
-    public static final WritableFloatPropertyKey STATIC_TO_VIEW_BLEND =
-            new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey BRIGHTNESS = new WritableFloatPropertyKey();
-
-    public static final WritableBooleanPropertyKey IS_VISIBLE = new WritableBooleanPropertyKey();
-
-    public static final WritableBooleanPropertyKey SHOULD_STALL = new WritableBooleanPropertyKey();
-
     public static final WritableBooleanPropertyKey CAN_USE_LIVE_TEXTURE =
             new WritableBooleanPropertyKey();
 
@@ -108,36 +77,10 @@ public class LayoutTab extends PropertyModel {
     public static final WritableBooleanPropertyKey ANONYMIZE_TOOLBAR =
             new WritableBooleanPropertyKey();
 
-    public static final WritableFloatPropertyKey TOOLBAR_ALPHA = new WritableFloatPropertyKey();
-
-    public static final WritableBooleanPropertyKey INSET_BORDER_VERTICAL =
-            new WritableBooleanPropertyKey();
-
-    public static final WritableFloatPropertyKey TOOLBAR_Y_OFFSET = new WritableFloatPropertyKey();
-
-    public static final WritableFloatPropertyKey SIDE_BORDER_SCALE = new WritableFloatPropertyKey();
-
-    public static final WritableBooleanPropertyKey CLOSE_BUTTON_IS_ON_RIGHT =
-            new WritableBooleanPropertyKey();
-
-    public static final WritableObjectPropertyKey<RectF> BOUNDS = new WritableObjectPropertyKey<>();
-
-    public static final WritableObjectPropertyKey<RectF> CLOSE_PLACEMENT =
-            new WritableObjectPropertyKey<>();
-
     /** Whether we need to draw the decoration (border, shadow, ..) at all. */
     public static final WritableFloatPropertyKey DECORATION_ALPHA = new WritableFloatPropertyKey();
 
-    /**
-     * Whether this tab need to have its title texture generated. As this is not a free operation
-     * knowing that we won't show it might save a few cycles and memory.
-     */
-    public static final WritableBooleanPropertyKey IS_TITLE_NEEDED =
-            new WritableBooleanPropertyKey();
-
-    /**
-     * Whether initFromHost() has been called since the last call to init().
-     */
+    /** Whether initFromHost() has been called since the last call to init(). */
     public static final WritableBooleanPropertyKey INIT_FROM_HOST_CALLED =
             new WritableBooleanPropertyKey();
 
@@ -154,51 +97,81 @@ public class LayoutTab extends PropertyModel {
     public static final WritableIntPropertyKey TEXT_BOX_BACKGROUND_COLOR =
             new WritableIntPropertyKey();
 
-    public static final WritableFloatPropertyKey TEXT_BOX_ALPHA = new WritableFloatPropertyKey();
-
     // End section --------------
 
-    public static final PropertyModel.WritableFloatPropertyKey CONTENT_OFFSET =
+    /**
+     * The x-offset for the content layer. Primarily used to offset in response to side-anchored UI.
+     */
+    public static final PropertyModel.WritableFloatPropertyKey CONTENT_OFFSET_X =
             new PropertyModel.WritableFloatPropertyKey();
 
-    public static final PropertyKey[] ALL_KEYS = new PropertyKey[] {TAB_ID, IS_INCOGNITO, SCALE,
-            TILT_X_IN_DEGREES, TILT_Y_IN_DEGREES, TILT_X_PIVOT_OFFSET, TILT_Y_PIVOT_OFFSET, X, Y,
-            RENDER_X, RENDER_Y, CLIPPED_X, CLIPPED_Y, CLIPPED_WIDTH, CLIPPED_HEIGHT, ALPHA,
-            SATURATION, BORDER_ALPHA, BORDER_CLOSE_BUTTON_ALPHA, BORDER_SCALE,
-            ORIGINAL_CONTENT_WIDTH_IN_DP, ORIGINAL_CONTENT_HEIGHT_IN_DP, MAX_CONTENT_WIDTH,
-            MAX_CONTENT_HEIGHT, STATIC_TO_VIEW_BLEND, BRIGHTNESS, IS_VISIBLE, SHOULD_STALL,
-            CAN_USE_LIVE_TEXTURE, SHOW_TOOLBAR, ANONYMIZE_TOOLBAR, TOOLBAR_ALPHA,
-            INSET_BORDER_VERTICAL, TOOLBAR_Y_OFFSET, SIDE_BORDER_SCALE, CLOSE_BUTTON_IS_ON_RIGHT,
-            BOUNDS, CLOSE_PLACEMENT, DECORATION_ALPHA, IS_TITLE_NEEDED, INIT_FROM_HOST_CALLED,
-            BACKGROUND_COLOR, TOOLBAR_BACKGROUND_COLOR, TEXT_BOX_BACKGROUND_COLOR, TEXT_BOX_ALPHA,
-            CONTENT_OFFSET};
+    /**
+     * The y-offset for the content layer. Primarily used to offset in response to the top controls.
+     */
+    public static final PropertyModel.WritableFloatPropertyKey CONTENT_OFFSET_Y =
+            new PropertyModel.WritableFloatPropertyKey();
+
+    public static final PropertyModel.WritableBooleanPropertyKey IS_ACTIVE_LAYOUT =
+            new WritableBooleanPropertyKey();
+
+    /** The tag indicating that this layer should be moved by viz. */
+    public static final PropertyModel.WritableObjectPropertyKey<OffsetTag> CONTENT_OFFSET_TAG =
+            new WritableObjectPropertyKey<>();
+
+    public static final PropertyKey[] ALL_KEYS =
+            new PropertyKey[] {
+                TAB_ID,
+                IS_INCOGNITO,
+                SCALE,
+                X,
+                Y,
+                RENDER_X,
+                RENDER_Y,
+                CLIPPED_WIDTH,
+                CLIPPED_HEIGHT,
+                ALPHA,
+                BORDER_ALPHA,
+                BORDER_SCALE,
+                ORIGINAL_CONTENT_WIDTH_IN_DP,
+                ORIGINAL_CONTENT_HEIGHT_IN_DP,
+                MAX_CONTENT_WIDTH,
+                MAX_CONTENT_HEIGHT,
+                CAN_USE_LIVE_TEXTURE,
+                SHOW_TOOLBAR,
+                ANONYMIZE_TOOLBAR,
+                DECORATION_ALPHA,
+                INIT_FROM_HOST_CALLED,
+                BACKGROUND_COLOR,
+                TOOLBAR_BACKGROUND_COLOR,
+                TEXT_BOX_BACKGROUND_COLOR,
+                CONTENT_OFFSET_X,
+                CONTENT_OFFSET_Y,
+                IS_ACTIVE_LAYOUT,
+                CONTENT_OFFSET_TAG
+            };
 
     /**
      * Default constructor for a {@link LayoutTab}.
      *
-     * @param tabId                   The id of the source {@link Tab}.
-     * @param isIncognito             Whether the tab in the in the incognito stack.
-     * @param maxContentTextureWidth  The maximum width for drawing the content in px.
+     * @param tabId The id of the source {@link Tab}.
+     * @param isIncognito Whether the tab in the in the incognito stack.
+     * @param maxContentTextureWidth The maximum width for drawing the content in px.
      * @param maxContentTextureHeight The maximum height for drawing the content in px.
-     * @param showCloseButton         Whether a close button should be displayed in the corner.
-     * @param isTitleNeeded           Whether that tab need a title texture. This is an
-     *                                optimization to save cycles and memory. This is
-     *                                ignored if the title texture is already set.
      */
-    public LayoutTab(int tabId, boolean isIncognito, int maxContentTextureWidth,
-            int maxContentTextureHeight, boolean showCloseButton, boolean isTitleNeeded) {
+    public LayoutTab(
+            int tabId,
+            boolean isIncognito,
+            int maxContentTextureWidth,
+            int maxContentTextureHeight) {
         super(ALL_KEYS);
 
         set(TAB_ID, tabId);
         set(IS_INCOGNITO, isIncognito);
-        set(BOUNDS, new RectF());
-        set(CLOSE_PLACEMENT, new RectF());
         set(BACKGROUND_COLOR, Color.WHITE);
         set(TOOLBAR_BACKGROUND_COLOR, 0xfff2f2f2);
         set(TEXT_BOX_BACKGROUND_COLOR, Color.WHITE);
-        set(TEXT_BOX_ALPHA, 1.0f);
 
-        init(maxContentTextureWidth, maxContentTextureHeight, showCloseButton, isTitleNeeded);
+        init(maxContentTextureWidth, maxContentTextureHeight);
     }
 
     /**
@@ -206,41 +179,22 @@ public class LayoutTab extends PropertyModel {
      *
      * @param maxContentTextureWidth  The maximum width of the page content in px.
      * @param maxContentTextureHeight The maximum height of the page content in px.
-     * @param showCloseButton         Whether to show the close button on the tab border.
-     * @param isTitleNeeded           Whether that tab need a title texture. This is an
-     *                                optimization to save cycles and memory. This is
-     *                                ignored if the title texture is already set.
      */
-    public void init(int maxContentTextureWidth, int maxContentTextureHeight,
-            boolean showCloseButton, boolean isTitleNeeded) {
+    public void init(int maxContentTextureWidth, int maxContentTextureHeight) {
         set(ALPHA, 1.0f);
-        set(SATURATION, 1.0f);
-        set(BRIGHTNESS, 1.0f);
         set(BORDER_ALPHA, 1.0f);
-        set(BORDER_CLOSE_BUTTON_ALPHA, showCloseButton ? 1.f : 0.f);
         set(BORDER_SCALE, 1.0f);
-        set(CLIPPED_X, 0.0f);
-        set(CLIPPED_Y, 0.0f);
         set(CLIPPED_WIDTH, Float.MAX_VALUE);
         set(CLIPPED_HEIGHT, Float.MAX_VALUE);
         set(SCALE, 1.0f);
-        set(TILT_X_IN_DEGREES, 0.0f);
-        set(TILT_Y_IN_DEGREES, 0.0f);
-        set(IS_VISIBLE, true);
         set(X, 0.0f);
         set(Y, 0.0f);
         set(RENDER_X, 0.0f);
         set(RENDER_Y, 0.0f);
-        set(STATIC_TO_VIEW_BLEND, 0.0f);
         set(DECORATION_ALPHA, 1.0f);
-        set(IS_TITLE_NEEDED, isTitleNeeded);
         set(CAN_USE_LIVE_TEXTURE, true);
         set(SHOW_TOOLBAR, false);
         set(ANONYMIZE_TOOLBAR, false);
-        set(TOOLBAR_ALPHA, 1.0f);
-        set(INSET_BORDER_VERTICAL, false);
-        set(TOOLBAR_Y_OFFSET, 0.f);
-        set(SIDE_BORDER_SCALE, 1.f);
         set(ORIGINAL_CONTENT_WIDTH_IN_DP, maxContentTextureWidth * sPxToDp);
         set(ORIGINAL_CONTENT_HEIGHT_IN_DP, maxContentTextureHeight * sPxToDp);
         set(MAX_CONTENT_WIDTH, maxContentTextureWidth * sPxToDp);
@@ -249,24 +203,22 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * Initializes the {@link LayoutTab} from data extracted from a {@link Tab}.
-     * As this function may be expensive and can be delayed we initialize it as a separately.
+     * Initializes the {@link LayoutTab} from data extracted from a {@link Tab}. As this function
+     * may be expensive and can be delayed we initialize it as a separately.
      *
-     * @param backgroundColor       The color of the page background.
-     * @param fallbackThumbnailId   The id of a cached thumbnail to show if the current
-     *                              thumbnail is unavailable, or {@link Tab.INVALID_TAB_ID}
-     *                              if none exists.
-     * @param shouldStall           Whether the tab should display a desaturated thumbnail and
-     *                              wait for the content layer to load.
-     * @param canUseLiveTexture     Whether the tab can use a live texture when being displayed.
+     * @param backgroundColor The color of the page background.
+     * @param canUseLiveTexture Whether the tab can use a live texture when being displayed.
+     * @param toolbarBackgroundColor The color of the toolbar background.
+     * @param textBoxBackgroundColor The color of the text box background.
      */
-    public void initFromHost(int backgroundColor, boolean shouldStall, boolean canUseLiveTexture,
-            int toolbarBackgroundColor, int textBoxBackgroundColor, float textBoxAlpha) {
+    public void initFromHost(
+            int backgroundColor,
+            boolean canUseLiveTexture,
+            int toolbarBackgroundColor,
+            int textBoxBackgroundColor) {
         set(BACKGROUND_COLOR, backgroundColor);
         set(TOOLBAR_BACKGROUND_COLOR, toolbarBackgroundColor);
         set(TEXT_BOX_BACKGROUND_COLOR, textBoxBackgroundColor);
-        set(TEXT_BOX_ALPHA, textBoxAlpha);
-        set(SHOULD_STALL, shouldStall);
         set(CAN_USE_LIVE_TEXTURE, canUseLiveTexture);
         set(INIT_FROM_HOST_CALLED, true);
     }
@@ -304,63 +256,6 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * @param tilt        The tilt angle around the X axis of the tab in degree.
-     * @param pivotOffset The offset of the X axis of the tilt pivot.
-     */
-    public void setTiltX(float tilt, float pivotOffset) {
-        set(TILT_X_IN_DEGREES, tilt);
-        set(TILT_X_PIVOT_OFFSET, pivotOffset);
-    }
-
-    /**
-     * @return The tilt angle around the X axis of the tab in degree.
-     */
-    public float getTiltX() {
-        return get(TILT_X_IN_DEGREES);
-    }
-
-    /**
-     * @return The offset of the X axis of the tilt pivot.
-     */
-    public float getTiltXPivotOffset() {
-        return get(TILT_X_PIVOT_OFFSET);
-    }
-
-    /**
-     * @param tilt        The tilt angle around the Y axis of the tab in degree.
-     * @param pivotOffset The offset of the Y axis of the tilt pivot.
-     */
-    public void setTiltY(float tilt, float pivotOffset) {
-        set(TILT_Y_IN_DEGREES, tilt);
-        set(TILT_Y_PIVOT_OFFSET, pivotOffset);
-    }
-
-    /**
-     * @return The tilt angle around the Y axis of the tab in degree.
-     */
-    public float getTiltY() {
-        return get(TILT_Y_IN_DEGREES);
-    }
-
-    /**
-     * @return The offset of the Y axis of the tilt pivot.
-     */
-    public float getTiltYPivotOffset() {
-        return get(TILT_Y_IN_DEGREES);
-    }
-
-    /**
-     * Set the clipping offset. This apply on the scaled content.
-     *
-     * @param clippedX The top left X offset of the clipped rectangle.
-     * @param clippedY The top left Y offset of the clipped rectangle.
-     */
-    public void setClipOffset(float clippedX, float clippedY) {
-        set(CLIPPED_X, clippedX);
-        set(CLIPPED_Y, clippedY);
-    }
-
-    /**
      * Set the clipping sizes. This apply on the scaled content.
      *
      * @param clippedWidth  The width of the clipped rectangle. Float.MAX_VALUE for no clipping.
@@ -369,20 +264,6 @@ public class LayoutTab extends PropertyModel {
     public void setClipSize(float clippedWidth, float clippedHeight) {
         set(CLIPPED_WIDTH, clippedWidth);
         set(CLIPPED_HEIGHT, clippedHeight);
-    }
-
-    /**
-     * @return The top left X offset of the clipped rectangle.
-     */
-    public float getClippedX() {
-        return get(CLIPPED_X);
-    }
-
-    /**
-     * @return The top left Y offset of the clipped rectangle.
-     */
-    public float getClippedY() {
-        return get(CLIPPED_Y);
     }
 
     /**
@@ -428,52 +309,10 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * @return The original unclamped width (not scaled) of the tab contents texture.
-     */
-    public float getUnclampedOriginalContentHeight() {
-        return get(ORIGINAL_CONTENT_HEIGHT_IN_DP);
-    }
-
-    /**
      * @return The width of the drawn content (clipped and scaled).
      */
     public float getFinalContentWidth() {
         return Math.min(get(CLIPPED_WIDTH), getScaledContentWidth());
-    }
-
-    /**
-     * @return The height of the drawn content (clipped and scaled).
-     */
-    public float getFinalContentHeight() {
-        return Math.min(get(CLIPPED_HEIGHT), getScaledContentHeight());
-    }
-
-    /**
-     * @return The maximum width the content can be.
-     */
-    public float getMaxContentWidth() {
-        return get(MAX_CONTENT_WIDTH);
-    }
-
-    /**
-     * @return The maximum height the content can be.
-     */
-    public float getMaxContentHeight() {
-        return get(MAX_CONTENT_HEIGHT);
-    }
-
-    /**
-     * @param width The maximum width the content can be.
-     */
-    public void setMaxContentWidth(float width) {
-        set(MAX_CONTENT_WIDTH, width);
-    }
-
-    /**
-     * @param height The maximum height the content can be.
-     */
-    public void setMaxContentHeight(float height) {
-        set(MAX_CONTENT_HEIGHT, height);
     }
 
     /**
@@ -551,22 +390,6 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * Set the saturation value for the tab contents.
-     *
-     * @param f The saturation value for the contents.
-     */
-    public void setSaturation(float f) {
-        set(SATURATION, f);
-    }
-
-    /**
-     * @return The saturation value for the tab contents.
-     */
-    public float getSaturation() {
-        return get(SCALE);
-    }
-
-    /**
      * @param alpha The maximum alpha value of the tab border.
      */
     public void setBorderAlpha(float alpha) {
@@ -584,21 +407,7 @@ public class LayoutTab extends PropertyModel {
      * @return The current alpha value at which the tab border inner shadow is drawn.
      */
     public float getBorderInnerShadowAlpha() {
-        return Math.min(get(BORDER_ALPHA) * (1.0f - get(TOOLBAR_ALPHA)), get(ALPHA));
-    }
-
-    /**
-     * @param alpha The maximum alpha value of the close button on the border.
-     */
-    public void setBorderCloseButtonAlpha(float alpha) {
-        set(BORDER_CLOSE_BUTTON_ALPHA, alpha);
-    }
-
-    /**
-     * @return The current alpha value at which the close button on the border is drawn.
-     */
-    public float getBorderCloseButtonAlpha() {
-        return get(BORDER_CLOSE_BUTTON_ALPHA);
+        return Math.min(0, get(ALPHA));
     }
 
     /**
@@ -631,115 +440,12 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * @param toolbarYOffset The y offset of the toolbar.
-     */
-    public void setToolbarYOffset(float toolbarYOffset) {
-        set(TOOLBAR_Y_OFFSET, toolbarYOffset);
-    }
-
-    /**
-     * @return The y offset of the toolbar.
-     */
-    public float getToolbarYOffset() {
-        return get(TOOLBAR_Y_OFFSET);
-    }
-
-    /**
-     * @param scale The scale of the side border (from 0 to 1).
-     */
-    public void setSideBorderScale(float scale) {
-        set(SIDE_BORDER_SCALE, MathUtils.clamp(scale, 0.f, 1.f));
-    }
-
-    /**
-     * @return The scale of the side border (from 0 to 1).
-     */
-    public float getSideBorderScale() {
-        return get(SIDE_BORDER_SCALE);
-    }
-
-    /**
-     * @param brightness The brightness value to apply to the tab.
-     */
-    public void setBrightness(float brightness) {
-        set(BRIGHTNESS, brightness);
-    }
-
-    /**
-     * @return The brightness of the tab.
-     */
-    public float getBrightness() {
-        return get(BRIGHTNESS);
-    }
-
-    /**
-     * @param drawDecoration Whether or not to draw decoration.
-     */
-    public void setDrawDecoration(boolean drawDecoration) {
-        set(DECORATION_ALPHA, drawDecoration ? 1.0f : 0.0f);
-    }
-
-    /**
-     * @param percentageView The blend between the old static tab and the new live one.
-     */
-    public void setStaticToViewBlend(float percentageView) {
-        set(STATIC_TO_VIEW_BLEND, percentageView);
-    }
-
-    /**
-     * @return The current blend between the old static tab and the new live one.
-     */
-    public float getStaticToViewBlend() {
-        return get(STATIC_TO_VIEW_BLEND);
-    }
-
-    @Override
-    public String toString() {
-        return Integer.toString(getId());
-    }
-
-    /**
-     * @param originalContentWidth  The maximum content width for the given orientation in px.
+     * @param originalContentWidth The maximum content width for the given orientation in px.
      * @param originalContentHeight The maximum content height for the given orientation in px.
      */
     public void setContentSize(int originalContentWidth, int originalContentHeight) {
         set(ORIGINAL_CONTENT_WIDTH_IN_DP, originalContentWidth * sPxToDp);
         set(ORIGINAL_CONTENT_HEIGHT_IN_DP, originalContentHeight * sPxToDp);
-    }
-
-    /**
-     * @return Whether the tab title should be displayed.
-     */
-    public boolean isTitleNeeded() {
-        return get(IS_TITLE_NEEDED);
-    }
-
-    /**
-     * @param visible True if the {@link LayoutTab} is visible and need to be drawn.
-     */
-    public void setVisible(boolean visible) {
-        set(IS_VISIBLE, visible);
-    }
-
-    /**
-     * @return True if the {@link LayoutTab} is visible and will be drawn.
-     */
-    public boolean isVisible() {
-        return get(IS_VISIBLE);
-    }
-
-    /**
-     * @param shouldStall Whether or not the tab should wait for the live layer to load.
-     */
-    public void setShouldStall(boolean shouldStall) {
-        set(SHOULD_STALL, shouldStall);
-    }
-
-    /**
-     * @return Whether or not the tab should wait for the live layer to load.
-     */
-    public boolean shouldStall() {
-        return get(SHOULD_STALL);
     }
 
     /**
@@ -782,42 +488,6 @@ public class LayoutTab extends PropertyModel {
     }
 
     /**
-     * @param alpha The alpha of the toolbar.
-     */
-    public void setToolbarAlpha(float alpha) {
-        set(TOOLBAR_ALPHA, alpha);
-    }
-
-    /**
-     * @return The alpha of the toolbar.
-     */
-    public float getToolbarAlpha() {
-        return get(TOOLBAR_ALPHA);
-    }
-
-    /**
-     * @param inset Whether or not to inset the top vertical component of the tab border or not.
-     */
-    public void setInsetBorderVertical(boolean inset) {
-        set(INSET_BORDER_VERTICAL, inset);
-    }
-
-    /**
-     * @return Whether or not to inset the top vertical component of the tab border or not.
-     */
-    public boolean insetBorderVertical() {
-        return get(INSET_BORDER_VERTICAL);
-    }
-
-    public void setCloseButtonIsOnRight(boolean closeButtonIsOnRight) {
-        set(CLOSE_BUTTON_IS_ON_RIGHT, closeButtonIsOnRight);
-    }
-
-    public boolean isCloseButtonOnRight() {
-        return get(CLOSE_BUTTON_IS_ON_RIGHT);
-    }
-
-    /**
      * @return The color of the background of the tab. Used as the best approximation to fill in.
      */
     public int getBackgroundColor() {
@@ -836,12 +506,5 @@ public class LayoutTab extends PropertyModel {
      */
     public int getTextBoxBackgroundColor() {
         return get(TEXT_BOX_BACKGROUND_COLOR);
-    }
-
-    /**
-     * @return The alpha value of the textbox in the toolbar.
-     */
-    public float getTextBoxAlpha() {
-        return get(TEXT_BOX_ALPHA);
     }
 }

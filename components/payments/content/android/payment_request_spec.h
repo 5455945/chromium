@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -35,7 +35,7 @@ class PaymentRequestSpec {
   // PaymentRequestSpec.destroy() has been called.
   static base::WeakPtr<payments::PaymentRequestSpec> FromJavaPaymentRequestSpec(
       JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jpayment_request_spec);
+      const base::android::JavaRef<jobject>& jpayment_request_spec);
 
   // Constructs the Android bridge with the given |spec|.
   explicit PaymentRequestSpec(
@@ -44,12 +44,11 @@ class PaymentRequestSpec {
   // Called when the renderer updates the payment details in response to, e.g.,
   // new shipping address.
   void UpdateWith(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jdetails_buffer);
+                  const base::android::JavaRef<jobject>& jdetails_buffer);
 
   // Called when the merchant retries a failed payment.
-  void Retry(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& jvalidation_errors_buffer);
+  void Retry(JNIEnv* env,
+             const base::android::JavaRef<jobject>& jvalidation_errors_buffer);
 
   // Recomputes spec based on details.
   void RecomputeSpecForDetails(JNIEnv* env);
@@ -70,11 +69,9 @@ class PaymentRequestSpec {
   // Returns the method data.
   base::android::ScopedJavaLocalRef<jobjectArray> GetMethodData(JNIEnv* env);
 
-  // Destroys this bridge.
-  void Destroy(JNIEnv* env);
+  ~PaymentRequestSpec();
 
  private:
-  ~PaymentRequestSpec();
 
   std::unique_ptr<payments::PaymentRequestSpec> spec_;
 };

@@ -1,20 +1,21 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef GPU_IPC_COMMON_SCHEDULING_PRIORITY_MOJOM_TRAITS_H_
 #define GPU_IPC_COMMON_SCHEDULING_PRIORITY_MOJOM_TRAITS_H_
 
+#include "base/notreached.h"
 #include "gpu/command_buffer/common/scheduling_priority.h"
-#include "gpu/gpu_export.h"
 #include "gpu/ipc/common/gpu_channel.mojom-shared.h"
+#include "gpu/ipc/common/gpu_ipc_common_export.h"
 #include "mojo/public/cpp/bindings/enum_traits.h"
 
 namespace mojo {
 
 template <>
-struct GPU_EXPORT
-    EnumTraits<gpu::mojom::SchedulingPriority, gpu::SchedulingPriority> {
+struct GPU_IPC_COMMON_EXPORT EnumTraits<gpu::mojom::SchedulingPriority,
+                                        gpu::SchedulingPriority> {
   static gpu::mojom::SchedulingPriority ToMojom(
       gpu::SchedulingPriority priority) {
     switch (priority) {
@@ -29,20 +30,17 @@ struct GPU_EXPORT
     }
   }
 
-  static bool FromMojom(gpu::mojom::SchedulingPriority priority,
-                        gpu::SchedulingPriority* out_priority) {
+  static gpu::SchedulingPriority FromMojom(
+      gpu::mojom::SchedulingPriority priority) {
     switch (priority) {
       case gpu::mojom::SchedulingPriority::kHigh:
-        *out_priority = gpu::SchedulingPriority::kHigh;
-        return true;
+        return gpu::SchedulingPriority::kHigh;
       case gpu::mojom::SchedulingPriority::kNormal:
-        *out_priority = gpu::SchedulingPriority::kNormal;
-        return true;
+        return gpu::SchedulingPriority::kNormal;
       case gpu::mojom::SchedulingPriority::kLow:
-        *out_priority = gpu::SchedulingPriority::kLow;
-        return true;
+        return gpu::SchedulingPriority::kLow;
       default:
-        return false;
+        NOTREACHED();
     }
   }
 };

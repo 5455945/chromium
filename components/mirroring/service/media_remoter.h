@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,25 +6,17 @@
 #define COMPONENTS_MIRRORING_SERVICE_MEDIA_REMOTER_H_
 
 #include "base/component_export.h"
-#include "base/macros.h"
-#include "media/cast/cast_config.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
 #include "media/mojo/mojom/remoting.mojom.h"
 #include "media/mojo/mojom/remoting_common.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
-
-namespace media {
-namespace cast {
-class CastEnvironment;
-class CastTransport;
-}  // namespace cast
-}  // namespace media
+#include "mojo/public/cpp/system/data_pipe.h"
 
 namespace mirroring {
 
-class MessageDispatcher;
-class ReceiverResponse;
-class RemotingSender;
+class RpcDispatcher;
 
 // MediaRemoter remotes media content directly to a Cast Receiver. When
 // MediaRemoter is started, it connects itself with a source tab in browser
@@ -45,7 +37,7 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) MediaRemoter final
  public:
   class Client {
    public:
-    virtual ~Client() {}
+    virtual ~Client() = default;
 
     // Connects the |remoter| with a source tab.
     virtual void ConnectToRemotingSource(
@@ -53,45 +45,57 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) MediaRemoter final
         mojo::PendingReceiver<media::mojom::RemotingSource>
             source_receiver) = 0;
 
-    // Requests to start remoting. StartRpcMessaging() / OnRemotingStartFailed()
+    // Requests to start remoting. OnRemotingStarted() / OnRemotingStartFailed()
     // will be called when starting succeeds / fails.
     virtual void RequestRemotingStreaming() = 0;
 
     // Requests to resume mirroring.
     virtual void RestartMirroringStreaming() = 0;
+
+    // Creates a RemotingDataStreamSender for the given data pipe. The client
+    // is responsible for providing the transport-specific sender
+    // implementation. Returns nullptr if the sender cannot be created (e.g.,
+    // no valid config or transport sender for the given stream type).
+    virtual std::unique_ptr<media::mojom::RemotingDataStreamSender>
+    CreateRemotingDataStreamSender(
+        bool is_audio,
+        mojo::ScopedDataPipeConsumerHandle pipe,
+        mojo::PendingReceiver<media::mojom::RemotingDataStreamSender> receiver,
+        base::OnceClosure error_callback) = 0;
   };
 
-  MediaRemoter(Client* client,
+  MediaRemoter(Client& client,
                const media::mojom::RemotingSinkMetadata& sink_metadata,
-               MessageDispatcher* message_dispatcher);
+               RpcDispatcher& rpc_dispatcher);
+
+  MediaRemoter(const MediaRemoter&) = delete;
+  MediaRemoter& operator=(const MediaRemoter&) = delete;
 
   ~MediaRemoter() override;
 
-  // Callback from |message_dispatcher_| for received RPC messages.
-  void OnMessageFromSink(const ReceiverResponse& response);
+  // Callback from |rpc_dispatcher_| for received RPC messages and errors.
+  void OnMessageFromSink(const std::vector<uint8_t>& response);
+  void OnRpcError();
 
   // Called when OFFER/ANSWER exchange for a remoting session succeeds.
-  void StartRpcMessaging(
-      scoped_refptr<media::cast::CastEnvironment> cast_environment,
-      media::cast::CastTransport* transport,
-      const media::cast::FrameSenderConfig& audio_config,
-      const media::cast::FrameSenderConfig& video_config);
+  void OnRemotingStarted();
 
   // Called when a mirroring session is successfully resumed.
-  void OnMirroringResumed();
+  void OnMirroringResumed(bool is_tab_switching = false);
 
   // Error occurred either during the start of remoting or in the middle of
   // remoting. In either case, this call fallbacks to mirroring, and prevents
   // further starting of media remoting during this mirroring session.
   void OnRemotingFailed();
 
-  // media::mojom::Remoter implememtation. Stops the current remoting session.
-  // This could be called either by the RemotingSource or the Session.
+  // media::mojom::Remoter implementation.
+  // Stops the current remoting session with a given |reason|.
   void Stop(media::mojom::RemotingStopReason reason) override;
 
  private:
-  // media::mojom::Remoter implememtation.
+  // media::mojom::Remoter implementation.
   void Start() override;
+  void StartWithPermissionAlreadyGranted() override;
   void StartDataStreams(
       mojo::ScopedDataPipeConsumerHandle audio_pipe,
       mojo::ScopedDataPipeConsumerHandle video_pipe,
@@ -100,25 +104,17 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) MediaRemoter final
       mojo::PendingReceiver<media::mojom::RemotingDataStreamSender>
           video_sender_receiver) override;
   void SendMessageToSink(const std::vector<uint8_t>& message) override;
-  void EstimateTransmissionCapacity(
-      media::mojom::Remoter::EstimateTransmissionCapacityCallback callback)
-      override;
-
-  // Called by RemotingSender when error occurred. Will stop this remoting
-  // session and fallback to mirroring.
+  // Called by RemotingDataStreamSender when error occurred. Will stop this
+  // remoting session and fallback to mirroring.
   void OnRemotingDataStreamError();
 
-  Client* const client_;  // Outlives this class.
+  raw_ref<Client> client_;
   const media::mojom::RemotingSinkMetadata sink_metadata_;
-  MessageDispatcher* const message_dispatcher_;  // Outlives this class.
+  raw_ref<RpcDispatcher> rpc_dispatcher_;
   mojo::Receiver<media::mojom::Remoter> receiver_{this};
   mojo::Remote<media::mojom::RemotingSource> remoting_source_;
-  scoped_refptr<media::cast::CastEnvironment> cast_environment_;
-  std::unique_ptr<RemotingSender> audio_sender_;
-  std::unique_ptr<RemotingSender> video_sender_;
-  media::cast::CastTransport* transport_;  // Outlives this class;
-  media::cast::FrameSenderConfig audio_config_;
-  media::cast::FrameSenderConfig video_config_;
+  std::unique_ptr<media::mojom::RemotingDataStreamSender> audio_sender_;
+  std::unique_ptr<media::mojom::RemotingDataStreamSender> video_sender_;
 
   // State transition diagram:
   //
@@ -144,8 +140,6 @@ class COMPONENT_EXPORT(MIRRORING_SERVICE) MediaRemoter final
   } state_;
 
   base::WeakPtrFactory<MediaRemoter> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(MediaRemoter);
 };
 
 }  // namespace mirroring

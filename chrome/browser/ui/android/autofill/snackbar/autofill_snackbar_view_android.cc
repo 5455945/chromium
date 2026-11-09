@@ -1,4 +1,4 @@
-// Copyright (c) 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,12 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
-#include "chrome/android/chrome_jni_headers/AutofillSnackbarController_jni.h"
+#include "third_party/jni_zero/jni_zero.h"
 #include "ui/android/view_android.h"
 #include "ui/android/window_android.h"
-#include "ui/base/resource/resource_bundle.h"
 
-using base::android::ConvertUTF16ToJavaString;
-using base::android::JavaParamRef;
-using base::android::JavaRef;
-using base::android::ScopedJavaLocalRef;
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/android/chrome_jni_headers/AutofillSnackbarController_jni.h"
 
 namespace autofill {
 
@@ -28,42 +25,44 @@ AutofillSnackbarView* AutofillSnackbarView::Create(
 }
 
 void AutofillSnackbarViewAndroid::Show() {
-  JNIEnv* env = base::android::AttachCurrentThread();
+  JNIEnv* env = jni_zero::AttachCurrentThread();
   ui::ViewAndroid* view_android =
       controller_->GetWebContents()->GetNativeView();
-  DCHECK(view_android);
+  CHECK(view_android, base::NotFatalUntil::M162);
   ui::WindowAndroid* window_android = view_android->GetWindowAndroid();
-  if (!window_android)
+  if (!window_android) {
     return;
+  }
 
   java_object_.Reset(Java_AutofillSnackbarController_create(
-      env, reinterpret_cast<intptr_t>(this), window_android->GetJavaObject()));
+      env, jni_zero::MakeRaw(this), window_android));
   Java_AutofillSnackbarController_show(
-      env, java_object_,
-      base::android::ConvertUTF16ToJavaString(env,
-                                              controller_->GetMessageText()),
-      base::android::ConvertUTF16ToJavaString(
-          env, controller_->GetActionButtonText()));
+      env, java_object_, controller_->GetMessageText(),
+      controller_->GetActionButtonText(),
+      static_cast<int>(controller_->GetDuration().InMilliseconds()),
+      controller_->GetSnackbarType());
 }
 
 void AutofillSnackbarViewAndroid::Dismiss() {
-  JNIEnv* env = base::android::AttachCurrentThread();
   if (!java_object_.is_null()) {
+    JNIEnv* env = jni_zero::AttachCurrentThread();
     Java_AutofillSnackbarController_dismiss(env, java_object_);
-  } else {
-    OnDismissed(env);
   }
-}
-
-void AutofillSnackbarViewAndroid::OnActionClicked(JNIEnv* env) {
-  controller_->OnActionClicked();
-}
-
-void AutofillSnackbarViewAndroid::OnDismissed(JNIEnv* env) {
-  controller_->OnDismissed();
   delete this;
+}
+
+void AutofillSnackbarViewAndroid::OnActionClicked() {
+  AutofillSnackbarController* const controller = controller_;
+  controller->OnActionClicked();
+}
+
+void AutofillSnackbarViewAndroid::OnDismissed() {
+  AutofillSnackbarController* const controller = controller_;
+  controller->OnDismissed();
 }
 
 AutofillSnackbarViewAndroid::~AutofillSnackbarViewAndroid() = default;
 
 }  // namespace autofill
+
+DEFINE_JNI(AutofillSnackbarController)

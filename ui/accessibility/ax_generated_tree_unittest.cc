@@ -1,23 +1,45 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <array>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <vector>
 
-#include "base/cxx17_backports.h"
 #include "base/strings/string_number_conversions.h"
 #include "build/build_config.h"
+#include "testing/gtest/include/gtest/gtest-param-test.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_serializable_tree.h"
 #include "ui/accessibility/ax_tree.h"
 #include "ui/accessibility/ax_tree_serializer.h"
+#include "ui/accessibility/ax_tree_update.h"
 #include "ui/accessibility/tree_generator.h"
 
 namespace ui {
 namespace {
+
+// Do a more exhaustive test in release mode. If you're modifying
+// the algorithm you may want to try even larger tree sizes if you
+// can afford the time.
+#ifdef NDEBUG
+constexpr int kMax_tree_size = 4;
+#else
+constexpr int kMax_tree_size = 3;
+#endif
+
+// We split the test into four by splitting the two nested loops that builds the
+// trees. To do so, we need to know the maximum number of (permuted) trees.
+constexpr int kMax_number_of_trees0 =
+    TreeGenerator::ComputeUniqueTreeCount(kMax_tree_size,
+                                          /* permutations */ false);
+constexpr int kMax_number_of_trees1 =
+    TreeGenerator::ComputeUniqueTreeCount(kMax_tree_size,
+                                          /* permutations */ true);
 
 // A function to turn a tree into a string, capturing only the node ids
 // and their relationship to one another.
@@ -38,7 +60,7 @@ std::string TreeToStringHelper(const AXNode* node) {
     result += "x";
   if (node->children().empty())
     return result;
-  const auto add_children = [](const std::string& str, const auto* node) {
+  const auto add_children = [](const std::string& str, const AXNode* node) {
     return str + " " + TreeToStringHelper(node);
   };
   return result + " (" +
@@ -53,9 +75,11 @@ std::string TreeToString(const AXTree& tree) {
 }
 
 AXTreeUpdate SerializeEntireTree(AXSerializableTree& tree) {
-  std::unique_ptr<AXTreeSource<const AXNode*>> tree_source(
-      tree.CreateTreeSource());
-  AXTreeSerializer<const AXNode*> serializer(tree_source.get());
+  std::unique_ptr<AXTreeSource<const AXNode*, AXTreeData*, AXNodeData>>
+      tree_source(tree.CreateTreeSource());
+  AXTreeSerializer<const AXNode*, std::vector<const AXNode*>, AXTreeUpdate*,
+                   AXTreeData*, AXNodeData>
+      serializer(tree_source.get());
   AXTreeUpdate update;
   CHECK(serializer.SerializeChanges(tree.root(), &update));
   return update;
@@ -67,11 +91,11 @@ AXTreeUpdate MakeTreeUpdateFromIgnoredChanges(AXSerializableTree& tree0,
                                               AXSerializableTree& tree1) {
   AXTreeUpdate update = SerializeEntireTree(tree1);
   AXTreeUpdate result;
-  for (size_t i = 0; i < update.nodes.size(); i++) {
-    AXNode* tree0_node = tree0.GetFromId(update.nodes[i].id);
-    AXNode* tree1_node = tree1.GetFromId(update.nodes[i].id);
+  for (auto& node : update.nodes) {
+    AXNode* tree0_node = tree0.GetFromId(node.id);
+    AXNode* tree1_node = tree1.GetFromId(node.id);
     if (tree0_node->IsIgnored() != tree1_node->IsIgnored())
-      result.nodes.push_back(update.nodes[i]);
+      result.nodes.push_back(node);
   }
   return result;
 }
@@ -98,7 +122,7 @@ void MakeTreeOfUnignoredNodesOnly(AXSerializableTree& src,
   CHECK(dst->Unserialize(update));
 }
 
-}  // anonymous namespace
+}  // namespace
 
 // Test the TreeGenerator class by building all possible trees with
 // 3 nodes and the ids [1...3], with no permutations of ids.
@@ -106,16 +130,16 @@ TEST(AXGeneratedTreeTest, TestTreeGeneratorNoPermutations) {
   int tree_size = 3;
   TreeGenerator generator(tree_size, false);
   // clang-format off
-  const char* EXPECTED_TREES[] = {
+  auto EXPECTED_TREES = std::to_array<const char *>({
     "(1)",
     "(1 (2))",
     "(1 (2 3))",
     "(1 (2 (3)))",
-  };
+  });
   // clang-format on
 
   int n = generator.UniqueTreeCount();
-  ASSERT_EQ(static_cast<int>(base::size(EXPECTED_TREES)), n);
+  ASSERT_EQ(static_cast<int>(std::size(EXPECTED_TREES)), n);
 
   for (int i = 0; i < n; ++i) {
     AXTree tree;
@@ -130,7 +154,7 @@ TEST(AXGeneratedTreeTest, TestGeneratingTreesWithIgnoredNodes) {
   int tree_size = 3;
   TreeGenerator generator(tree_size, false);
   // clang-format off
-  const char* EXPECTED_TREES[] = {
+  auto EXPECTED_TREES = std::to_array<const char *>({
       "(1)",
       "(1 (2))",
       "(1 (2x))",
@@ -142,7 +166,7 @@ TEST(AXGeneratedTreeTest, TestGeneratingTreesWithIgnoredNodes) {
       "(1 (2x (3)))",
       "(1 (2 (3x)))",
       "(1 (2x (3x)))",
-  };
+  });
   // clang-format on
 
   int n = generator.UniqueTreeCount();
@@ -152,7 +176,8 @@ TEST(AXGeneratedTreeTest, TestGeneratingTreesWithIgnoredNodes) {
         generator.IgnoredPermutationCountPerUniqueTree(i);
     for (int j = 0; j < ignored_permutation_count; j++) {
       AXTree tree;
-      generator.BuildUniqueTreeWithIgnoredNodes(i, j, &tree);
+      generator.BuildUniqueTreeWithIgnoredNodes(
+          i, j, /* focused_node */ std::nullopt, &tree);
       std::string str = TreeToString(tree);
       EXPECT_EQ(EXPECTED_TREES[expected_index++], str);
     }
@@ -166,7 +191,7 @@ TEST(AXGeneratedTreeTest, TestTreeGeneratorWithPermutations) {
   int tree_size = 3;
   TreeGenerator generator(tree_size, true);
   // clang-format off
-  const char* EXPECTED_TREES[] = {
+  auto EXPECTED_TREES = std::to_array<const char *>({
     "(1)",
     "(1 (2))",
     "(2 (1))",
@@ -182,11 +207,11 @@ TEST(AXGeneratedTreeTest, TestTreeGeneratorWithPermutations) {
     "(1 (3 (2)))",
     "(2 (3 (1)))",
     "(3 (2 (1)))",
-  };
+  });
   // clang-format on
 
   int n = generator.UniqueTreeCount();
-  ASSERT_EQ(static_cast<int>(base::size(EXPECTED_TREES)), n);
+  ASSERT_EQ(static_cast<int>(std::size(EXPECTED_TREES)), n);
 
   for (int i = 0; i < n; i++) {
     AXTree tree;
@@ -196,45 +221,39 @@ TEST(AXGeneratedTreeTest, TestTreeGeneratorWithPermutations) {
   }
 }
 
-// Test mutating every possible tree with <n> nodes to every other possible
-// tree with <n> nodes, where <n> is 4 in release mode and 3 in debug mode
-// (for speed). For each possible combination of trees, we also vary which
-// node we serialize first.
-//
-// For every possible scenario, we check that the AXTreeUpdate is valid,
-// that the destination tree can unserialize it and create a valid tree,
-// and that after updating all nodes the resulting tree now matches the
-// intended tree.
-//
-// Sheriffs: this test is actually very stable and reliable, but it's
-// cpu-bound so under extremely heavy load it sometimes times out even
-// though it only takes 1 - 2 seconds to run under normal load.
-// Please don't disable unless it's actually flaking frequently (e.g.,
-// every day). Check Flake Portal first.
-TEST(AXGeneratedTreeTest, SerializeGeneratedTrees) {
-  // Do a more exhaustive test in release mode. If you're modifying
-  // the algorithm you may want to try even larger tree sizes if you
-  // can afford the time.
-#ifdef NDEBUG
-  int max_tree_size = 4;
-#else
-  LOG(WARNING) << "Debug build, only testing trees with 3 nodes and not 4.";
-  int max_tree_size = 3;
-#endif
+struct PermutationBlock {
+  PermutationBlock(int first_unique_tree0,
+                   int last_unique_tree0,
+                   int first_unique_tree1,
+                   int last_unique_tree1)
+      : first_unique_tree0(first_unique_tree0),
+        last_unique_tree0(last_unique_tree0),
+        first_unique_tree1(first_unique_tree1),
+        last_unique_tree1(last_unique_tree1) {}
+  int first_unique_tree0;
+  int last_unique_tree0;
+  int first_unique_tree1;
+  int last_unique_tree1;
+};
 
-  TreeGenerator generator0(max_tree_size, false);
-  int n0 = generator0.UniqueTreeCount();
+class SerializeGeneratedTreesTest
+    : public testing::TestWithParam<PermutationBlock> {};
 
-  TreeGenerator generator1(max_tree_size, true);
-  int n1 = generator1.UniqueTreeCount();
+TEST_P(SerializeGeneratedTreesTest, SerializeGeneratedTrees) {
+  const int first_tree0_ = GetParam().first_unique_tree0;
+  const int last_tree0_ = GetParam().last_unique_tree0;
+  const int first_tree1_ = GetParam().first_unique_tree1;
+  const int last_tree1_ = GetParam().last_unique_tree1;
+  TreeGenerator generator0(kMax_tree_size, /* permutations */ false);
+  TreeGenerator generator1(kMax_tree_size, /* permutations */ true);
 
-  for (int i = 0; i < n0; i++) {
+  for (int i = first_tree0_; i < last_tree0_; i++) {
     // Build the first tree, tree0.
     AXSerializableTree tree0;
     generator0.BuildUniqueTree(i, &tree0);
     SCOPED_TRACE("tree0 is " + TreeToString(tree0));
 
-    for (int j = 0; j < n1; j++) {
+    for (int j = first_tree1_; j < last_tree1_; j++) {
       // Build the second tree, tree1.
       AXSerializableTree tree1;
       generator1.BuildUniqueTree(j, &tree1);
@@ -253,9 +272,11 @@ TEST(AXGeneratedTreeTest, SerializeGeneratedTrees) {
 
           // Start by serializing tree0 and unserializing it into a new
           // empty tree |dst_tree|.
-          std::unique_ptr<AXTreeSource<const AXNode*>> tree0_source(
-              tree0.CreateTreeSource());
-          AXTreeSerializer<const AXNode*> serializer(tree0_source.get());
+          std::unique_ptr<AXTreeSource<const AXNode*, AXTreeData*, AXNodeData>>
+              tree0_source(tree0.CreateTreeSource());
+          AXTreeSerializer<const AXNode*, std::vector<const AXNode*>,
+                           AXTreeUpdate*, AXTreeData*, AXNodeData>
+              serializer(tree0_source.get());
           AXTreeUpdate update0;
           ASSERT_TRUE(serializer.SerializeChanges(tree0.root(), &update0));
 
@@ -269,13 +290,13 @@ TEST(AXGeneratedTreeTest, SerializeGeneratedTrees) {
           EXPECT_EQ(TreeToString(tree0), TreeToString(dst_tree));
 
           // Next, pretend that tree0 turned into tree1.
-          std::unique_ptr<AXTreeSource<const AXNode*>> tree1_source(
-              tree1.CreateTreeSource());
+          std::unique_ptr<AXTreeSource<const AXNode*, AXTreeData*, AXNodeData>>
+              tree1_source(tree1.CreateTreeSource());
           serializer.ChangeTreeSourceForTesting(tree1_source.get());
 
-          // Invalidate a subtree rooted at one of the nodes.
+          // Mark as dirty the subtree rooted at one of the nodes.
           if (l > 0)
-            serializer.InvalidateSubtree(tree1.GetFromId(l));
+            serializer.MarkSubtreeDirty(l);
 
           // Serialize a sequence of updates to |dst_tree| to match.
           for (int k_index = 0; k_index < tree_size; ++k_index) {
@@ -300,6 +321,42 @@ TEST(AXGeneratedTreeTest, SerializeGeneratedTrees) {
   }
 }
 
+// Test mutating every possible tree with <n> nodes to every other possible
+// tree with <n> nodes, where <n> is 4 in release mode and 3 in debug mode
+// (for speed). For each possible combination of trees, we also vary which
+// node we serialize first.
+//
+// For every possible scenario, we check that the AXTreeUpdate is valid,
+// that the destination tree can unserialize it and create a valid tree,
+// and that after updating all nodes the resulting tree now matches the
+// intended tree.
+//
+// Sheriffs: this test is actually very stable and reliable, but it's
+// cpu-bound so under extremely heavy load it sometimes times out even
+// though it only takes 1 - 2 seconds to run under normal load.
+// Please don't disable unless it's actually flaking frequently (e.g.,
+// every day). Check Flake Portal first.
+
+INSTANTIATE_TEST_SUITE_P(
+    AXGeneratedTreeTest0,
+    SerializeGeneratedTreesTest,
+    testing::Values(PermutationBlock(0,
+                                     kMax_number_of_trees0 / 2,
+                                     0,
+                                     kMax_number_of_trees1 / 2),
+                    PermutationBlock(0,
+                                     kMax_number_of_trees0 / 2,
+                                     kMax_number_of_trees1 / 2,
+                                     kMax_number_of_trees1),
+                    PermutationBlock(kMax_number_of_trees0 / 2,
+                                     kMax_number_of_trees0,
+                                     0,
+                                     kMax_number_of_trees1 / 2),
+                    PermutationBlock(kMax_number_of_trees0 / 2,
+                                     kMax_number_of_trees0,
+                                     kMax_number_of_trees1 / 2,
+                                     kMax_number_of_trees1)));
+
 // Sheriffs: this test is actually very stable and reliable, but it's
 // cpu-bound so under extremely heavy load it sometimes times out even
 // though it only takes 1 - 2 seconds to run under normal load.
@@ -323,23 +380,25 @@ TEST(AXGeneratedTreeTest, GeneratedTreesWithIgnoredNodes) {
   for (int tree_index = 0; tree_index < unique_tree_count; tree_index++) {
     // Try each permutation of nodes other than the root being ignored.
     // We'll call this tree the "fat" tree because it has redundant
-    // ignored nodes.
+    // ignored nodes. Also try permuting the focused node, because focus affects
+    // the ignored state of a node by removing it.
     int ignored_permutation_count =
         generator.IgnoredPermutationCountPerUniqueTree(tree_index);
     for (int perm_index0 = 0; perm_index0 < ignored_permutation_count;
          perm_index0++) {
       AXSerializableTree fat_tree;
-      generator.BuildUniqueTreeWithIgnoredNodes(tree_index, perm_index0,
-                                                &fat_tree);
+      generator.BuildUniqueTreeWithIgnoredNodes(
+          tree_index, perm_index0, /* focused_node */ std::nullopt, &fat_tree);
       SCOPED_TRACE("fat_tree is " + TreeToString(fat_tree));
 
-      // Create a second tree, also with each permutations of nodes
-      // other than the root being ignored.
+      // Create a second tree, also with each permutations of nodes other than
+      // the root being ignored.
       for (int perm_index1 = 1; perm_index1 < ignored_permutation_count;
            perm_index1++) {
         AXSerializableTree fat_tree1;
-        generator.BuildUniqueTreeWithIgnoredNodes(tree_index, perm_index1,
-                                                  &fat_tree1);
+        generator.BuildUniqueTreeWithIgnoredNodes(
+            tree_index, perm_index1, /* focused_node */ std::nullopt,
+            &fat_tree1);
         SCOPED_TRACE("fat_tree1 is " + TreeToString(fat_tree1));
 
         // Make a source and destination tree using only the unignored nodes.
@@ -365,13 +424,15 @@ TEST(AXGeneratedTreeTest, GeneratedTreesWithIgnoredNodes) {
         // Capture the events generated.
         std::map<AXNodeID, std::set<AXEventGenerator::Event>> actual_events;
         for (const AXEventGenerator::TargetedEvent& event : event_generator) {
-          if (event.node->IsIgnored() ||
-              event.event_params.event ==
+          const AXNode* node = fat_tree.GetFromId(event.node_id);
+          ASSERT_NE(nullptr, node);
+          if (node->IsIgnored() ||
+              event.event_params->event ==
                   AXEventGenerator::Event::IGNORED_CHANGED) {
             continue;
           }
 
-          actual_events[event.node->id()].insert(event.event_params.event);
+          actual_events[event.node_id].insert(event.event_params->event);
         }
 
         // Now, turn skinny_tree into skinny_tree1 and compare
@@ -391,7 +452,7 @@ TEST(AXGeneratedTreeTest, GeneratedTreesWithIgnoredNodes) {
         std::map<AXNodeID, std::set<AXEventGenerator::Event>> expected_events;
         for (const AXEventGenerator::TargetedEvent& event :
              skinny_event_generator)
-          expected_events[event.node->id()].insert(event.event_params.event);
+          expected_events[event.node_id].insert(event.event_params->event);
 
         for (auto& entry : expected_events) {
           AXNodeID node_id = entry.first;
@@ -416,8 +477,9 @@ TEST(AXGeneratedTreeTest, GeneratedTreesWithIgnoredNodes) {
         // Make sure that the parents, children, and siblings are all computed
         // correctly.
         AXTreeUpdate skinny_tree_serialized = SerializeEntireTree(skinny_tree);
-        for (size_t i = 0; i < skinny_tree_serialized.nodes.size(); i++) {
-          AXNodeID id = skinny_tree_serialized.nodes[i].id;
+        for (const AXNodeData& skinny_tree_node_data :
+             skinny_tree_serialized.nodes) {
+          AXNodeID id = skinny_tree_node_data.id;
 
           AXNode* skinny_tree_node = skinny_tree.GetFromId(id);
           AXNode* fat_tree_node = fat_tree.GetFromId(id);

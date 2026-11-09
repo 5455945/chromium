@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "build/build_config.h"
 #include "ui/gfx/vsync_provider.h"
 #include "ui/gl/egl_timestamps.h"
@@ -96,7 +96,21 @@ bool GLSurfacePresentationHelper::GetFrameTimestampInfoIfAvailable(
     int64_t start = 0;
     int64_t end = 0;
     frame.timer->GetStartEndTimestamps(&start, &end);
-    *timestamp = base::TimeTicks() + base::TimeDelta::FromMicroseconds(start);
+    *timestamp = base::TimeTicks() + base::Microseconds(start);
+    // GPUTiming converts GPU timestamps to CPU time using an offset computed
+    // from glGetInteger64v(GL_TIMESTAMP). Some drivers don't return a value in
+    // the same clock domain as timestamp queries (e.g. nouveau derives
+    // GL_TIMESTAMP from the CPU clock plus a delta computed once at startup,
+    // while queries use the GPU's own timer), so the two drift apart over the
+    // lifetime of the process. The result is a timestamp that is before the
+    // frame was drawn or in the future, which viz rejects as a presentation
+    // failure for every frame. The GPU must have reached the query after it
+    // was issued and before now, so fall back to the current time, as is done
+    // for fences, if the timestamp is outside that range.
+    const base::TimeTicks now = base::TimeTicks::Now();
+    if (*timestamp < frame.timer_issue_time || *timestamp > now) {
+      *timestamp = now;
+    }
   } else {
     if (!frame.fence->HasCompleted())
       return false;
@@ -215,7 +229,7 @@ void GLSurfacePresentationHelper::OnMakeCurrent(GLContext* context,
 
 // https://crbug.com/854298 : disable GLFence on Android as they seem to cause
 // issues on some devices.
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   gl_fence_supported_ = GLFence::IsSupported();
 #endif
 }
@@ -228,8 +242,10 @@ void GLSurfacePresentationHelper::PreSwapBuffers(
   } else if (gpu_timing_client_) {
     std::unique_ptr<GPUTimer> timer;
     timer = gpu_timing_client_->CreateGPUTimer(false /* prefer_elapsed_time */);
+    const base::TimeTicks issue_time = base::TimeTicks::Now();
     timer->QueryTimeStamp();
     pending_frames_.push_back(Frame(std::move(timer), std::move(callback)));
+    pending_frames_.back().timer_issue_time = issue_time;
   } else if (gl_fence_supported_) {
     auto fence = GLFence::Create();
     pending_frames_.push_back(Frame(std::move(fence), std::move(callback)));
@@ -381,7 +397,7 @@ void GLSurfacePresentationHelper::ScheduleCheckPendingFrames(
     return;
 
   if (!align_with_next_vsync) {
-    base::ThreadTaskRunnerHandle::Get()->PostTask(
+    base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE,
         base::BindOnce(&GLSurfacePresentationHelper::CheckPendingFramesCallback,
                        weak_ptr_factory_.GetWeakPtr()));
@@ -391,12 +407,11 @@ void GLSurfacePresentationHelper::ScheduleCheckPendingFrames(
   // If the |vsync_provider_| can not notify us for the next VSync
   // asynchronically, we have to compute the next VSync time and post a delayed
   // task so we can check the VSync later.
-  base::TimeDelta interval = vsync_interval_.is_zero()
-                                 ? base::TimeDelta::FromSeconds(1) / 60
-                                 : vsync_interval_;
+  base::TimeDelta interval =
+      vsync_interval_.is_zero() ? base::Seconds(1) / 60 : vsync_interval_;
   auto now = base::TimeTicks::Now();
   auto next_vsync = now.SnappedToNextTick(vsync_timebase_, interval);
-  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostDelayedTask(
       FROM_HERE,
       base::BindOnce(&GLSurfacePresentationHelper::CheckPendingFramesCallback,
                      weak_ptr_factory_.GetWeakPtr()),

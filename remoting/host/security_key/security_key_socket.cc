@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,10 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/cxx17_backports.h"
+#include "base/containers/extend.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/strings/string_view_util.h"
 #include "base/timer/timer.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -50,8 +52,8 @@ bool SecurityKeySocket::GetAndClearRequestData(std::string* data_out) {
     return false;
   }
   // The request size is not part of the data; don't send it.
-  data_out->assign(request_data_.begin() + kRequestSizeBytes,
-                   request_data_.end());
+  *data_out = base::as_string_view(
+      base::span(request_data_).subspan(kRequestSizeBytes));
   request_data_.clear();
   return true;
 }
@@ -61,12 +63,11 @@ void SecurityKeySocket::SendResponse(const std::string& response_data) {
   DCHECK(!write_buffer_);
 
   std::string response_length_string = GetResponseLengthAsBytes(response_data);
-  int response_len = response_length_string.size() + response_data.size();
-  std::unique_ptr<std::string> response(
-      new std::string(response_length_string + response_data));
+  std::string response = response_length_string + response_data;
+  const size_t response_size = response.size();
   write_buffer_ = base::MakeRefCounted<net::DrainableIOBuffer>(
       base::MakeRefCounted<net::StringIOBuffer>(std::move(response)),
-      response_len);
+      response_size);
 
   DCHECK(write_buffer_->BytesRemaining());
   DoWrite();
@@ -75,7 +76,7 @@ void SecurityKeySocket::SendResponse(const std::string& response_data) {
 void SecurityKeySocket::SendSshError() {
   DCHECK(thread_checker_.CalledOnValidThread());
 
-  SendResponse(std::string(kSshError, base::size(kSshError)));
+  SendResponse(std::string(kSshError, std::size(kSshError)));
 }
 
 void SecurityKeySocket::StartReadingRequest(
@@ -161,8 +162,7 @@ void SecurityKeySocket::OnDataRead(int result) {
   // that we could read too many bytes from the buffer (e.g. all of request #1
   // and some of request #2).  We should consider using the request header to
   // determine the request length and only read that amount from buffer.
-  request_data_.insert(request_data_.end(), read_buffer_->data(),
-                       read_buffer_->data() + result);
+  base::Extend(request_data_, read_buffer_->first(result));
   if (IsRequestComplete()) {
     waiting_for_request_ = false;
     std::move(request_received_callback_).Run();
@@ -204,9 +204,8 @@ bool SecurityKeySocket::IsRequestTooLarge() const {
 size_t SecurityKeySocket::GetRequestLength() const {
   DCHECK(request_data_.size() >= kRequestSizeBytes);
 
-  return ((request_data_[0] & 255) << 24) + ((request_data_[1] & 255) << 16) +
-         ((request_data_[2] & 255) << 8) + (request_data_[3] & 255) +
-         kRequestSizeBytes;
+  return (request_data_[0] << 24) + (request_data_[1] << 16) +
+         (request_data_[2] << 8) + request_data_[3] + kRequestSizeBytes;
 }
 
 std::string SecurityKeySocket::GetResponseLengthAsBytes(

@@ -1,20 +1,30 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/media/session/mock_media_session_player_observer.h"
-
+#include "content/public/browser/render_frame_host.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace content {
 
 MockMediaSessionPlayerObserver::MockMediaSessionPlayerObserver(
-    RenderFrameHost* render_frame_host)
-    : MediaSessionPlayerObserver(), render_frame_host_(render_frame_host) {}
+    RenderFrameHost* render_frame_host,
+    media::MediaContentType media_content_type)
+    : render_frame_host_global_id_(
+          render_frame_host
+              ? std::make_optional(render_frame_host->GetGlobalId())
+              : std::nullopt),
+      media_content_type_(media_content_type) {}
+
+MockMediaSessionPlayerObserver::MockMediaSessionPlayerObserver(
+    media::MediaContentType media_content_type)
+    : MockMediaSessionPlayerObserver(nullptr, media_content_type) {}
 
 MockMediaSessionPlayerObserver::~MockMediaSessionPlayerObserver() = default;
 
-void MockMediaSessionPlayerObserver::OnSuspend(int player_id) {
+void MockMediaSessionPlayerObserver::OnSuspend(int player_id,
+                                               bool /*triggered_by_user*/) {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
 
@@ -22,7 +32,8 @@ void MockMediaSessionPlayerObserver::OnSuspend(int player_id) {
   players_[player_id].is_playing_ = false;
 }
 
-void MockMediaSessionPlayerObserver::OnResume(int player_id) {
+void MockMediaSessionPlayerObserver::OnResume(int player_id,
+                                              bool /*triggered_by_user*/) {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
 
@@ -63,20 +74,15 @@ void MockMediaSessionPlayerObserver::OnSetVolumeMultiplier(
   players_[player_id].volume_multiplier_ = volume_multiplier;
 }
 
-void MockMediaSessionPlayerObserver::OnEnterPictureInPicture(int player_id) {
+void MockMediaSessionPlayerObserver::OnEnterPictureInPicture(
+    int player_id,
+    const std::optional<gfx::Size>& min_size) {
   EXPECT_GE(player_id, 0);
   EXPECT_EQ(players_.size(), 1u);
 
   ++received_enter_picture_in_picture_calls_;
   players_[player_id].is_in_picture_in_picture_ = true;
-}
-
-void MockMediaSessionPlayerObserver::OnExitPictureInPicture(int player_id) {
-  EXPECT_GE(player_id, 0);
-  EXPECT_EQ(players_.size(), 1u);
-
-  ++received_exit_picture_in_picture_calls_;
-  players_[player_id].is_in_picture_in_picture_ = false;
+  last_enter_pip_min_size_ = min_size;
 }
 
 void MockMediaSessionPlayerObserver::OnSetAudioSinkId(
@@ -89,7 +95,27 @@ void MockMediaSessionPlayerObserver::OnSetAudioSinkId(
   players_[player_id].audio_sink_id_ = raw_device_id;
 }
 
-absl::optional<media_session::MediaPosition>
+void MockMediaSessionPlayerObserver::OnSetMute(int player_id, bool mute) {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+}
+
+void MockMediaSessionPlayerObserver::OnRequestMediaRemoting(int player_id) {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+}
+
+void MockMediaSessionPlayerObserver::OnRequestVisibility(
+    int player_id,
+    RequestVisibilityCallback request_visibility_callback) {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+  std::move(request_visibility_callback)
+      .Run(HasSufficientlyVisibleVideo(player_id));
+  ++received_request_visibility_calls_;
+}
+
+std::optional<media_session::MediaPosition>
 MockMediaSessionPlayerObserver::GetPosition(int player_id) const {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
@@ -100,15 +126,32 @@ bool MockMediaSessionPlayerObserver::IsPictureInPictureAvailable(
     int player_id) const {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
-  return false;
+  return players_[player_id].is_picture_in_picture_available_;
+}
+
+bool MockMediaSessionPlayerObserver::HasSufficientlyVisibleVideo(
+    int player_id) const {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+  return players_[player_id].has_sufficiently_visible_video_;
+}
+
+bool MockMediaSessionPlayerObserver::IsVideoFrameAvailable(
+    int player_id) const {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+  return players_[player_id].is_video_frame_available_;
 }
 
 RenderFrameHost* MockMediaSessionPlayerObserver::render_frame_host() const {
-  return render_frame_host_;
+  if (render_frame_host_global_id_.has_value()) {
+    return RenderFrameHost::FromID(render_frame_host_global_id_.value());
+  }
+  return nullptr;
 }
 
-int MockMediaSessionPlayerObserver::StartNewPlayer() {
-  players_.push_back(MockPlayer(true, 1.0f));
+int MockMediaSessionPlayerObserver::StartNewPlayer(bool is_playing) {
+  players_.push_back(MockPlayer(is_playing, 1.0f));
   return players_.size() - 1;
 }
 
@@ -139,6 +182,29 @@ void MockMediaSessionPlayerObserver::SetPosition(
     media_session::MediaPosition& position) {
   EXPECT_GT(players_.size(), player_id);
   players_[player_id].position_ = position;
+}
+
+void MockMediaSessionPlayerObserver::SetHasSufficientlyVisibleVideo(
+    size_t player_id,
+    bool has_sufficiently_visible_video) {
+  EXPECT_GT(players_.size(), player_id);
+  players_[player_id].has_sufficiently_visible_video_ =
+      has_sufficiently_visible_video;
+}
+
+void MockMediaSessionPlayerObserver::SetIsPictureInPictureAvailable(
+    size_t player_id,
+    bool is_picture_in_picture_available) {
+  EXPECT_GT(players_.size(), player_id);
+  players_[player_id].is_picture_in_picture_available_ =
+      is_picture_in_picture_available;
+}
+
+void MockMediaSessionPlayerObserver::SetIsVideoFrameAvailable(
+    size_t player_id,
+    bool is_video_frame_available) {
+  EXPECT_GT(players_.size(), player_id);
+  players_[player_id].is_video_frame_available_ = is_video_frame_available;
 }
 
 int MockMediaSessionPlayerObserver::received_suspend_calls() const {
@@ -175,6 +241,15 @@ int MockMediaSessionPlayerObserver::received_set_audio_sink_id_calls() const {
   return received_set_audio_sink_id_calls_;
 }
 
+int MockMediaSessionPlayerObserver::received_request_visibility_calls() const {
+  return received_request_visibility_calls_;
+}
+
+int MockMediaSessionPlayerObserver::
+    received_auto_picture_in_picture_info_changed_calls() const {
+  return received_auto_picture_in_picture_info_changed_calls_;
+}
+
 bool MockMediaSessionPlayerObserver::HasAudio(int player_id) const {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
@@ -184,7 +259,19 @@ bool MockMediaSessionPlayerObserver::HasAudio(int player_id) const {
 bool MockMediaSessionPlayerObserver::HasVideo(int player_id) const {
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
-  return false;
+  return players_[player_id].has_video_;
+}
+
+void MockMediaSessionPlayerObserver::SetHasVideo(size_t player_id,
+                                                 bool has_video) {
+  EXPECT_GT(players_.size(), player_id);
+  players_[player_id].has_video_ = has_video;
+}
+
+bool MockMediaSessionPlayerObserver::IsPaused(int player_id) const {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+  return !players_[player_id].is_playing_;
 }
 
 std::string MockMediaSessionPlayerObserver::GetAudioOutputSinkId(
@@ -199,6 +286,38 @@ bool MockMediaSessionPlayerObserver::SupportsAudioOutputDeviceSwitching(
   EXPECT_GE(player_id, 0);
   EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
   return players_.at(player_id).supports_device_switching_;
+}
+
+media::MediaContentType MockMediaSessionPlayerObserver::GetMediaContentType()
+    const {
+  return media_content_type_;
+}
+
+void MockMediaSessionPlayerObserver::OnAutoPictureInPictureInfoChanged(
+    int player_id,
+    const media::PictureInPictureEventsInfo::AutoPipInfo&
+        auto_picture_in_picture_info) {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+
+  ++received_auto_picture_in_picture_info_changed_calls_;
+  players_[player_id].auto_picture_in_picture_info_ =
+      auto_picture_in_picture_info;
+}
+
+void MockMediaSessionPlayerObserver::OnSaveVideoFrame(int player_id) {
+  EXPECT_GE(player_id, 0);
+  EXPECT_GT(players_.size(), static_cast<size_t>(player_id));
+  ++received_save_video_frame_calls_;
+}
+
+int MockMediaSessionPlayerObserver::received_save_video_frame_calls() const {
+  return received_save_video_frame_calls_;
+}
+
+void MockMediaSessionPlayerObserver::SetMediaContentType(
+    media::MediaContentType media_content_type) {
+  media_content_type_ = media_content_type;
 }
 
 MockMediaSessionPlayerObserver::MockPlayer::MockPlayer(bool is_playing,

@@ -38,7 +38,19 @@ test(t => {
     TypeError,
     () => chunk.copyTo(new Uint8Array(2)), 'destination is not large enough');
 
+  const detached = makeDetachedArrayBuffer();
   assert_throws_js(
     TypeError,
-    () => chunk.copyTo(makeDetachedArrayBuffer()), 'destiation is detached');
+    () => chunk.copyTo(detached), 'destination is detached');
 }, 'Test copyTo() exception if destiation invalid');
+
+test(t => {
+  let chunk = new EncodedVideoChunk({type: 'key',
+                                     timestamp: 10,
+                                     duration: 300,
+                                     data: new Uint8Array()});
+  assert_equals(chunk.byteLength, 0, 'byteLength');
+  let copyDest = new Uint8Array();
+  chunk.copyTo(copyDest);
+  assert_equals(copyDest.length, 0, 'copyDest.length');
+}, 'Test we can construct an zero-sized EncodedVideoChunk.');

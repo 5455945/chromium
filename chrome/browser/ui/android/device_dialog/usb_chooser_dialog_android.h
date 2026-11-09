@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,10 +9,13 @@
 #include <string>
 #include <vector>
 
+#include "base/android/jni_android.h"
+#include "base/android/jni_string.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "chrome/android/chrome_jni_headers/UsbChooserDialog_shared_jni.h"
 #include "components/permissions/chooser_controller.h"
+#include "third_party/jni_zero/jni_zero.h"
 
 namespace content {
 class RenderFrameHost;
@@ -22,6 +25,16 @@ class RenderFrameHost;
 // options.
 class UsbChooserDialogAndroid : public permissions::ChooserController::View {
  public:
+  // The callback type for creating the java dialog object.
+  using CreateJavaDialogCallback =
+      base::OnceCallback<base::android::ScopedJavaLocalRef<jobject>(
+          JNIEnv*,
+          const base::android::JavaRef<jobject>&,
+          const std::u16string&,
+          JniIntWrapper,
+          const base::android::JavaRef<jobject>&,
+          jni_zero::JniRawPtr<UsbChooserDialogAndroid>)>;
+
   // Creates and shows the dialog. Will return nullptr if the dialog was not
   // displayed. Otherwise |on_close| will be called when the user closes the
   // dialog.
@@ -30,9 +43,20 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
       std::unique_ptr<permissions::ChooserController> controller,
       base::OnceClosure on_close);
 
+  static std::unique_ptr<UsbChooserDialogAndroid> CreateForTesting(
+      content::RenderFrameHost* render_frame_host,
+      std::unique_ptr<permissions::ChooserController> controller,
+      base::OnceClosure on_close,
+      UsbChooserDialogAndroid::CreateJavaDialogCallback
+          create_java_dialog_callback);
+
   explicit UsbChooserDialogAndroid(
       std::unique_ptr<permissions::ChooserController> controller,
       base::OnceClosure on_close);
+
+  UsbChooserDialogAndroid(const UsbChooserDialogAndroid&) = delete;
+  UsbChooserDialogAndroid& operator=(const UsbChooserDialogAndroid&) = delete;
+
   ~UsbChooserDialogAndroid() override;
 
   // permissions::ChooserController::View implementation
@@ -44,14 +68,20 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
   void OnRefreshStateChanged(bool refreshing) override;
 
   // Report the dialog's result.
-  void OnItemSelected(JNIEnv* env,
-                      const base::android::JavaParamRef<jstring>& item_id);
+  void OnItemSelected(JNIEnv* env, const std::string& item_id);
   void OnDialogCancelled(JNIEnv* env);
   void LoadUsbHelpPage(JNIEnv* env);
 
  private:
   // Called when the chooser dialog is closed.
   void Cancel();
+
+  static std::unique_ptr<UsbChooserDialogAndroid> CreateInternal(
+      content::RenderFrameHost* render_frame_host,
+      std::unique_ptr<permissions::ChooserController> controller,
+      base::OnceClosure on_close,
+      UsbChooserDialogAndroid::CreateJavaDialogCallback
+          create_java_dialog_callback);
 
   std::unique_ptr<permissions::ChooserController> controller_;
   base::OnceClosure on_close_;
@@ -62,8 +92,6 @@ class UsbChooserDialogAndroid : public permissions::ChooserController::View {
   std::vector<std::string> item_id_map_;
 
   base::android::ScopedJavaGlobalRef<jobject> java_dialog_;
-
-  DISALLOW_COPY_AND_ASSIGN(UsbChooserDialogAndroid);
 };
 
 #endif  // CHROME_BROWSER_UI_ANDROID_DEVICE_DIALOG_USB_CHOOSER_DIALOG_ANDROID_H_

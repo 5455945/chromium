@@ -1,34 +1,42 @@
-#!/usr/bin/env vpython
-# Copyright (c) 2012 The Chromium Authors. All rights reserved.
+#!/usr/bin/env vpython3
+# Copyright 2012 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-"""Runs tests with Xvfb and Openbox or Weston on Linux and normally on other
-   platforms."""
+"""Runs tests with Xvfb/Xorg and Openbox/Weston/Mutter on Linux and normally on
+other platforms."""
 
 from __future__ import print_function
 
 import copy
 import os
 import os.path
-import psutil
 import random
 import re
+import shutil
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
+import uuid
+
+from contextlib import contextmanager
+
+# vpython-provided modules.
+import psutil
+
+# //testing imports.
 import test_env
 
-class _XvfbProcessError(Exception):
-  """Exception raised when Xvfb cannot start."""
-  pass
+DEFAULT_XVFB_WHD = '1280x800x24'
+DEFAULT_MUTTER_DISPLAY = '1920x1200'
 
 
-class _WestonProcessError(Exception):
-  """Exception raised when Weston cannot start."""
-  pass
+class _ProcessError(Exception):
+  """Exception raised when the requested display server or compositor cannot
+  start."""
 
 
 def kill(proc, name, timeout_in_seconds=10):
@@ -36,22 +44,32 @@ def kill(proc, name, timeout_in_seconds=10):
   if not proc:
     return
 
-  proc.terminate()
   thread = threading.Thread(target=proc.wait)
-  thread.start()
+  try:
+    proc.terminate()
+    thread.start()
+
+    thread.join(timeout_in_seconds)
+    if thread.is_alive():
+      print(
+        '%s running after SIGTERM, trying SIGKILL.\n' % name, file=sys.stderr
+      )
+      proc.kill()
+  except OSError as e:
+    # proc.terminate()/kill() can raise, not sure if only ProcessLookupError
+    # which is explained in https://bugs.python.org/issue40550#msg382427
+    print('Exception while killing process %s: %s' % (name, e), file=sys.stderr)
 
   thread.join(timeout_in_seconds)
   if thread.is_alive():
-    print('%s running after SIGTERM, trying SIGKILL.\n' % name, file=sys.stderr)
-    proc.kill()
-
-  thread.join(timeout_in_seconds)
-  if thread.is_alive():
-    print('%s running after SIGTERM and SIGKILL; good luck!\n' % name,
-          file=sys.stderr)
+    print(
+      '%s running after SIGTERM and SIGKILL; good luck!\n' % name,
+      file=sys.stderr,
+    )
 
 
-def launch_dbus(env):
+@contextmanager
+def dbus_session(env):
   """Starts a DBus session.
 
   Works around a bug in GLib where it performs operations which aren't
@@ -71,25 +89,43 @@ def launch_dbus(env):
 
   Returns the pid of the dbus-daemon if started, or None otherwise.
   """
-  if 'DBUS_SESSION_BUS_ADDRESS' in os.environ:
-    return
+  dbus_pid = None
   try:
-    dbus_output = subprocess.check_output(
-        ['dbus-launch'], env=env).decode('utf-8').split('\n')
-    for line in dbus_output:
-      m = re.match(r'([^=]+)\=(.+)', line)
-      if m:
-        env[m.group(1)] = m.group(2)
-    return int(env['DBUS_SESSION_BUS_PID'])
+    if 'DBUS_SESSION_BUS_ADDRESS' not in os.environ:
+      dbus_output = (
+        subprocess.check_output(['dbus-launch'], env=env)
+        .decode('utf-8')
+        .split('\n')
+      )
+      for line in dbus_output:
+        m = re.match(r'([^=]+)\=(.+)', line)
+        if m:
+          env[m.group(1)] = m.group(2)
+      dbus_pid = int(env['DBUS_SESSION_BUS_PID'])
   except (subprocess.CalledProcessError, OSError, KeyError, ValueError) as e:
     print('Exception while running dbus_launch: %s' % e)
+  try:
+    yield
+  finally:
+    # dbus-daemon is not a subprocess, so we can't SIGTERM+waitpid() on it.
+    # To ensure it exits, use SIGKILL which should be safe since all other
+    # processes that it would have been servicing have exited.
+    if dbus_pid:
+      os.kill(dbus_pid, signal.SIGKILL)
 
 
-# TODO(crbug.com/949194): Encourage setting flags to False.
+# TODO(crbug.com/40621504): Encourage setting flags to False.
 def run_executable(
-    cmd, env, stdoutfile=None, use_openbox=True, use_xcompmgr=True):
-  """Runs an executable within Weston or Xvfb on Linux or normally on other
-     platforms.
+  cmd,
+  env,
+  stdoutfile=None,
+  use_openbox=True,
+  use_xcompmgr=True,
+  xvfb_whd=None,
+  cwd=None,
+):
+  """Runs an executable within Weston, Xvfb or Xorg on Linux or normally on
+     other platforms.
 
   The method sets SIGUSR1 handler for Xvfb to return SIGUSR1
   when it is ready for connections.
@@ -97,14 +133,16 @@ def run_executable(
 
   Args:
     cmd: Command to be executed.
-    env: A copy of environment variables. "DISPLAY" and will be set if Xvfb is
-      used. "WAYLAND_DISPLAY" will be set if Weston is used.
+    env: A copy of environment variables. "DISPLAY" will be set if Xvfb or
+      Xorg is used. "WAYLAND_DISPLAY" will be set if Weston is used.
     stdoutfile: If provided, symbolization via script is disabled and stdout
       is written to this file as well as to stdout.
     use_openbox: A flag to use openbox process.
       Some ChromeOS tests need a window manager.
     use_xcompmgr: A flag to use xcompmgr process.
       Some tests need a compositing wm to make use of transparent visuals.
+    xvfb_whd: WxHxD to pass to xvfb or DEFAULT_XVFB_WHD if None
+    cwd: Current working directory.
 
   Returns:
     the exit code of the specified commandline, or 1 on failure.
@@ -113,273 +151,641 @@ def run_executable(
   # It might seem counterintuitive to support a --no-xvfb flag in a script
   # whose only job is to start xvfb, but doing so allows us to consolidate
   # the logic in the layers of buildbot scripts so that we *always* use
-  # xvfb by default and don't have to worry about the distinction, it
+  # this script by default and don't have to worry about the distinction, it
   # can remain solely under the control of the test invocation itself.
-  use_xvfb = True
+  # Historically, this flag turned off xvfb, but now turns off both X11 backings
+  # (xvfb/Xorg). As of crrev.com/c/5631242, Xorg became the default backing when
+  # no flags are supplied. Xorg is mostly a drop in replacement to Xvfb but has
+  # better support for dummy drivers and multi-screen testing (See:
+  # crbug.com/40257169 and http://tinyurl.com/4phsuupf). Requires Xorg binaries
+  # (package: xserver-xorg-core)
+  use_xvfb = False
+  use_xorg = True
+
   if '--no-xvfb' in cmd:
     use_xvfb = False
+    use_xorg = False  # Backwards compatibly turns off all X11 backings.
     cmd.remove('--no-xvfb')
+
+  # Support forcing legacy xvfb backing.
+  if '--use-xvfb' in cmd:
+    if not use_xorg and not use_xvfb:
+      print('Conflicting flags --use-xvfb and --no-xvfb\n', file=sys.stderr)
+      return 1
+    use_xvfb = True
+    use_xorg = False
+    cmd.remove('--use-xvfb')
 
   # Tests that run on Linux platforms with Ozone/Wayland backend require
   # a Weston instance. However, it is also required to disable xvfb so
   # that Weston can run in a pure headless environment.
   use_weston = False
   if '--use-weston' in cmd:
-    if use_xvfb:
-      print('Unable to use Weston with xvfb.\n', file=sys.stderr)
+    if use_xvfb or use_xorg:
+      print('Unable to use Weston with xvfb or Xorg.\n', file=sys.stderr)
       return 1
     use_weston = True
     cmd.remove('--use-weston')
 
-  if sys.platform.startswith('linux') and use_xvfb:
-    return _run_with_xvfb(cmd, env, stdoutfile, use_openbox, use_xcompmgr)
-  elif use_weston:
-    return _run_with_weston(cmd, env, stdoutfile)
-  else:
-    return test_env.run_executable(cmd, env, stdoutfile)
+  use_mutter = False
+  mutter_display = DEFAULT_MUTTER_DISPLAY
+  if '--use-mutter' in cmd:
+    if use_xvfb or use_xorg or use_weston:
+      print(
+        'Unable to use mutter with xvfb or Xorg or weston.\n', file=sys.stderr
+      )
+      return 1
+    use_mutter = True
+    cmd.remove('--use-mutter')
+    for arg in cmd:
+      if arg.startswith('--mutter-display='):
+        mutter_display = arg.split('=')[1]
+        cmd.remove(arg)
+        break
+
+  if sys.platform.startswith('linux') and (use_xvfb or use_xorg):
+    # Do not let the host Wayland session make clients select Wayland instead
+    # of the isolated X server.
+    env.pop('WAYLAND_DISPLAY', None)
+    env.pop('WAYLAND_SOCKET', None)
+    env['XDG_SESSION_TYPE'] = 'x11'
+    return _run_with_x11(
+      cmd,
+      env,
+      stdoutfile,
+      use_openbox,
+      use_xcompmgr,
+      use_xorg,
+      xvfb_whd or DEFAULT_XVFB_WHD,
+      cwd,
+    )
+  if use_weston:
+    return _run_with_weston(cmd, env, stdoutfile, cwd)
+
+  if use_mutter:
+    return _run_with_mutter(cmd, env, stdoutfile, cwd, mutter_display)
+
+  return test_env.run_executable(cmd, env, stdoutfile, cwd)
 
 
-def _run_with_xvfb(cmd, env, stdoutfile, use_openbox, use_xcompmgr):
+def _re_search_command(regex, args, **kwargs):
+  """Runs a subprocess defined by `args` and returns a regex match for the
+  given expression on the output."""
+  return re.search(
+    regex,
+    subprocess.check_output(
+      args, stderr=subprocess.STDOUT, text=True, **kwargs
+    ),
+    re.IGNORECASE,
+  )
+
+
+def _make_xorg_modeline(width, height, refresh):
+  """Generates a tuple of a modeline (list of parameters) and label based off a
+  specified width, height and refresh rate.
+  See: https://www.x.org/archive/X11R7.0/doc/html/chips4.html"""
+  re_matches = _re_search_command(
+    r'Modeline "(.*)"\s+(.*)',
+    ['cvt', str(width), str(height), str(refresh)],
+  )
+  modeline_label = re_matches.group(1)
+  modeline = re_matches.group(2)
+  # Split the modeline string on spaces, and filter out empty element (cvt adds
+  # double spaces between in some parts).
+  return (modeline_label, list(filter(lambda a: a != '', modeline.split(' '))))
+
+
+def _get_supported_virtual_sizes(default_whd):
+  """Returns a list of tuples (width, height) for supported monitor resolutions.
+  The list will always include the default size defined in `default_whd`"""
+  # Note: 4K resolution 3840x2160 doesn't seem to be supported and the mode
+  # silently gets dropped which makes subsequent calls to xrandr --addmode fail.
+  (default_width, default_height, _) = default_whd.split('x')
+  default_size = (int(default_width), int(default_height))
+  return sorted(
+    set([default_size, (800, 600), (1024, 768), (1920, 1080), (1600, 1200)])
+  )
+
+
+def _make_xorg_config(default_whd):
+  """Generates an Xorg config file and returns the file path. See:
+  https://www.x.org/releases/current/doc/man/man5/xorg.conf.5.xhtml"""
+  (_, _, depth) = default_whd.split('x')
+  mode_sizes = _get_supported_virtual_sizes(default_whd)
+  modelines = []
+  mode_labels = []
+  for width, height in mode_sizes:
+    (modeline_label, modeline) = _make_xorg_modeline(width, height, 60)
+    modelines.append('Modeline "%s" %s' % (modeline_label, ' '.join(modeline)))
+    mode_labels.append('"%s"' % modeline_label)
+  config = """
+Section "Monitor"
+  Identifier "Monitor0"
+  HorizSync 5.0 - 1000.0
+  VertRefresh 5.0 - 200.0
+  %s
+EndSection
+Section "Device"
+  Identifier "Device0"
+  # Dummy driver requires package `xserver-xorg-video-dummy`.
+  Driver "dummy"
+  VideoRam 256000
+EndSection
+Section "Screen"
+  Identifier "Screen0"
+  Device "Device0"
+  Monitor "Monitor0"
+  SubSection "Display"
+    Depth %s
+    Modes %s
+  EndSubSection
+EndSection
+  """ % ('\n'.join(modelines), depth, ' '.join(mode_labels))
+  config_file = os.path.join(
+    tempfile.gettempdir(), 'xorg-%s.config' % uuid.uuid4().hex
+  )
+  with open(config_file, 'w') as f:
+    f.write(config)
+  return config_file
+
+
+def _setup_xrandr(env, default_whd):
+  """Configures xrandr display(s)"""
+
+  # Calls xrandr with the provided argument array
+  def call_xrandr(args):
+    subprocess.check_call(
+      ['xrandr'] + args,
+      env=env,
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.STDOUT,
+    )
+
+  (default_width, default_height, _) = default_whd.split('x')
+  default_size = (int(default_width), int(default_height))
+
+  # The minimum version of xserver-xorg-video-dummy is 0.4.0-1 which adds
+  # XRANDR support. Older versions will be missing the "DUMMY" outputs.
+  # Reliably checking the version is difficult, so check if the xrandr output
+  # includes the DUMMY displays before trying to configure them.
+  dummy_displays_available = _re_search_command(
+    'DUMMY[0-9]', ['xrandr', '-q'], env=env
+  )
+  if dummy_displays_available:
+    screen_sizes = _get_supported_virtual_sizes(default_whd)
+    output_names = ['DUMMY0', 'DUMMY1', 'DUMMY2', 'DUMMY3', 'DUMMY4']
+    refresh_rate = 60
+    for width, height in screen_sizes:
+      (modeline_label, _) = _make_xorg_modeline(width, height, 60)
+      for output_name in output_names:
+        call_xrandr(['--addmode', output_name, modeline_label])
+    (default_mode_label, _) = _make_xorg_modeline(*default_size, refresh_rate)
+    # Set the mode of all monitors to connect and activate them.
+    for i, name in enumerate(output_names):
+      args = ['--output', name, '--mode', default_mode_label]
+      if i > 0:
+        args += ['--right-of', output_names[i - 1]]
+      call_xrandr(args)
+
+  # Sets the primary monitor to the default size and marks the rest as disabled.
+  call_xrandr(['-s', '%dx%d' % default_size])
+  # Set the DPI to something realistic (as required by some desktops).
+  call_xrandr(['--dpi', '96'])
+
+
+def _setup_signals():
+  signal.signal(signal.SIGTERM, raise_process_terminated)
+  signal.signal(signal.SIGINT, raise_process_terminated)
+
+
+def _run_with_x11(
+  cmd, env, stdoutfile, use_openbox, use_xcompmgr, use_xorg, xvfb_whd, cwd
+):
+  """Runs with an X11 server. Uses Xvfb by default and Xorg when use_xorg is
+  True."""
   openbox_proc = None
+  openbox_ready = MutableBoolean()
+
+  def set_openbox_ready(*_):
+    openbox_ready.setvalue(True)
+
   xcompmgr_proc = None
-  xvfb_proc = None
-  xwmstartupcheck_proc = None
-  xvfb_ready = MutableBoolean()
-  def set_xvfb_ready(*_):
-    xvfb_ready.setvalue(True)
+  x11_proc = None
+  x11_ready = MutableBoolean()
 
-  dbus_pid = None
-  try:
-    signal.signal(signal.SIGTERM, raise_xvfb_error)
-    signal.signal(signal.SIGINT, raise_xvfb_error)
+  def set_x11_ready(*_):
+    x11_ready.setvalue(True)
 
-    # Before [1], the maximum number of X11 clients was 256.  After, the default
-    # limit is 256 with a configurable maximum of 512.  On systems with a large
-    # number of CPUs, the old limit of 256 may be hit for certain test suites
-    # [2] [3], so we set the limit to 512 when possible.  This flag is not
-    # available on Ubuntu 16.04 or 18.04, so a feature check is required.  Xvfb
-    # does not have a '-version' option, so checking the '-help' output is
-    # required.
-    #
-    # [1] d206c240c0b85c4da44f073d6e9a692afb6b96d2
-    # [2] https://crbug.com/1187948
-    # [3] https://crbug.com/1120107
-    xvfb_help = subprocess.check_output(
-      ['Xvfb', '-help'], stderr=subprocess.STDOUT).decode('utf8')
+  x11_binary = 'Xorg' if use_xorg else 'Xvfb'
+  xorg_config_file = _make_xorg_config(xvfb_whd) if use_xorg else None
 
-    # Due to race condition for display number, Xvfb might fail to run.
-    # If it does fail, try again up to 10 times, similarly to xvfb-run.
-    for _ in range(10):
-      xvfb_ready.setvalue(False)
-      display = find_display()
+  if 'XDG_CURRENT_DESKTOP' in env:
+    del env['XDG_CURRENT_DESKTOP']
 
-      xvfb_cmd = ['Xvfb', display, '-screen', '0', '1280x800x24', '-ac',
-                  '-nolisten', 'tcp', '-dpi', '96', '+extension', 'RANDR']
-      if '-maxclients' in xvfb_help:
-        xvfb_cmd += ['-maxclients', '512']
+  with dbus_session(env):
+    try:
+      _setup_signals()
 
-      # Sets SIGUSR1 to ignore for Xvfb to signal current process
-      # when it is ready. Due to race condition, USR1 signal could be sent
-      # before the process resets the signal handler, we cannot rely on
-      # signal handler to change on time.
-      signal.signal(signal.SIGUSR1, signal.SIG_IGN)
-      xvfb_proc = subprocess.Popen(xvfb_cmd, stderr=subprocess.STDOUT, env=env)
-      signal.signal(signal.SIGUSR1, set_xvfb_ready)
+      # Due to race condition for display number, Xvfb/Xorg might fail to run.
+      # If it does fail, try again up to 10 times, similarly to xvfb-run.
       for _ in range(10):
-        time.sleep(.1)  # gives Xvfb time to start or fail.
-        if xvfb_ready.getvalue() or xvfb_proc.poll() is not None:
-          break  # xvfb sent ready signal, or already failed and stopped.
+        x11_ready.setvalue(False)
+        display = find_display()
 
-      if xvfb_proc.poll() is None:
-        break  # xvfb is running, can proceed.
-    if xvfb_proc.poll() is not None:
-      raise _XvfbProcessError('Failed to start after 10 tries')
+        x11_cmd = None
+        if use_xorg:
+          x11_cmd = ['Xorg', display, '-noreset', '-config', xorg_config_file]
+        else:
+          x11_cmd = [
+            'Xvfb',
+            display,
+            '-screen',
+            '0',
+            xvfb_whd,
+            '-ac',
+            '-nolisten',
+            'tcp',
+            '-dpi',
+            '96',
+            '+extension',
+            'RANDR',
+            '-maxclients',
+            '512',
+          ]
 
-    env['DISPLAY'] = display
+        # Sets SIGUSR1 to ignore for Xvfb/Xorg to signal current process
+        # when it is ready. Due to race condition, USR1 signal could be sent
+        # before the process resets the signal handler, we cannot rely on
+        # signal handler to change on time.
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        x11_proc = subprocess.Popen(x11_cmd, stderr=subprocess.STDOUT, env=env)
+        signal.signal(signal.SIGUSR1, set_x11_ready)
+        for _ in range(30):
+          time.sleep(0.1)  # gives Xvfb/Xorg time to start or fail.
+          if x11_ready.getvalue() or x11_proc.poll() is not None:
+            break  # xvfb/xorg sent ready signal, or already failed and stopped.
 
-    dbus_pid = launch_dbus(env)
+        if x11_proc.poll() is None:
+          if x11_ready.getvalue():
+            break  # xvfb/xorg is ready
+          kill(x11_proc, x11_binary)  # still not ready, give up and retry
 
-    if use_openbox:
-      # This is not ideal, but x11_unittests require that (other X11 tests have
-      # a race with the openbox as well, but they take more time to initialize.
-      # And thus, they do no time out compate to the x11_unittests that are
-      # quick enough to start up before openbox is ready.
-      # TODO(dpranke): remove this nasty hack once the test() template is
-      # reworked.
-      wait_for_openbox = False
-      wait_openbox_program = './xwmstartupcheck'
-      if not os.path.isfile(wait_openbox_program):
-        wait_for_openbox = False
-      # Creates a dummy window that waits for a ReparentNotify event that is
-      # sent whenever Openbox WM starts. Must be started before the OpenBox WM
-      # so that it does not miss the event. This helper program is located in
-      # the current build directory. The program terminates automatically after
-      # 30 seconds of waiting for the event.
-      if wait_for_openbox:
-        xwmstartupcheck_proc = subprocess.Popen(
-            wait_openbox_program, stderr=subprocess.STDOUT, env=env)
+      if x11_proc.poll() is not None:
+        raise _ProcessError('Failed to start after 10 tries')
 
-      openbox_proc = subprocess.Popen(
-          ['openbox', '--sm-disable'], stderr=subprocess.STDOUT, env=env)
+      env['DISPLAY'] = display
+      # Set dummy variable for scripts.
+      env['XVFB_DISPLAY'] = display
 
-      # Wait until execution is done. Does not block if the process has already
-      # been terminated. In that case, it's safe to read the return value.
-      if wait_for_openbox:
-        xwmstartupcheck_proc.wait()
-        if xwmstartupcheck_proc.returncode != 0:
-          raise _XvfbProcessError('Failed to get OpenBox up.')
+      if use_openbox and not shutil.which('openbox'):
+        print(
+          'Warning: openbox binary not found. Running without window manager.',
+          file=sys.stderr,
+        )
+        use_openbox = False
 
-    if use_xcompmgr:
-      xcompmgr_proc = subprocess.Popen(
-          'xcompmgr', stderr=subprocess.STDOUT, env=env)
+      if use_openbox:
+        # Openbox will send a SIGUSR1 signal to the current process notifying
+        # the script it has started up.
+        current_proc_id = os.getpid()
 
-    return test_env.run_executable(cmd, env, stdoutfile)
-  except OSError as e:
-    print('Failed to start Xvfb or Openbox: %s\n' % str(e), file=sys.stderr)
-    return 1
-  except _XvfbProcessError as e:
-    print('Xvfb fail: %s\n' % str(e), file=sys.stderr)
-    return 1
-  finally:
-    kill(openbox_proc, 'openbox')
-    kill(xcompmgr_proc, 'xcompmgr')
-    kill(xvfb_proc, 'Xvfb')
+        # The CMD that is passed via the --startup flag.
+        openbox_startup_cmd = 'kill --signal SIGUSR1 %s' % str(current_proc_id)
+        # Setup the signal handlers before starting the openbox instance.
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        signal.signal(signal.SIGUSR1, set_openbox_ready)
+        # Retry up to 10 times due to flaky fails (crbug.com/349187865)
+        for _ in range(10):
+          openbox_ready.setvalue(False)
+          openbox_proc = subprocess.Popen(
+            ['openbox', '--sm-disable', '--startup', openbox_startup_cmd],
+            stderr=subprocess.STDOUT,
+            env=env,
+          )
 
-    # dbus-daemon is not a subprocess, so we can't SIGTERM+waitpid() on it.
-    # To ensure it exits, use SIGKILL which should be safe since all other
-    # processes that it would have been servicing have exited.
-    if dbus_pid:
-      os.kill(dbus_pid, signal.SIGKILL)
+          for _ in range(30):
+            time.sleep(0.1)  # gives Openbox time to start or fail.
+            if openbox_ready.getvalue() or openbox_proc.poll() is not None:
+              break  # openbox sent ready signal, or failed and stopped.
+
+          if openbox_proc.poll() is None:
+            if openbox_ready.getvalue():
+              break  # openbox is ready
+            kill(openbox_proc, 'openbox')  # still not ready, give up and retry
+            print('Openbox failed to start. Retrying.', file=sys.stderr)
+
+        if use_openbox and (
+          openbox_proc is None or openbox_proc.poll() is not None
+        ):
+          raise _ProcessError('Failed to start openbox after 10 tries')
+
+      if use_xcompmgr and not shutil.which('xcompmgr'):
+        print(
+          'Warning: xcompmgr binary not found. Running without compositor.',
+          file=sys.stderr,
+        )
+        use_xcompmgr = False
+      if use_xcompmgr:
+        xcompmgr_proc = subprocess.Popen(
+          'xcompmgr', stderr=subprocess.STDOUT, env=env
+        )
+
+      if use_xorg:
+        _setup_xrandr(env, xvfb_whd)
+
+      return test_env.run_executable(cmd, env, stdoutfile, cwd)
+    except OSError as e:
+      print(
+        'Failed to start %s or Openbox: %s\n' % (x11_binary, str(e)),
+        file=sys.stderr,
+      )
+      return 1
+    except _ProcessError as e:
+      print('%s fail: %s\n' % (x11_binary, str(e)), file=sys.stderr)
+      return 1
+    finally:
+      kill(openbox_proc, 'openbox')
+      kill(xcompmgr_proc, 'xcompmgr')
+      kill(x11_proc, x11_binary)
+      if xorg_config_file is not None:
+        os.remove(xorg_config_file)
 
 
-# TODO(https://crbug.com/1060466): Write tests.
-def _run_with_weston(cmd, env, stdoutfile):
-  weston_proc = None
+def _run_with_wayland_common(compositor_executable, cmd, env):
+  _setup_signals()
 
-  try:
-    signal.signal(signal.SIGTERM, raise_weston_error)
-    signal.signal(signal.SIGINT, raise_weston_error)
+  # It's easiest to run compositor from the build directory, as then we don't
+  # need to specify the paths of the backend's and modules' .so files.
+  if not os.path.isfile(compositor_executable):
+    # If this script isn't run from the build directory, try deducing it from
+    # the test executable's path and change to it.
+    build_dir = os.path.dirname(cmd[0])
+    if os.path.isdir(build_dir):
+      os.chdir(build_dir)
+      # Strip build directory from the test executable's path.
+      cmd[0] = os.path.join('.', os.path.basename(cmd[0]))
 
-    dbus_pid = launch_dbus(env)
+  # The bundled compositor (//third_party/compositor) is used by Linux Ozone
+  # Wayland CI and CQ testers and compiled by //ui/ozone/platform/wayland
+  # whenever there is a dependency on the Ozone/Wayland and
+  # use_bundled_compositor is set in gn args. However, some tests do not require
+  # Wayland or do not use //ui/ozone at all, but still have --use-compositor
+  # flag set by the OZONE_WAYLAND variant (see //testing/buildbot/variants.pyl).
+  # This results in failures and those tests cannot be run because of the
+  # exception that informs about missing compositor binary. Thus, to overcome
+  # the issue before a better solution is found, add a check for the
+  # "compositor" binary here and run tests without Wayland compositor if the
+  # compositor binary is not found.
+  # TODO(https://crbug.com/40169257): find a better solution.
+  if not os.path.isfile(compositor_executable):
+    print('Compositor is not available. Starting without Wayland compositor')
+    return (False, cmd)
 
-    # The bundled weston (//third_party/weston) is used by Linux Ozone Wayland
-    # CI and CQ testers and compiled by //ui/ozone/platform/wayland whenever
-    # there is a dependency on the Ozone/Wayland and use_bundled_weston is set
-    # in gn args. However, some tests do not require Wayland or do not use
-    # //ui/ozone at all, but still have --use-weston flag set by the
-    # OZONE_WAYLAND variant (see //testing/buildbot/variants.pyl). This results
-    # in failures and those tests cannot be run because of the exception that
-    # informs about missing weston binary. Thus, to overcome the issue before
-    # a better solution is found, add a check for the "weston" binary here and
-    # run tests without Wayland compositor if the weston binary is not found.
-    # TODO(https://1178788): find a better solution.
-    if not os.path.isfile("./weston"):
-      print('Weston is not available. Starting without Wayland compositor')
-      return test_env.run_executable(cmd, env, stdoutfile)
+  # Set $XDG_RUNTIME_DIR if it is not set.
+  _set_xdg_runtime_dir(env)
 
-    # Set $XDG_RUNTIME_DIR if it is not set.
-    _set_xdg_runtime_dir(env)
+  return (True, cmd)
 
-    # Weston is compiled along with the Ozone/Wayland platform, and is
-    # fetched as data deps. Thus, run it from the current directory.
-    #
-    # Weston is used with the following flags:
-    # 1) --backend=headless-backend.so - runs Weston in a headless mode
-    # that does not require a real GPU card.
-    # 2) --idle-time=0 - disables idle timeout, which prevents Weston
-    # to enter idle state. Otherwise, Weston stops to send frame callbacks,
-    # and tests start to time out (this typically happens after 300 seconds -
-    # the default time after which Weston enters the idle state).
-    # 3) --width && --height set size of a virtual display: we need to set
-    # an adequate size so that tests can have more room for managing size
-    # of windows.
-    # 4) --use-gl - Runs Weston using hardware acceleration instead of
-    # SwiftShader.
-    weston_cmd = ['./weston', '--backend=headless-backend.so', '--idle-time=0',
-          '--width=1024', '--height=768', '--modules=test-plugin.so']
 
-    if '--weston-use-gl' in cmd:
-      weston_cmd.append('--use-gl')
-      cmd.remove('--weston-use-gl')
+# TODO(crbug.com/40122046): Write tests.
+def _run_with_weston(cmd, env, stdoutfile, cwd):
+  with dbus_session(env):
+    weston_proc = None
 
-    if '--weston-debug-logging' in cmd:
-      cmd.remove('--weston-debug-logging')
-      env = copy.deepcopy(env)
-      env['WAYLAND_DEBUG'] = '1'
+    try:
+      weston_executable = './weston'
+      compositor_found, cmd = _run_with_wayland_common(
+        weston_executable, cmd, env
+      )
+      if not compositor_found:
+        return test_env.run_executable(cmd, env, stdoutfile, cwd)
 
-    weston_proc_display = None
-    for _ in range(10):
-      weston_proc = subprocess.Popen(
-         weston_cmd,
-         stderr=subprocess.STDOUT, env=env)
+      # Write options that can't be passed via CLI flags to the config file.
+      # 1) panel-position=none - disables the panel, which might interfere with
+      # the tests by blocking mouse input.
+      with open(_weston_config_file_path(), 'w') as weston_config_file:
+        weston_config_file.write('[shell]\npanel-position=none')
 
-      # Get the $WAYLAND_DISPLAY set by Weston and pass it to the test launcher.
-      # Please note that this env variable is local for the process. That's the
-      # reason we have to read it from Weston separately.
-      weston_proc_display = _get_display_from_weston(weston_proc.pid)
-      if weston_proc_display is not None:
-        break # Weston could launch and we found the display.
+      # Weston is compiled along with the Ozone/Wayland platform, and is
+      # fetched as data deps. Thus, run it from the current directory.
+      #
+      # Weston is used with the following flags:
+      # 1) --backend=headless-backend.so - runs Weston in a headless mode
+      # that does not require a real GPU card.
+      # 2) --idle-time=0 - disables idle timeout, which prevents Weston
+      # to enter idle state. Otherwise, Weston stops to send frame callbacks,
+      # and tests start to time out (this typically happens after 300 seconds -
+      # the default time after which Weston enters the idle state).
+      # 3) --modules=ui-controls.so,systemd-notify.so - enables support for the
+      # ui-controls Wayland protocol extension and the systemd-notify protocol.
+      # 4) --width && --height set size of a virtual display: we need to set
+      # an adequate size so that tests can have more room for managing size
+      # of windows.
+      # 5) --config=... - tells Weston to use our custom config.
+      weston_cmd = [
+        weston_executable,
+        '--backend=headless-backend.so',
+        '--idle-time=0',
+        '--modules=ui-controls.so,systemd-notify.so',
+        '--width=1280',
+        '--height=800',
+        '--config=' + _weston_config_file_path(),
+      ]
 
-    # If we couldn't find the display after 10 tries, raise an exception.
-    if weston_proc_display is None:
-      raise _WestonProcessError('Failed to start Weston.')
-    env['WAYLAND_DISPLAY'] = weston_proc_display
-    return test_env.run_executable(cmd, env, stdoutfile)
-  except OSError as e:
-    print('Failed to start Weston: %s\n' % str(e), file=sys.stderr)
-    return 1
-  except _WestonProcessError as e:
-    print('Weston fail: %s\n' % str(e), file=sys.stderr)
-    return 1
-  finally:
-    kill(weston_proc, 'weston')
+      if '--weston-use-gl' in cmd:
+        # Runs Weston using hardware acceleration instead of SwiftShader.
+        weston_cmd.append('--use-gl')
+        cmd.remove('--weston-use-gl')
 
-    # dbus-daemon is not a subprocess, so we can't SIGTERM+waitpid() on it.
-    # To ensure it exits, use SIGKILL which should be safe since all other
-    # processes that it would have been servicing have exited.
-    if dbus_pid:
-      os.kill(dbus_pid, signal.SIGKILL)
+      if '--weston-debug-logging' in cmd:
+        cmd.remove('--weston-debug-logging')
+        env = copy.deepcopy(env)
+        env['WAYLAND_DEBUG'] = '1'
+
+      # We use the systemd-notify protocol to detect whether weston has launched
+      # successfully. We listen on a unix socket and set the NOTIFY_SOCKET
+      # environment variable to the socket's path. If we tell it to load its
+      # systemd-notify module, weston will send a 'READY=1' message to the
+      # socket once it has loaded that module.  See the sd_notify(3) man page
+      # and weston's compositor/systemd-notify.c for more details.
+      with socket.socket(
+        socket.AF_UNIX, socket.SOCK_DGRAM | socket.SOCK_NONBLOCK
+      ) as notify_socket:
+        notify_socket.bind(_weston_notify_socket_address())
+        env['NOTIFY_SOCKET'] = _weston_notify_socket_address()
+
+        weston_proc_display = None
+        for _ in range(10):
+          weston_proc = subprocess.Popen(
+            weston_cmd, stderr=subprocess.STDOUT, env=env
+          )
+
+          for _ in range(25):
+            time.sleep(0.1)  # Gives weston some time to start.
+            try:
+              if notify_socket.recv(512) == b'READY=1':
+                break
+            except BlockingIOError:
+              continue
+
+          for _ in range(25):
+            # The 'READY=1' message is sent as soon as weston loads the
+            # systemd-notify module. This happens shortly before spawning its
+            # subprocesses (e.g. desktop-shell). Wait some more to ensure they
+            # have been spawned.
+            time.sleep(0.1)
+
+            # Get the $WAYLAND_DISPLAY set by Weston and pass it to the test
+            # launcher. Please note that this env variable is local for the
+            # process. That's the reason we have to read it from Weston
+            # separately.
+            weston_proc_display = _get_display_from_weston(weston_proc.pid)
+            if weston_proc_display is not None:
+              break  # Weston could launch and we found the display.
+
+          # Also break from the outer loop.
+          if weston_proc_display is not None:
+            break
+
+      # If we couldn't find the display after 10 tries, raise an exception.
+      if weston_proc_display is None:
+        raise _ProcessError('Failed to start Weston.')
+
+      env.pop('NOTIFY_SOCKET')
+
+      env['WAYLAND_DISPLAY'] = weston_proc_display
+      if '--chrome-wayland-debugging' in cmd:
+        cmd.remove('--chrome-wayland-debugging')
+        env['WAYLAND_DEBUG'] = '1'
+      else:
+        env['WAYLAND_DEBUG'] = '0'
+
+      return test_env.run_executable(cmd, env, stdoutfile, cwd)
+    except OSError as e:
+      print('Failed to start Weston: %s\n' % str(e), file=sys.stderr)
+      return 1
+    except _ProcessError as e:
+      print('Weston fail: %s\n' % str(e), file=sys.stderr)
+      return 1
+    finally:
+      kill(weston_proc, 'weston')
+
+      if os.path.exists(_weston_notify_socket_address()):
+        os.remove(_weston_notify_socket_address())
+
+      if os.path.exists(_weston_config_file_path()):
+        os.remove(_weston_config_file_path())
+
+
+def _weston_notify_socket_address():
+  return os.path.join(tempfile.gettempdir(), '.xvfb.py-weston-notify.sock')
+
+
+def _weston_config_file_path():
+  return os.path.join(tempfile.gettempdir(), '.xvfb.py-weston.ini')
+
+
+def _run_with_mutter(cmd, env, stdoutfile, cwd, mutter_display):
+  with dbus_session(env):
+    mutter_proc = None
+
+    try:
+      mutter_executable = './mutter'
+      compositor_found, cmd = _run_with_wayland_common(
+        mutter_executable, cmd, env
+      )
+      if not compositor_found:
+        # Ensure mutter is checked out if the compositor is not found.
+        if not os.path.isdir(
+          os.path.join(
+            os.path.dirname(__file__), '..', 'third_party', 'mutter', 'src'
+          )
+        ):
+          print(
+            'In order to run tests using mutter, its sources need to be '
+            'checked outexplicitly and built.\n'
+            'Add \'"checkout_mutter": True\' in the "custom_vars" section '
+            'of your .gclient file, and run gclient sync.\n'
+            'Then build the test executable or mutter and run this script '
+            'again.',
+            file=sys.stderr,
+          )
+          return 1
+        return test_env.run_executable(cmd, env, stdoutfile, cwd)
+
+      # Set GSETTINGS_SCHEMA_DIR to the directory where the compiled schemas
+      # are located. Since _run_with_wayland_common may have changed the
+      # current directory to the build directory, we use the directory
+      # containing the mutter executable.
+      env['GSETTINGS_SCHEMA_DIR'] = os.path.dirname(mutter_executable)
+
+      # Use headless wayland backend with a virtual monitor of appropriate size.
+      mutter_cmd = [
+        mutter_executable,
+        '--headless',
+        f'--virtual-monitor={mutter_display}',
+        '--',
+      ]
+      cmd = mutter_cmd + cmd
+
+      if '--mutter-debug-logging' in cmd:
+        cmd.remove('--mutter-debug-logging')
+        env = copy.deepcopy(env)
+        env['G_MESSAGES_DEBUG'] = 'libmutter'
+        env['MUTTER_DEBUG'] = 'input'
+
+      returncode = test_env.run_executable(cmd, env, stdoutfile, cwd)
+      # Log the exit status explicitly. If mutter crashes before the test
+      # writes its results, wrappers such as result_adapter replace the exit
+      # code with their own, hiding the real cause.
+      if returncode < 0:
+        try:
+          signame = signal.Signals(-returncode).name
+        except ValueError:
+          signame = str(-returncode)
+        print('mutter was killed by signal %s' % signame, file=sys.stderr)
+      elif returncode:
+        print('mutter exited with code %d' % returncode, file=sys.stderr)
+      return returncode
+    except _ProcessError as e:
+      print('mutter fail: %s\n' % str(e), file=sys.stderr)
+      return 1
+    finally:
+      kill(mutter_proc, 'mutter')
+
 
 def _get_display_from_weston(weston_proc_pid):
   """Retrieves $WAYLAND_DISPLAY set by Weston.
 
-  Searches for the child "weston-desktop-shell" process, takes its
-  environmental variables, and returns $WAYLAND_DISPLAY variable set
-  by that process. If the variable is not set, tries up to 10 times
-  and then gives up.
+  Returns the $WAYLAND_DISPLAY variable from one of weston's subprocesses.
+
+  Weston updates this variable early in its startup in the main process, but we
+  can only read the environment variables as they were when the process was
+  created. Therefore we must use one of weston's subprocesses, which are all
+  spawned with the new value for $WAYLAND_DISPLAY. Any of them will do, as they
+  all have the same value set.
 
   Args:
     weston_proc_pid: The process of id of the main Weston process.
 
   Returns:
     the display set by Wayland, which clients can use to connect to.
-
-  TODO(https://crbug.com/1060469): This is potentially error prone
-  function. See the bug for further details.
   """
 
-  # Try 100 times as it is not known when Weston spawn child desktop shell
-  # process. The most seen so far is ~50 checks/~2.5 seconds, but startup
-  # is usually almost instantaneous.
-  for _ in range(100):
-    # gives weston time to start or fail.
-    time.sleep(.05)
-    # Take the parent process.
-    parent = psutil.Process(weston_proc_pid)
-    if parent is None:
-      break # The process is not found. Give up.
+  # Take the parent process.
+  parent = psutil.Process(weston_proc_pid)
+  if parent is None:
+    return None  # The process is not found. Give up.
 
-    # Traverse through all the children processes and find the
-    # "weston-desktop-shell" process that sets local to process env variables
-    # including the $WAYLAND_DISPLAY.
-    children = parent.children(recursive=True)
-    for process in children:
-      if process.name() == "weston-desktop-shell":
-        weston_proc_display = process.environ().get('WAYLAND_DISPLAY')
-        # If display is set, Weston could start successfully and we can use
-        # that display for Wayland connection in Chromium.
-        if weston_proc_display is not None:
-          return weston_proc_display
+  # Traverse through all the children processes and find one that has
+  # $WAYLAND_DISPLAY set.
+  children = parent.children(recursive=True)
+  for process in children:
+    weston_proc_display = process.environ().get('WAYLAND_DISPLAY')
+    # If display is set, Weston could start successfully and we can use
+    # that display for Wayland connection in Chromium.
+    if weston_proc_display is not None:
+      return weston_proc_display
   return None
 
 
@@ -397,12 +803,8 @@ class MutableBoolean(object):
     return self._val
 
 
-def raise_xvfb_error(*_):
-  raise _XvfbProcessError('Terminated')
-
-
-def raise_weston_error(*_):
-  raise _WestonProcessError('Terminated')
+def raise_process_terminated(*_):
+  raise _ProcessError('Terminated')
 
 
 def find_display():
@@ -415,16 +817,15 @@ def find_display():
     A string of a random available display number for Xvfb ':{99-119}'.
 
   Raises:
-    _XvfbProcessError: Raised when displays 99 through 119 are unavailable.
+    _ProcessError: Raised when displays 99 through 119 are unavailable.
   """
 
   available_displays = [
-      d for d in range(99, 120)
-      if not os.path.isfile('/tmp/.X{}-lock'.format(d))
+    d for d in range(99, 120) if not os.path.isfile('/tmp/.X{}-lock'.format(d))
   ]
   if available_displays:
     return ':{}'.format(random.choice(available_displays))
-  raise _XvfbProcessError('Failed to find display number')
+  raise _ProcessError('Failed to find display number')
 
 
 def _set_xdg_runtime_dir(env):
@@ -438,7 +839,15 @@ def _set_xdg_runtime_dir(env):
 
 
 def main():
-  usage = 'Usage: xvfb.py [command [--no-xvfb or --use-weston] args...]'
+  usage = (
+    '[command [--no-xvfb or --use-xvfb or --use-weston] args...]\n'
+    '\t --no-xvfb\t\tTurns off all X11 backings (Xvfb and Xorg).\n'
+    '\t --use-xvfb\t\tForces legacy Xvfb backing instead of Xorg.\n'
+    '\t --use-weston\t\tEnable Weston Wayland server.\n'
+    '\t --use-mutter\t\tEnable Mutter Wayland server.\n'
+    '\t --mutter-display\tSpecify Mutter Display Resolution as WxH.'
+  )
+  # TODO(crbug.com/326283384): Argparse-ify this.
   if len(sys.argv) < 2:
     print(usage + '\n', file=sys.stderr)
     return 2
@@ -446,8 +855,9 @@ def main():
   # If the user still thinks the first argument is the execution directory then
   # print a friendly error message and quit.
   if os.path.isdir(sys.argv[1]):
-    print('Invalid command: \"%s\" is a directory\n' % sys.argv[1],
-          file=sys.stderr)
+    print(
+      'Invalid command: "%s" is a directory\n' % sys.argv[1], file=sys.stderr
+    )
     print(usage + '\n', file=sys.stderr)
     return 3
 

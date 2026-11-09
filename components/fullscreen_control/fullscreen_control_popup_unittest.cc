@@ -1,26 +1,32 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "ui/views/widget/widget.h"
+#include "components/fullscreen_control/fullscreen_control_popup.h"
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/test_mock_time_task_runner.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "components/fullscreen_control/fullscreen_control_popup.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gfx/animation/animation_test_api.h"
+#include "ui/gfx/scoped_animation_duration_scale_mode.h"
 #include "ui/views/test/widget_test.h"
+#include "ui/views/widget/widget.h"
 
 class FullscreenControlPopupTest : public views::test::WidgetTest {
  public:
-  FullscreenControlPopupTest() {}
-  ~FullscreenControlPopupTest() override {}
+  FullscreenControlPopupTest() = default;
+
+  FullscreenControlPopupTest(const FullscreenControlPopupTest&) = delete;
+  FullscreenControlPopupTest& operator=(const FullscreenControlPopupTest&) =
+      delete;
+
+  ~FullscreenControlPopupTest() override = default;
 
   // views::test::WidgetTest:
   void SetUp() override {
@@ -32,9 +38,12 @@ class FullscreenControlPopupTest : public views::test::WidgetTest {
         parent_widget_->GetNativeView(), base::DoNothing(), base::DoNothing());
     animation_api_ = std::make_unique<gfx::AnimationTestApi>(
         popup_->GetAnimationForTesting());
+    normal_duration_.emplace(
+        gfx::ScopedAnimationDurationScaleMode::NORMAL_DURATION);
   }
 
   void TearDown() override {
+    normal_duration_.reset();
     parent_widget_->CloseNow();
     views::test::WidgetTest::TearDown();
   }
@@ -46,9 +55,7 @@ class FullscreenControlPopupTest : public views::test::WidgetTest {
     animation_api_->Step(now + duration);
   }
 
-  void CompleteAnimation() {
-    RunAnimationFor(base::TimeDelta::FromMilliseconds(5000));
-  }
+  void CompleteAnimation() { RunAnimationFor(base::Milliseconds(5000)); }
 
   gfx::Rect GetParentBounds() const {
     return parent_widget_->GetClientAreaBoundsInScreen();
@@ -62,9 +69,8 @@ class FullscreenControlPopupTest : public views::test::WidgetTest {
 
  private:
   std::unique_ptr<gfx::AnimationTestApi> animation_api_;
-  views::Widget* parent_widget_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(FullscreenControlPopupTest);
+  raw_ptr<views::Widget, DanglingUntriaged> parent_widget_ = nullptr;
+  std::optional<gfx::ScopedAnimationDurationScaleMode> normal_duration_;
 };
 
 TEST_F(FullscreenControlPopupTest, ShowPopupAnimated) {
@@ -91,7 +97,7 @@ TEST_F(FullscreenControlPopupTest, ShowPopupAnimated) {
 TEST_F(FullscreenControlPopupTest, HidePopupWhileStillShowing) {
   popup_->Show(GetParentBounds());
 
-  RunAnimationFor(base::TimeDelta::FromMilliseconds(50));
+  RunAnimationFor(base::Milliseconds(50));
 
   EXPECT_TRUE(popup_->IsAnimating());
   EXPECT_TRUE(popup_->IsVisible());

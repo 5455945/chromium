@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,16 @@
 
 #include <memory>
 
+#include "chrome/browser/browser_features.h"
 #include "chrome/browser/chrome_browser_main.h"
+#include "chrome/common/conflicts/module_watcher_win.h"
+#include "chrome/install_static/buildflags.h"
 
-class ModuleWatcher;
+#if BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
+#include <optional>
+
+#include "chrome/browser/google/did_run_updater_win.h"
+#endif
 
 namespace base {
 class CommandLine;
@@ -22,9 +29,16 @@ class CommandLine;
 // user to close the other chrome instance.
 int DoUninstallTasks(bool chrome_still_running);
 
+// If `features::kEagerlyResolveCoreDllsImports` is enabled and configured to
+// run at `timing`, resolves all delay-load imports for core DLLs (user32.dll,
+// uxtheme.dll, gdi32.dll, imm32.dll and dwmapi.dll), loading them if needed.
+// Must be called from the browser process main thread.
+void MaybeLoadAllImportsForCoreDlls(
+    features::EagerlyResolveCoreDllsImportsTiming timing);
+
 class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
  public:
-  ChromeBrowserMainPartsWin(const content::MainFunctionParams& parameters,
+  ChromeBrowserMainPartsWin(bool is_integration_test,
                             StartupData* startup_data);
   ChromeBrowserMainPartsWin(const ChromeBrowserMainPartsWin&) = delete;
   ChromeBrowserMainPartsWin& operator=(const ChromeBrowserMainPartsWin&) =
@@ -32,22 +46,19 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
   ~ChromeBrowserMainPartsWin() override;
 
   // BrowserParts overrides.
+  int PreEarlyInitialization() override;
   void ToolkitInitialized() override;
   void PreCreateMainMessageLoop() override;
   int PreCreateThreads() override;
+  int PostCreateThreads() override;
   void PostMainMessageLoopRun() override;
 
   // ChromeBrowserMainParts overrides.
+  void PostEarlyInitialization() override;
   void ShowMissingLocaleMessageBox() override;
-  void PostProfileInit() override;
+  void PreProfileInit() override;
+  void PostProfileInit(Profile* profile, bool is_initial_profile) override;
   void PostBrowserStart() override;
-
-  // Prepares the localized strings that are going to be displayed to
-  // the user if the browser process dies. These strings are stored in the
-  // environment block so they are accessible in the early stages of the
-  // chrome executable's lifetime.
-  static void PrepareRestartOnCrashEnviroment(
-      const base::CommandLine& parsed_command_line);
 
   // Registers Chrome with the Windows Restart Manager, which will restore the
   // Chrome session when the computer is restarted after a system update.
@@ -77,6 +88,14 @@ class ChromeBrowserMainPartsWin : public ChromeBrowserMainParts {
       const base::CommandLine& command_line);
 
  private:
+  void OnModuleEvent(const ModuleWatcher::ModuleEvent& event);
+  void SetupModuleDatabase(std::unique_ptr<ModuleWatcher>* module_watcher);
+
+#if BUILDFLAG(USE_GOOGLE_UPDATE_INTEGRATION)
+  // Updates Chrome's "did run" state periodically when the process is in use.
+  std::optional<DidRunUpdater> did_run_updater_;
+#endif
+
   // Watches module load events and forwards them to the ModuleDatabase.
   std::unique_ptr<ModuleWatcher> module_watcher_;
 };

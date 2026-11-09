@@ -1,18 +1,11 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_CONTEXTS_PAYMENT_HANDLER_PERMISSION_CONTEXT_H_
 #define COMPONENTS_PERMISSIONS_CONTEXTS_PAYMENT_HANDLER_PERMISSION_CONTEXT_H_
 
-#include "base/macros.h"
-#include "components/permissions/permission_context_base.h"
-
-class GURL;
-
-namespace permissions {
-class PermissionRequestID;
-}
+#include "components/permissions/content_setting_permission_context_base.h"
 
 namespace content {
 class WebContents;
@@ -21,24 +14,23 @@ class WebContents;
 namespace payments {
 
 class PaymentHandlerPermissionContext
-    : public permissions::PermissionContextBase {
+    : public permissions::ContentSettingPermissionContextBase {
  public:
   explicit PaymentHandlerPermissionContext(
       content::BrowserContext* browser_context);
+
+  PaymentHandlerPermissionContext(const PaymentHandlerPermissionContext&) =
+      delete;
+  PaymentHandlerPermissionContext& operator=(
+      const PaymentHandlerPermissionContext&) = delete;
+
   ~PaymentHandlerPermissionContext() override;
 
  private:
   // PermissionContextBase
   void DecidePermission(
-      content::WebContents* web_contents,
-      const permissions::PermissionRequestID& id,
-      const GURL& requesting_origin,
-      const GURL& embedding_origin,
-      bool user_gesture,
+      std::unique_ptr<permissions::PermissionRequestData> request_data,
       permissions::BrowserPermissionCallback callback) override;
-  bool IsRestrictedToSecureOrigins() const override;
-
-  DISALLOW_COPY_AND_ASSIGN(PaymentHandlerPermissionContext);
 };
 
 }  // namespace payments

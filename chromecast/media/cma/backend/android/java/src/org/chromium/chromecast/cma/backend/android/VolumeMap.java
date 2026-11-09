@@ -1,29 +1,27 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.cma.backend.android;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.media.AudioDeviceInfo;
 import android.media.AudioManager;
 import android.os.Build;
 import android.util.SparseIntArray;
 
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+
 import org.chromium.base.ContextUtils;
 import org.chromium.base.Log;
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
 import org.chromium.chromecast.media.AudioContentType;
 
 /**
  * Implements the java-side of the volume control API that maps between volume levels ([0..100])
- * and dBFS values. It uses an Android API that was made public in SDK version 28, but may be
- * visible via reflection on Android Things on older versions.
+ * and dBFS values. It uses an Android API that was made public in SDK version 28.
  */
 @JNINamespace("chromecast::media")
-@TargetApi(Build.VERSION_CODES.N)
 public final class VolumeMap {
     private static final String TAG = "VolumeMap";
 
@@ -32,27 +30,29 @@ public final class VolumeMap {
     private static AudioManager sAudioManager;
 
     // Mapping from Android's stream_type to Cast's AudioContentType (used for callback).
-    private static final SparseIntArray ANDROID_TYPE_TO_CAST_TYPE_MAP = new SparseIntArray(4) {
-        {
-            append(AudioManager.STREAM_MUSIC, AudioContentType.MEDIA);
-            append(AudioManager.STREAM_ALARM, AudioContentType.ALARM);
-            append(AudioManager.STREAM_SYSTEM, AudioContentType.COMMUNICATION);
-            append(AudioManager.STREAM_VOICE_CALL, AudioContentType.OTHER);
-        }
-    };
+    private static final SparseIntArray ANDROID_TYPE_TO_CAST_TYPE_MAP;
+    static {
+        var array = new SparseIntArray(4);
+        array.append(AudioManager.STREAM_MUSIC, AudioContentType.MEDIA);
+        array.append(AudioManager.STREAM_ALARM, AudioContentType.ALARM);
+        array.append(AudioManager.STREAM_SYSTEM, AudioContentType.COMMUNICATION);
+        array.append(AudioManager.STREAM_VOICE_CALL, AudioContentType.OTHER);
+        ANDROID_TYPE_TO_CAST_TYPE_MAP = array;
+    }
 
-    private static final SparseIntArray MAX_VOLUME_INDEX = new SparseIntArray(4) {
-        {
-            append(AudioManager.STREAM_MUSIC,
-                    getAudioManager().getStreamMaxVolume(AudioManager.STREAM_MUSIC));
-            append(AudioManager.STREAM_ALARM,
-                    getAudioManager().getStreamMaxVolume(AudioManager.STREAM_ALARM));
-            append(AudioManager.STREAM_SYSTEM,
-                    getAudioManager().getStreamMaxVolume(AudioManager.STREAM_SYSTEM));
-            append(AudioManager.STREAM_VOICE_CALL,
-                    getAudioManager().getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL));
-        }
-    };
+    private static final SparseIntArray MAX_VOLUME_INDEX;
+    static {
+        var array = new SparseIntArray(4);
+        array.append(AudioManager.STREAM_MUSIC,
+                getAudioManager().getStreamMaxVolume(AudioManager.STREAM_MUSIC));
+        array.append(AudioManager.STREAM_ALARM,
+                getAudioManager().getStreamMaxVolume(AudioManager.STREAM_ALARM));
+        array.append(AudioManager.STREAM_SYSTEM,
+                getAudioManager().getStreamMaxVolume(AudioManager.STREAM_SYSTEM));
+        array.append(AudioManager.STREAM_VOICE_CALL,
+                getAudioManager().getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL));
+        MAX_VOLUME_INDEX = array;
+    }
 
     private static int getStreamMinVolume(int streamType) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
@@ -68,17 +68,19 @@ public final class VolumeMap {
             Log.w(TAG, "Unsupported Android SDK version: " + Build.VERSION.SDK_INT, e);
             return 0;
         }
-    };
+    }
 
-    private static final SparseIntArray MIN_VOLUME_INDEX = new SparseIntArray(4) {
-        {
-            append(AudioManager.STREAM_MUSIC, getStreamMinVolume(AudioManager.STREAM_MUSIC));
-            append(AudioManager.STREAM_ALARM, getStreamMinVolume(AudioManager.STREAM_ALARM));
-            append(AudioManager.STREAM_SYSTEM, getStreamMinVolume(AudioManager.STREAM_SYSTEM));
-            append(AudioManager.STREAM_VOICE_CALL,
-                    getStreamMinVolume(AudioManager.STREAM_VOICE_CALL));
-        }
-    };
+    private static final SparseIntArray MIN_VOLUME_INDEX;
+
+    static {
+        var array = new SparseIntArray(4);
+        array.append(AudioManager.STREAM_MUSIC, getStreamMinVolume(AudioManager.STREAM_MUSIC));
+        array.append(AudioManager.STREAM_ALARM, getStreamMinVolume(AudioManager.STREAM_ALARM));
+        array.append(AudioManager.STREAM_SYSTEM, getStreamMinVolume(AudioManager.STREAM_SYSTEM));
+        array.append(
+                AudioManager.STREAM_VOICE_CALL, getStreamMinVolume(AudioManager.STREAM_VOICE_CALL));
+        MIN_VOLUME_INDEX = array;
+    }
 
     private static AudioManager getAudioManager() {
         if (sAudioManager == null) {

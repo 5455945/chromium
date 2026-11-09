@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,6 +18,12 @@ class ChromeSecurityStateModelDelegate : public SecurityStateModelDelegate {
 
   // SecurityStateModelDelegate.
   security_state::SecurityLevel GetSecurityLevel(
+      content::WebContents* web_contents) const override;
+
+  // SecurityStateModelDelegate.
+  security_state::MaliciousContentStatus GetMaliciousContentStatus(
+      content::WebContents* web_contents) const override;
+  std::unique_ptr<security_state::VisibleSecurityState> GetVisibleSecurityState(
       content::WebContents* web_contents) const override;
 };
 

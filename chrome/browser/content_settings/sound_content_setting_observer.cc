@@ -1,19 +1,22 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/content_settings/sound_content_setting_observer.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
 #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/tabs/tab_enums.h"
+#include "chrome/browser/ui/tabs/tab_muted_utils.h"
 #include "chrome/common/pref_names.h"
 #include "components/content_settings/browser/page_specific_content_settings.h"
+#include "components/content_settings/core/common/content_settings.h"
 #include "components/content_settings/core/common/content_settings_utils.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
-#include "components/ukm/content/source_url_recorder.h"
+#include "components/tabs/public/tab_interface.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
@@ -22,20 +25,22 @@
 #include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "third_party/blink/public/mojom/autoplay/autoplay.mojom.h"
 
-#if !defined(OS_ANDROID)
-#include "chrome/browser/ui/tabs/tab_utils.h"
-#endif
+using content_settings::SettingSource;
+
+DEFINE_USER_DATA(SoundContentSettingObserver);
 
 SoundContentSettingObserver::SoundContentSettingObserver(
+    tabs::TabInterface& tab,
     content::WebContents* contents)
-    : content::WebContentsObserver(contents), logged_site_muted_ukm_(false) {
+    : content::WebContentsObserver(contents),
+      scoped_unowned_user_data_(tab.GetUnownedUserDataHost(), *this) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
   host_content_settings_map_ =
       HostContentSettingsMapFactory::GetForProfile(profile);
-  observation_.Observe(host_content_settings_map_);
+  observation_.Observe(host_content_settings_map_.get());
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   // Listen to changes of the block autoplay pref.
   pref_change_registrar_.Init(profile->GetPrefs());
   pref_change_registrar_.Add(
@@ -47,33 +52,37 @@ SoundContentSettingObserver::SoundContentSettingObserver(
 
 SoundContentSettingObserver::~SoundContentSettingObserver() = default;
 
+// static
+SoundContentSettingObserver* SoundContentSettingObserver::From(
+    tabs::TabInterface* tab) {
+  return tab ? Get(tab->GetUnownedUserDataHost()) : nullptr;
+}
+
 void SoundContentSettingObserver::ReadyToCommitNavigation(
     content::NavigationHandle* navigation_handle) {
   if (navigation_handle->IsSameDocument())
     return;
 
-  GURL url = navigation_handle->IsInMainFrame()
+  GURL url = !navigation_handle->GetParentFrameOrOuterDocument()
                  ? navigation_handle->GetURL()
                  : navigation_handle->GetRenderFrameHost()
-                       ->GetMainFrame()
+                       ->GetOutermostMainFrame()
                        ->GetLastCommittedURL();
 
   content_settings::SettingInfo setting_info;
-  std::unique_ptr<base::Value> setting =
-      host_content_settings_map_->GetWebsiteSetting(
-          url, navigation_handle->GetURL(), ContentSettingsType::SOUND,
-          &setting_info);
+  ContentSetting setting = host_content_settings_map_->GetContentSetting(
+      url, url, ContentSettingsType::SOUND, &setting_info);
 
-  if (content_settings::ValueToContentSetting(setting.get()) !=
-      CONTENT_SETTING_ALLOW) {
+  if (setting != CONTENT_SETTING_ALLOW) {
     return;
   }
 
-  if (setting_info.source != content_settings::SETTING_SOURCE_USER)
+  if (setting_info.source != SettingSource::kUser) {
     return;
+  }
 
-  if (setting_info.primary_pattern == ContentSettingsPattern::Wildcard() &&
-      setting_info.secondary_pattern == ContentSettingsPattern::Wildcard()) {
+  if (setting_info.primary_pattern.MatchesAllHosts() &&
+      setting_info.secondary_pattern.MatchesAllHosts()) {
     return;
   }
 
@@ -85,14 +94,9 @@ void SoundContentSettingObserver::ReadyToCommitNavigation(
                            blink::mojom::kAutoplayFlagUserException);
 }
 
-void SoundContentSettingObserver::DidFinishNavigation(
-    content::NavigationHandle* navigation_handle) {
-  if (navigation_handle->IsInPrimaryMainFrame() &&
-      navigation_handle->HasCommitted() &&
-      !navigation_handle->IsSameDocument()) {
-    MuteOrUnmuteIfNecessary();
-    logged_site_muted_ukm_ = false;
-  }
+void SoundContentSettingObserver::PrimaryPageChanged(content::Page& page) {
+  MuteOrUnmuteIfNecessary();
+  logged_site_muted_ukm_ = false;
 }
 
 void SoundContentSettingObserver::OnAudioStateChanged(bool audible) {
@@ -102,13 +106,13 @@ void SoundContentSettingObserver::OnAudioStateChanged(bool audible) {
 void SoundContentSettingObserver::OnContentSettingChanged(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
-    ContentSettingsType content_type) {
-  if (content_type != ContentSettingsType::SOUND)
+    ContentSettingsTypeSet content_type_set) {
+  if (!content_type_set.Contains(ContentSettingsType::SOUND))
     return;
 
-#if !defined(OS_ANDROID)
-  if (primary_pattern == ContentSettingsPattern() &&
-      secondary_pattern == ContentSettingsPattern()) {
+#if !BUILDFLAG(IS_ANDROID)
+  if (primary_pattern.MatchesAllHosts() &&
+      secondary_pattern.MatchesAllHosts()) {
     UpdateAutoplayPolicy();
   }
 #endif
@@ -120,31 +124,32 @@ void SoundContentSettingObserver::OnContentSettingChanged(
 void SoundContentSettingObserver::MuteOrUnmuteIfNecessary() {
   bool mute = GetCurrentContentSetting() == CONTENT_SETTING_BLOCK;
 
-// TabMutedReason does not exist on Android.
-#if defined(OS_ANDROID)
-  web_contents()->SetAudioMuted(mute);
-#else
   // We don't want to overwrite TabMutedReason with no change.
   if (mute == web_contents()->IsAudioMuted())
     return;
 
-  TabMutedReason reason = chrome::GetTabAudioMutedReason(web_contents());
+  TabMutedReason reason = GetTabAudioMutedReason(web_contents());
 
   // Do not override the decisions of an extension.
-  if (reason == TabMutedReason::EXTENSION)
+  if (reason == TabMutedReason::kExtension) {
     return;
+  }
 
   // Don't unmute a chrome:// URL if the tab has been explicitly muted on a
   // chrome:// URL.
-  if (reason == TabMutedReason::CONTENT_SETTING_CHROME &&
+  if (reason == TabMutedReason::kContentSettingChrome &&
       web_contents()->GetLastCommittedURL().SchemeIs(
           content::kChromeUIScheme)) {
     return;
   }
 
-  chrome::SetTabAudioMuted(web_contents(), mute,
-                           TabMutedReason::CONTENT_SETTING, std::string());
-#endif  // defined(OS_ANDROID)
+  // Do not unmute if we're muted due to audio indicator.
+  if (!mute && reason == TabMutedReason::kAudioIndicator) {
+    return;
+  }
+
+  SetTabAudioMuted(web_contents(), mute, TabMutedReason::kContentSetting,
+                   std::string());
 }
 
 ContentSetting SoundContentSettingObserver::GetCurrentContentSetting() {
@@ -155,13 +160,15 @@ ContentSetting SoundContentSettingObserver::GetCurrentContentSetting() {
 
 void SoundContentSettingObserver::CheckSoundBlocked(bool is_audible) {
   if (is_audible && GetCurrentContentSetting() == CONTENT_SETTING_BLOCK) {
-    // The tab has tried to play sound, but was muted.
-    // This is a page level event so it is OK to get the main frame here.
-    // TODO(https://crbug.com/1103176): We should figure a way of not having to
-    // use GetMainFrame here. (pass the source frame somehow)
+    // Since this is a page-level event and only primary pages can play audio
+    // in prerendering, we get `settings` from the main frame of the primary
+    // page.
+    // TODO(crbug.com/40139135): For other types of FrameTrees (fenced
+    // frames) than prerendering, we should figure a way of not having
+    // to use GetPrimaryMainFrame here. (pass the source frame somehow)
     content_settings::PageSpecificContentSettings* settings =
         content_settings::PageSpecificContentSettings::GetForFrame(
-            web_contents()->GetMainFrame());
+            web_contents()->GetPrimaryMainFrame());
     if (settings)
       settings->OnAudioBlocked();
 
@@ -176,7 +183,7 @@ void SoundContentSettingObserver::RecordSiteMutedUKM() {
   logged_site_muted_ukm_ = true;
 
   ukm::builders::Media_SiteMuted(
-      ukm::GetSourceIdForWebContentsDocument(web_contents()))
+      web_contents()->GetPrimaryMainFrame()->GetPageUkmSourceId())
       .SetMuteReason(GetSiteMutedReason())
       .Record(ukm::UkmRecorder::Get());
 }
@@ -188,7 +195,9 @@ SoundContentSettingObserver::GetSiteMutedReason() {
   host_content_settings_map_->GetWebsiteSetting(
       url, url, ContentSettingsType::SOUND, &info);
 
-  DCHECK_EQ(content_settings::SETTING_SOURCE_USER, info.source);
+  // TODO(crbug.com/570903630): CHECK-exclusion: Convert to a CHECK once we are
+  // confident it won't be triggered.
+  DCHECK_EQ(SettingSource::kUser, info.source);
 
   if (info.primary_pattern == ContentSettingsPattern::Wildcard() &&
       info.secondary_pattern == ContentSettingsPattern::Wildcard()) {
@@ -197,11 +206,9 @@ SoundContentSettingObserver::GetSiteMutedReason() {
   return MuteReason::kSiteException;
 }
 
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
 void SoundContentSettingObserver::UpdateAutoplayPolicy() {
   // Force a WebkitPreferences update to update the autoplay policy.
   web_contents()->OnWebPreferencesChanged();
 }
 #endif
-
-WEB_CONTENTS_USER_DATA_KEY_IMPL(SoundContentSettingObserver)

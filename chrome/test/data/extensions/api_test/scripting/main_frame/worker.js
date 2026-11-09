@@ -1,10 +1,11 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+import {getSingleTab} from '/_test_resources/test_util/tabs_util.js';
+
 const NEW_TITLE_FROM_FUNCTION = 'Hello, world!';
 const NEW_TITLE_FROM_FILE = 'Goodnight';
-const EXACTLY_ONE_FILE_ERROR = 'Error: Exactly one file must be specified.';
 
 function injectedFunction() {
   // NOTE(devlin): We currently need to (re)hard-code this title, since the
@@ -24,12 +25,16 @@ function echoArguments() {
   return args;
 }
 
-async function getSingleTab(query) {
-  const tabs = await new Promise(resolve => {
-    chrome.tabs.query(query, resolve);
-  });
-  chrome.test.assertEq(1, tabs.length);
-  return tabs[0];
+// A helper function to return "flags" set by scripts in the isolated and main
+// worlds. Note that the main world script flag is set by a script in the html
+// file.
+function getExecutionWorldFlags() {
+  // Note: We use '<none>' here because undefined and null values aren't
+  // preserved in return results from executeScript() calls.
+  return {
+    isolatedWorld: window.isolatedWorldFlag || '<none>',
+    mainWorld: window.mainWorldFlag || '<none>',
+  };
 }
 
 chrome.test.runTests([
@@ -69,15 +74,15 @@ chrome.test.runTests([
 
   async function echoArgsOfDifferentTypes() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const args = [
-        42,
-        0.07,
-        'foo',
-        true,
-        [1, 2, 3],
-        { key: 'value' },
-        null,
+      42,
+      0.07,
+      'foo',
+      true,
+      [1, 2, 3],
+      {key: 'value'},
+      null,
     ];
     const results = await chrome.scripting.executeScript({
       target: {
@@ -93,9 +98,9 @@ chrome.test.runTests([
 
   async function nullInArgsIsNotPreserved() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const args = [
-        { key: 'value', nullKey: null },
+      {key: 'value', nullKey: null},
     ];
     const results = await chrome.scripting.executeScript({
       target: {
@@ -108,7 +113,7 @@ chrome.test.runTests([
     // Currently, null values in objects are not preserved. We should fix this,
     // but the IDL extension schema currently does not support the preserveNull
     // attribute, and adding it in for arrays is non-trivial.
-    chrome.test.assertEq([{ key: 'value' }], results[0].result);
+    chrome.test.assertEq([{key: 'value'}], results[0].result);
     chrome.test.succeed();
   },
 
@@ -130,7 +135,7 @@ chrome.test.runTests([
 
   async function injectedFunctionReturnsNothing() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -151,7 +156,7 @@ chrome.test.runTests([
 
   async function injectedFunctionReturnsNull() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -167,9 +172,92 @@ chrome.test.runTests([
     chrome.test.succeed();
   },
 
+  async function scriptsInjectIntoSameIsolatedWorld() {
+    const query = {url: 'http://example.com/*'};
+    const tab = await getSingleTab(query);
+    const target = {tabId: tab.id};
+    // When `world` is unspecified, it defaults to an isolated world.
+    await chrome.scripting.executeScript({
+      target: target,
+      func: () => {
+        window.isolatedWorldFlag = 'from isolated world';
+      },
+    });
+    let results = await chrome.scripting.executeScript({
+      target: target,
+      func: getExecutionWorldFlags,
+    });
+    chrome.test.assertEq(1, results.length);
+    chrome.test.assertEq(
+        {isolatedWorld: 'from isolated world', mainWorld: '<none>'},
+        results[0].result);
+
+    // Subsequent scripts should execute in the same isolated world.
+    results = await chrome.scripting.executeScript({
+      target: target,
+      func: getExecutionWorldFlags,
+      world: chrome.scripting.ExecutionWorld.ISOLATED,
+    });
+    chrome.test.assertEq(1, results.length);
+    chrome.test.assertEq(
+        {isolatedWorld: 'from isolated world', mainWorld: '<none>'},
+        results[0].result);
+
+    chrome.test.succeed();
+  },
+
+  async function scriptsCanRunInMainWorld() {
+    const query = {url: 'http://example.com/*'};
+    const tab = await getSingleTab(query);
+    const target = {tabId: tab.id};
+    // Set a flag in the isolated world.
+    await chrome.scripting.executeScript({
+      target: target,
+      func: () => {
+        window.isolatedWorldFlag = 'from isolated world';
+      },
+    });
+
+    // The script executing in the main world should not see the flag from the
+    // isolated world, but should see the one the page set in the main world.
+    const results = await chrome.scripting.executeScript({
+      target: target,
+      func: getExecutionWorldFlags,
+      world: chrome.scripting.ExecutionWorld.MAIN,
+    });
+    chrome.test.assertEq(1, results.length);
+    chrome.test.assertEq(
+        {isolatedWorld: '<none>', mainWorld: 'from main world'},
+        results[0].result);
+
+    chrome.test.succeed();
+  },
+
+  async function promisesAreResolved() {
+    const query = {url: 'http://example.com/*'};
+    const tab = await getSingleTab(query);
+    const target = {tabId: tab.id};
+
+    const promiseFunc = async () => {
+      // Return a promise that resolves asynchronously.
+      const result = await new Promise((r) => {
+        setTimeout(r, 50, 'Hello, World!');
+      });
+      return result;
+    };
+    const results = await chrome.scripting.executeScript({
+      target: target,
+      func: promiseFunc,
+    });
+
+    chrome.test.assertEq(1, results.length);
+    chrome.test.assertEq('Hello, World!', results[0].result);
+    chrome.test.succeed();
+  },
+
   async function injectedFunctionHasError() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     const results = await chrome.scripting.executeScript({
       target: {
         tabId: tab.id,
@@ -213,9 +301,31 @@ chrome.test.runTests([
     chrome.test.succeed();
   },
 
+  async function multipleFilesSpecified() {
+    const query = {url: 'http://example.com/*'};
+    const tab = await getSingleTab(query);
+    // Double-check that the title is not the one from the script file to be
+    // injected.
+    chrome.test.assertNe(NEW_TITLE_FROM_FILE, tab.title);
+    const results = await chrome.scripting.executeScript({
+      target: {
+        tabId: tab.id,
+      },
+      files: ['script_file.js', 'script_file2.js'],
+    });
+    // The call injected two scripts; the first changes the title, and the
+    // second reports it plus a suffix. This checks that both scripts inject
+    // and that the order was preserved (since the first sets the title used
+    // in the second).
+    chrome.test.assertEq(1, results.length);
+    chrome.test.assertEq(
+        NEW_TITLE_FROM_FILE + ' From Second Script', results[0].result);
+    chrome.test.succeed();
+  },
+
   async function onlyOneOfFunctionAndFunc() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -225,7 +335,7 @@ chrome.test.runTests([
           function: injectedFunction,
         }),
         `Error: Both 'func' and 'function' were specified. ` +
-        `Only 'func' should be used.`);
+            `Only 'func' should be used.`);
     chrome.test.succeed();
   },
 
@@ -245,7 +355,7 @@ chrome.test.runTests([
   async function noSuchFile() {
     const noSuchFile = 'no_such_file.js';
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -259,7 +369,7 @@ chrome.test.runTests([
 
   async function noFilesSpecified() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
@@ -267,21 +377,31 @@ chrome.test.runTests([
           },
           files: [],
         }),
-        EXACTLY_ONE_FILE_ERROR);
+        'Error: At least one file must be specified.');
     chrome.test.succeed();
   },
 
-  async function multipleFilesSpecified() {
+  async function duplicateFilesSpecified() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
+    const tab = await getSingleTab(query);
     await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
             tabId: tab.id,
           },
-          files: ['script_file.js', 'script_file2.js'],
+          files: ['script_file.js', 'script_file.js'],
         }),
-        EXACTLY_ONE_FILE_ERROR);
+        `Error: Duplicate file specified: 'script_file.js'.`);
+
+    // Try again with a preceding slash.
+    await chrome.test.assertPromiseRejects(
+        chrome.scripting.executeScript({
+          target: {
+            tabId: tab.id,
+          },
+          files: ['script_file.js', '/script_file.js'],
+        }),
+        `Error: Duplicate file specified: '/script_file.js'.`);
     chrome.test.succeed();
   },
 
@@ -307,30 +427,29 @@ chrome.test.runTests([
 
   async function unserializableCurriedArguments() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
-    const expectedError =
-        'Error in invocation of scripting.executeScript(' +
+    const tab = await getSingleTab(query);
+    const expectedError = 'Error in invocation of scripting.executeScript(' +
         'scripting.ScriptInjection injection, optional function callback): ' +
         'Error at parameter \'injection\': Error at property \'args\': ' +
         'Error at index 0: Value is unserializable.';
+    // Verify `executeScript` throws when passed an unserializable function
+    // argument.
     chrome.test.assertThrows(
-        chrome.scripting.executeScript,
-        [{
+        chrome.scripting.executeScript.bind(null, {
           target: {
             tabId: tab.id,
           },
           func: echoArguments,
           args: [function() {}],
-        }],
+        }),
         expectedError);
     chrome.test.succeed();
   },
 
   async function argsPassedWithFiles() {
     const query = {url: 'http://example.com/*'};
-    let tab = await getSingleTab(query);
-    const expectedError =
-    await chrome.test.assertPromiseRejects(
+    const tab = await getSingleTab(query);
+    const expectedError = await chrome.test.assertPromiseRejects(
         chrome.scripting.executeScript({
           target: {
             tabId: tab.id,
@@ -340,5 +459,5 @@ chrome.test.runTests([
         }),
         `Error: 'args' may not be used with file injections.`);
     chrome.test.succeed();
-  }
+  },
 ]);

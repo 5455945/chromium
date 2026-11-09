@@ -1,11 +1,12 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/platform/webrtc/track_observer.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
@@ -13,7 +14,7 @@
 namespace blink {
 
 class TrackObserver::TrackObserverImpl
-    : public WTF::ThreadSafeRefCounted<TrackObserver::TrackObserverImpl>,
+    : public ThreadSafeRefCounted<TrackObserver::TrackObserverImpl>,
       public webrtc::ObserverInterface {
  public:
   TrackObserverImpl(
@@ -61,7 +62,7 @@ class TrackObserver::TrackObserverImpl
   }
 
  private:
-  friend class WTF::ThreadSafeRefCounted<TrackObserverImpl>;
+  friend class ThreadSafeRefCounted<TrackObserverImpl>;
   ~TrackObserverImpl() override {
     DCHECK(!track_.get()) << "must have been unregistered before deleting";
   }

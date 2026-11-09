@@ -23,16 +23,18 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_FILTERS_FILTER_EFFECT_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_GRAPHICS_FILTERS_FILTER_EFFECT_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "third_party/blink/renderer/platform/geometry/float_rect.h"
-#include "third_party/blink/renderer/platform/geometry/int_rect.h"
+#include <array>
+#include <optional>
+
 #include "third_party/blink/renderer/platform/graphics/color.h"
 #include "third_party/blink/renderer/platform/graphics/interpolation_space.h"
 #include "third_party/blink/renderer/platform/graphics/paint/paint_filter.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
+#include "ui/gfx/geometry/rect_f.h"
 
 namespace blink {
 
@@ -68,11 +70,11 @@ class PLATFORM_EXPORT FilterEffect : public GarbageCollected<FilterEffect> {
   }
 
   // Clipped primitive subregion in the coordinate space of the target.
-  FloatRect AbsoluteBounds() const;
+  gfx::RectF AbsoluteBounds() const;
 
   // Mapping a rect forwards to determine which which destination pixels a
   // given source rect would affect.
-  FloatRect MapRect(const FloatRect&) const;
+  gfx::RectF MapRect(const gfx::RectF&) const;
 
   virtual sk_sp<PaintFilter> CreateImageFilter();
   virtual sk_sp<PaintFilter> CreateImageFilterWithoutValidation();
@@ -81,19 +83,19 @@ class PLATFORM_EXPORT FilterEffect : public GarbageCollected<FilterEffect> {
     return kFilterEffectTypeUnknown;
   }
 
-  virtual WTF::TextStream& ExternalRepresentation(WTF::TextStream&,
-                                                  int indention = 0) const;
+  virtual StringBuilder& ExternalRepresentation(StringBuilder&,
+                                                wtf_size_t indention = 0) const;
 
-  FloatRect FilterPrimitiveSubregion() const {
+  gfx::RectF FilterPrimitiveSubregion() const {
     return filter_primitive_subregion_;
   }
   void SetFilterPrimitiveSubregion(
-      const FloatRect& filter_primitive_subregion) {
+      const gfx::RectF& filter_primitive_subregion) {
     filter_primitive_subregion_ = filter_primitive_subregion;
   }
 
-  Filter* GetFilter() { return filter_; }
-  const Filter* GetFilter() const { return filter_; }
+  Filter* GetFilter() { return filter_.Get(); }
+  const Filter* GetFilter() const { return filter_.Get(); }
 
   bool ClipsToBounds() const { return clips_to_bounds_; }
   void SetClipsToBounds(bool value) { clips_to_bounds_ = value; }
@@ -123,25 +125,30 @@ class PLATFORM_EXPORT FilterEffect : public GarbageCollected<FilterEffect> {
 
   bool InputsTaintOrigin() const;
 
+  bool ContainsBackdrop() const { return contains_backdrop_; }
+  void SetContainsBackdrop() { contains_backdrop_ = true; }
+
+  bool InputsContainBackdrop() const;
+
  protected:
   FilterEffect(Filter*);
 
   // Determine the contribution from the filter effect's inputs.
-  virtual FloatRect MapInputs(const FloatRect&) const;
+  virtual gfx::RectF MapInputs(const gfx::RectF&) const;
 
   // Apply the contribution from the filter effect's itself. (Like
   // expanding with the blur radius etc.)
-  virtual FloatRect MapEffect(const FloatRect&) const;
+  virtual gfx::RectF MapEffect(const gfx::RectF&) const;
 
   // Apply the clip bounds and factor in the effect of
   // affectsTransparentPixels().
-  FloatRect ApplyBounds(const FloatRect&) const;
+  gfx::RectF ApplyBounds(const gfx::RectF&) const;
 
   sk_sp<PaintFilter> CreateTransparentBlack() const;
 
   Color AdaptColorToOperatingInterpolationSpace(const Color& device_color);
 
-  absl::optional<PaintFilter::CropRect> GetCropRect() const;
+  std::optional<PaintFilter::CropRect> GetCropRect() const;
 
  private:
   FilterEffectVector input_effects_;
@@ -154,17 +161,19 @@ class PLATFORM_EXPORT FilterEffect : public GarbageCollected<FilterEffect> {
 
   // The subregion of a filter primitive according to the SVG Filter
   // specification in local coordinates.
-  FloatRect filter_primitive_subregion_;
+  gfx::RectF filter_primitive_subregion_;
 
   // Whether the effect should clip to its primitive region, or expand to use
   // the combined region of its inputs.
-  bool clips_to_bounds_;
+  bool clips_to_bounds_ = true;
 
-  bool origin_tainted_;
+  bool origin_tainted_ = false;
 
-  InterpolationSpace operating_interpolation_space_;
+  bool contains_backdrop_ = false;
 
-  sk_sp<PaintFilter> image_filters_[4];
+  InterpolationSpace operating_interpolation_space_ = kInterpolationSpaceLinear;
+
+  std::array<sk_sp<PaintFilter>, 4> image_filters_;
 };
 
 }  // namespace blink

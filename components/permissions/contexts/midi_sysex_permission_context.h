@@ -1,11 +1,11 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_CONTEXTS_MIDI_SYSEX_PERMISSION_CONTEXT_H_
 #define COMPONENTS_PERMISSIONS_CONTEXTS_MIDI_SYSEX_PERMISSION_CONTEXT_H_
 
-#include "components/permissions/permission_context_base.h"
+#include "components/permissions/content_setting_permission_context_base.h"
 
 namespace content {
 class BrowserContext;
@@ -13,7 +13,7 @@ class BrowserContext;
 
 namespace permissions {
 
-class MidiSysexPermissionContext : public PermissionContextBase {
+class MidiSysexPermissionContext : public ContentSettingPermissionContextBase {
  public:
   explicit MidiSysexPermissionContext(content::BrowserContext* browser_context);
   MidiSysexPermissionContext(const MidiSysexPermissionContext&) = delete;
@@ -23,10 +23,8 @@ class MidiSysexPermissionContext : public PermissionContextBase {
 
  private:
   // PermissionContextBase:
-  void UpdateTabContext(const PermissionRequestID& id,
-                        const GURL& requesting_frame,
+  void UpdateTabContext(const PermissionRequestData& request_data,
                         bool allowed) override;
-  bool IsRestrictedToSecureOrigins() const override;
 };
 
 }  // namespace permissions

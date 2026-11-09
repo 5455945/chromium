@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,22 +7,27 @@
 #include "components/content_settings/core/common/content_settings_pattern.h"
 #include "ui/webui/webui_allowlist.h"
 
-WebUIAllowlistProvider::WebUIAllowlistProvider(WebUIAllowlist* allowlist)
-    : allowlist_(allowlist) {
-  DCHECK(allowlist_);
+WebUIAllowlistProvider::WebUIAllowlistProvider(
+    scoped_refptr<WebUIAllowlist> allowlist)
+    : allowlist_(std::move(allowlist)) {
+  CHECK(allowlist_, base::NotFatalUntil::M163);
   allowlist_->SetWebUIAllowlistProvider(this);
 }
 
 WebUIAllowlistProvider::~WebUIAllowlistProvider() = default;
 
 std::unique_ptr<content_settings::RuleIterator>
-WebUIAllowlistProvider::GetRuleIterator(
-    ContentSettingsType content_type,
-    bool incognito) const {
-  if (!allowlist_)
-    return nullptr;
-
+WebUIAllowlistProvider::GetRuleIterator(ContentSettingsType content_type,
+                                        bool incognito) const {
   return allowlist_->GetRuleIterator(content_type);
+}
+
+std::unique_ptr<content_settings::Rule> WebUIAllowlistProvider::GetRule(
+    const GURL& primary_url,
+    const GURL& secondary_url,
+    ContentSettingsType content_type,
+    bool off_the_record) const {
+  return allowlist_->GetRule(primary_url, secondary_url, content_type);
 }
 
 void WebUIAllowlistProvider::NotifyContentSettingChange(
@@ -36,7 +41,7 @@ bool WebUIAllowlistProvider::SetWebsiteSetting(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    std::unique_ptr<base::Value>&& value,
+    const base::Value& value,
     const content_settings::ContentSettingConstraints& constraints) {
   // WebUIAllowlistProvider doesn't support settings Website settings.
   return false;
@@ -48,7 +53,8 @@ void WebUIAllowlistProvider::ClearAllContentSettingsRules(
 }
 
 void WebUIAllowlistProvider::ShutdownOnUIThread() {
+  CHECK(CalledOnValidThread(), base::NotFatalUntil::M163);
+
   RemoveAllObservers();
   allowlist_->ResetWebUIAllowlistProvider();
-  allowlist_ = nullptr;
 }

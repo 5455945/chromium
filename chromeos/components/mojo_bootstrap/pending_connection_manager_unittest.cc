@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -38,6 +38,22 @@ TEST_F(PendingConnectionManagerTest, Cancel) {
 
 TEST_F(PendingConnectionManagerTest, UnexpectedConnection) {
   EXPECT_FALSE(connection_manager_.OpenIpcChannel("invalid", {}));
+}
+
+TEST_F(PendingConnectionManagerTest, ServiceInstancesAreIsolated) {
+  auto& drivefs = PendingConnectionManager::GetForDriveFs();
+  auto& smbfs = PendingConnectionManager::GetForSmbFs();
+  EXPECT_NE(&drivefs, &smbfs);
+
+  auto token = base::UnguessableToken::Create();
+  int callback_calls = 0;
+  drivefs.ExpectOpenIpcChannel(
+      token,
+      base::BindLambdaForTesting([&](base::ScopedFD fd) { callback_calls++; }));
+  EXPECT_FALSE(smbfs.OpenIpcChannel(token.ToString(), {}));
+  EXPECT_EQ(0, callback_calls);
+  EXPECT_TRUE(drivefs.OpenIpcChannel(token.ToString(), {}));
+  EXPECT_EQ(1, callback_calls);
 }
 
 }  // namespace

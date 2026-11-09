@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,9 +11,10 @@
 #include <unordered_set>
 #include <vector>
 
-#include "base/callback.h"
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/task/cancelable_task_tracker.h"
 #include "components/favicon/core/favicon_service.h"
@@ -36,9 +37,13 @@ class FaviconClient;
 // case of an error.
 class FaviconServiceImpl : public FaviconService {
  public:
-  // |history_service| most not be nullptr and  must outlive this object.
+  // `history_service` most not be nullptr and  must outlive this object.
   FaviconServiceImpl(std::unique_ptr<FaviconClient> favicon_client,
                      history::HistoryService* history_service);
+
+  FaviconServiceImpl(const FaviconServiceImpl&) = delete;
+  FaviconServiceImpl& operator=(const FaviconServiceImpl&) = delete;
+
   ~FaviconServiceImpl() override;
 
   // FaviconService implementation.
@@ -71,7 +76,7 @@ class FaviconServiceImpl : public FaviconService {
       base::CancelableTaskTracker* tracker) override;
   base::CancelableTaskTracker::TaskId GetLargestRawFaviconForPageURL(
       const GURL& page_url,
-      const std::vector<favicon_base::IconTypeSet>& icon_types,
+      base::span<const favicon_base::IconTypeSet> icon_types,
       int minimum_size_in_pixels,
       favicon_base::FaviconRawBitmapCallback callback,
       base::CancelableTaskTracker* tracker) override;
@@ -141,29 +146,17 @@ class FaviconServiceImpl : public FaviconService {
 
   // Intermediate callback for GetFaviconImage() and GetFaviconImageForPageURL()
   // so that history service can deal solely with FaviconResultsCallback.
-  // Builds favicon_base::FaviconImageResult from |favicon_bitmap_results| and
-  // runs |callback|.
-  void RunFaviconImageCallbackWithBitmapResults(
+  // Builds favicon_base::FaviconImageResult from `favicon_bitmap_results` and
+  // runs `callback`.
+  static void RunFaviconImageCallbackWithBitmapResults(
       favicon_base::FaviconImageCallback callback,
       int desired_size_in_dip,
       const std::vector<favicon_base::FaviconRawBitmapResult>&
           favicon_bitmap_results);
 
-  // Intermediate callback for GetRawFavicon() and GetRawFaviconForPageURL()
-  // so that history service can deal solely with FaviconResultsCallback.
-  // Resizes favicon_base::FaviconRawBitmapResult if necessary and runs
-  // |callback|.
-  void RunFaviconRawBitmapCallbackWithBitmapResults(
-      favicon_base::FaviconRawBitmapCallback callback,
-      int desired_size_in_pixel,
-      const std::vector<favicon_base::FaviconRawBitmapResult>&
-          favicon_bitmap_results);
-
   std::unordered_set<MissingFaviconURLHash> missing_favicon_urls_;
   std::unique_ptr<FaviconClient> favicon_client_;
-  history::HistoryService* history_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(FaviconServiceImpl);
+  raw_ptr<history::HistoryService> history_service_;
 };
 
 }  // namespace favicon

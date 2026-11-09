@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,29 +10,38 @@ import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 
+import androidx.core.os.BuildCompat;
+
 import org.chromium.base.ActivityState;
 import org.chromium.base.ApplicationStatus;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.chrome.browser.ApplicationLifetime;
+import org.chromium.build.annotations.MonotonicNonNull;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.BrowserRestartActivity;
+import org.chromium.chrome.browser.lifetime.ApplicationLifetime;
+import org.chromium.chrome.browser.multiwindow.MultiInstanceManager.SessionStartupPolicy;
+import org.chromium.chrome.browser.multiwindow.MultiWindowUtils;
+import org.chromium.chrome.browser.multiwindow.TabbedStartupCoordinator;
 
 /**
  * Answers requests to kill and (potentially) restart Chrome's main browser process.
  *
- * This class fires an Intent to start the {@link BrowserRestartActivity}, which will ultimately
+ * <p>This class fires an Intent to start the {@link BrowserRestartActivity}, which will ultimately
  * kill the main browser process from its own process.
  *
- * https://crbug.com/515919 details why another Activity is used instead of using the AlarmManager.
- * https://crbug.com/545453 details why the BrowserRestartActivity handles the process killing.
+ * <p>https://crbug.com/41191765 details why another Activity is used instead of using the
+ * AlarmManager. https://crbug.com/40441017 details why the BrowserRestartActivity handles the
+ * process killing.
  */
-class ChromeLifetimeController implements ApplicationLifetime.Observer,
-        ApplicationStatus.ActivityStateListener {
+@NullMarked
+class ChromeLifetimeController
+        implements ApplicationLifetime.Observer, ApplicationStatus.ActivityStateListener {
     /** Amount of time to wait for Chrome to destroy all the activities of the main process. */
     private static final long WATCHDOG_DELAY_MS = 1000;
 
     /** Singleton instance of the class. */
-    private static ChromeLifetimeController sInstance;
+    private static @MonotonicNonNull ChromeLifetimeController sInstance;
 
     /** Handler to post tasks to. */
     private final Handler mHandler;
@@ -49,9 +58,7 @@ class ChromeLifetimeController implements ApplicationLifetime.Observer,
     /** How many Chrome Activities are still alive. */
     private int mRemainingActivitiesCount;
 
-    /**
-     * Initialize the ChromeLifetimeController;
-     */
+    /** Initialize the ChromeLifetimeController; */
     public static void initialize() {
         ThreadUtils.assertOnUiThread();
         if (sInstance != null) return;
@@ -61,28 +68,43 @@ class ChromeLifetimeController implements ApplicationLifetime.Observer,
 
     private ChromeLifetimeController() {
         mHandler = new Handler(Looper.getMainLooper());
-        mRestartRunnable = new Runnable() {
-            @Override
-            public void run() {
-                fireBrowserRestartActivityIntent();
-            }
-        };
+        mRestartRunnable = this::fireBrowserRestartActivityIntent;
     }
 
     @Override
     public void onTerminate(boolean restart) {
         mRestartChromeOnDestroy = restart;
+        // If the app is deterministically terminating (e.g. via an explicit restart or quit
+        // request), maybe persist the session state so that it can be restored on next launch
+        // when applicable.
+        TabbedStartupCoordinator.onSessionTerminated(SessionStartupPolicy.RESTORE_ALL);
 
-        // Tell all Chrome Activities to finish themselves.
+        // Tell all Chrome Activities to finish themselves. When startup window policy is enabled,
+        // the feature supports restoring all windows/tasks on subsequent launch, making it safe to
+        // remove tasks from Android Recents so they do not linger as stray tasks or interfere with
+        // instance allocation on restart.
+        boolean removeTask =
+                MultiWindowUtils.isNewStartupWindowPolicyEnabled()
+                        || MultiWindowUtils.isRestoreOnStartupPrefSupported();
         for (Activity activity : ApplicationStatus.getRunningActivities()) {
             ApplicationStatus.registerStateListenerForActivity(this, activity);
             mRemainingActivitiesCount++;
-            activity.finish();
+            if (removeTask) {
+                activity.finishAndRemoveTask();
+            } else {
+                activity.finish();
+            }
         }
 
-        // Kick off a timer to kill the process after a delay, which fires only if the Activities
-        // take too long to be finished.
-        mHandler.postDelayed(mRestartRunnable, WATCHDOG_DELAY_MS);
+        if (BuildCompat.isAtLeastV()) {
+            // Background activity launches are prohibited on newer versions of Android, so if the
+            // restart intent isn't fired right away then Chrome won't restart. See b/331370736.
+            mHandler.post(mRestartRunnable);
+        } else {
+            // Kick off a timer to kill the process after a delay, which fires only if the
+            // Activities take too long to be finished.
+            mHandler.postDelayed(mRestartRunnable, WATCHDOG_DELAY_MS);
+        }
     }
 
     @Override

@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,11 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/common/chrome_switches.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/switches.h"
+#include "net/dns/mock_host_resolver.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class ExtensionApiTestWithSwitch : public extensions::ExtensionApiTest {
  public:
@@ -14,6 +18,13 @@ class ExtensionApiTestWithSwitch : public extensions::ExtensionApiTest {
     extensions::ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitch(switches::kSilentDebuggerExtensionAPI);
     command_line->AppendSwitch(extensions::switches::kExtensionsOnChromeURLs);
+  }
+
+ protected:
+  void SetUpOnMainThread() override {
+    ExtensionApiTest::SetUpOnMainThread();
+    host_resolver()->AddRule("*", "127.0.0.1");
+    ASSERT_TRUE(StartEmbeddedTestServer());
   }
 };
 

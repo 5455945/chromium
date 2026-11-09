@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,8 +37,10 @@ EncoderBitrateFilter::EncoderBitrateFilter(
 EncoderBitrateFilter::~EncoderBitrateFilter() = default;
 
 void EncoderBitrateFilter::SetBandwidthEstimateKbps(int bandwidth_kbps) {
-  bandwidth_kbps_.Record(bandwidth_kbps);
-  int current_kbps = bandwidth_kbps_.WeightedAverage();
+  bandwidth_kbps_.Record(std::max(minimum_bitrate_kbps_, bandwidth_kbps));
+  int current_kbps =
+      std::max(minimum_bitrate_kbps_,
+               static_cast<int>(bandwidth_kbps_.WeightedAverage()));
   if (std::abs(current_kbps - bitrate_kbps_) >
       bitrate_kbps_ * kEncoderBitrateChangePercentage / 100) {
     bitrate_kbps_ = current_kbps;
@@ -49,7 +51,8 @@ void EncoderBitrateFilter::SetFrameSize(int width, int height) {
   minimum_bitrate_kbps_ =
       std::max(static_cast<int64_t>(minimum_bitrate_kbps_per_megapixel_) *
                    width * height / 1000000,
-               static_cast<int64_t>(minimum_bitrate_kbps_));
+               static_cast<int64_t>(kDefaultMinimumBitrateKbps));
+  bitrate_kbps_ = std::max(bitrate_kbps_, minimum_bitrate_kbps_);
 }
 
 int EncoderBitrateFilter::GetTargetBitrateKbps() const {

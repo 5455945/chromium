@@ -16,9 +16,18 @@
 
 #include <string.h>
 
+#include <algorithm>
+#include <initializer_list>
+#include <iterator>
+#include <string>
+#include <utility>
+
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "absl/base/macros.h"
+#include "absl/base/config.h"
+#include "absl/strings/internal/str_format/constexpr_parser.h"
+#include "absl/strings/internal/str_format/extension.h"
+#include "absl/strings/string_view.h"
 
 namespace absl {
 ABSL_NAMESPACE_BEGIN
@@ -46,7 +55,7 @@ TEST(LengthModTest, Names) {
     {__LINE__, LengthMod::t,    "t" },
     {__LINE__, LengthMod::q,    "q" },
   };
-  EXPECT_EQ(ABSL_ARRAYSIZE(kExpect), 10);
+  EXPECT_EQ(std::size(kExpect), 10);
   for (auto e : kExpect) {
     SCOPED_TRACE(e.line);
     EXPECT_EQ(e.name, LengthModToString(e.mod));
@@ -110,10 +119,14 @@ TEST_F(ConsumeUnboundConversionTest, ConsumeSpecification) {
     {__LINE__, "ba",   "",     "ba"},  // 'b' is invalid
     {__LINE__, "l",    "",     "l" },  // just length mod isn't okay
     {__LINE__, "d",    "d",    ""  },  // basic
+    {__LINE__, "v",    "v",    ""  },  // basic
     {__LINE__, "d ",   "d",    " " },  // leave suffix
     {__LINE__, "dd",   "d",    "d" },  // don't be greedy
     {__LINE__, "d9",   "d",    "9" },  // leave non-space suffix
     {__LINE__, "dzz",  "d",    "zz"},  // length mod as suffix
+    {__LINE__, "3v",   "",     "3v"},  // 'v' cannot have modifiers
+    {__LINE__, "hv",   "",     "hv"},  // 'v' cannot have modifiers
+    {__LINE__, "1$v",   "1$v",     ""},  // 'v' can have use posix syntax
     {__LINE__, "1$*2$d", "1$*2$d", ""  },  // arg indexing and * allowed.
     {__LINE__, "0-14.3hhd", "0-14.3hhd", ""},  // precision, width
     {__LINE__, " 0-+#14.3hhd", " 0-+#14.3hhd", ""},  // flags
@@ -263,7 +276,7 @@ TEST_F(ConsumeUnboundConversionTest, WidthAndPrecision) {
 
 TEST_F(ConsumeUnboundConversionTest, Flags) {
   static const char kAllFlags[] = "-+ #0";
-  static const int kNumFlags = ABSL_ARRAYSIZE(kAllFlags) - 1;
+  static const int kNumFlags = std::size(kAllFlags) - 1;
   for (int rev = 0; rev < 2; ++rev) {
     for (int i = 0; i < 1 << kNumFlags; ++i) {
       std::string fmt;
@@ -299,7 +312,7 @@ TEST_F(ConsumeUnboundConversionTest, BasicFlag) {
   }
 
   // Flag is off
-  for (const char* fmt : {"3d", ".llx", "-G", "1$#X"}) {
+  for (const char* fmt : {"3d", ".llx", "-G", "1$#X", "lc"}) {
     SCOPED_TRACE(fmt);
     EXPECT_TRUE(Run(fmt));
     EXPECT_NE(o.flags, Flags::kBasic);

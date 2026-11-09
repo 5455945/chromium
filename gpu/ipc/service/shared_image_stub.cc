@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,55 +9,122 @@
 #include <memory>
 #include <utility>
 
+#include "base/feature_list.h"
+#include "base/functional/callback_helpers.h"
 #include "base/memory/ptr_util.h"
-#include "base/strings/stringprintf.h"
-#include "base/trace_event/memory_dump_manager.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "build/build_config.h"
-#include "components/viz/common/features.h"
-#include "gpu/command_buffer/service/mailbox_manager.h"
+#include "components/viz/common/resources/shared_image_format.h"
+#include "gpu/command_buffer/common/shared_image_usage.h"
 #include "gpu/command_buffer/service/scheduler.h"
-#include "gpu/command_buffer/service/shared_image_factory.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_factory.h"
+#include "gpu/command_buffer/service/shared_image/shared_image_representation.h"
+#include "gpu/command_buffer/service/shared_image/shared_memory_image_backing_factory.h"
+#include "gpu/config/gpu_finch_features.h"
 #include "gpu/ipc/common/command_buffer_id.h"
 #include "gpu/ipc/common/gpu_peak_memory.h"
 #include "gpu/ipc/service/gpu_channel.h"
 #include "gpu/ipc/service/gpu_channel_manager.h"
-#include "gpu/ipc/service/gpu_memory_buffer_factory.h"
-#include "ui/gfx/buffer_format_util.h"
+#include "gpu/ipc/service/gpu_channel_shared_image_interface.h"
+#include "ui/gfx/gpu_fence_handle.h"
+#include "ui/gfx/gpu_memory_buffer_handle.h"
+#include "ui/gfx/native_pixmap_handle.h"
 #include "ui/gl/gl_context.h"
 
-namespace gpu {
+#if BUILDFLAG(IS_WIN)
+#include "ui/gfx/win/d3d_shared_fence.h"
+#endif
 
+namespace {
+
+constexpr char kSICreationFailureError[] =
+    "SharedImageStub: Unable to create shared image";
+
+bool IsSupportedFormat(viz::SharedImageFormat format) {
+#if BUILDFLAG(IS_APPLE) || BUILDFLAG(IS_WIN)
+  if (format.PrefersExternalSampler()) {
+    LOG(ERROR) << "SharedImageStub: Incompatible format: " << format.ToString();
+    return false;
+  }
+#endif
+
+  if (format == viz::SinglePlaneFormat::kRG_88 ||
+      format == viz::SinglePlaneFormat::kR_16 ||
+      format == viz::SinglePlaneFormat::kRG_1616) {
+    LOG(ERROR) << "SharedImageStub: Incompatible format: " << format.ToString();
+    return false;
+  }
+
+  // `k16F` channel format does not support UV planes which have 2 channels.
+  if (format.is_multi_plane() &&
+      format.channel_format() == viz::SharedImageFormat::ChannelFormat::k16F &&
+      (format.plane_config() == viz::SharedImageFormat::PlaneConfig::kY_UV ||
+       format.plane_config() == viz::SharedImageFormat::PlaneConfig::kY_UV_A)) {
+    LOG(ERROR) << "SharedImageStub: Incompatible format: " << format.ToString();
+    return false;
+  }
+
+  return true;
+}
+
+bool ValidateClientInfo(const gpu::SharedImageMetadata& info) {
+  if (!IsSupportedFormat(info.format)) {
+    return false;
+  }
+
+  if (!gpu::IsValidClientUsage(info.usage)) {
+    LOG(ERROR) << "SharedImageStub: Invalid client usage: "
+               << static_cast<uint32_t>(info.usage);
+    return false;
+  }
+
+  return true;
+}
+
+}  // namespace
+
+namespace gpu {
 SharedImageStub::SharedImageStub(GpuChannel* channel, int32_t route_id)
     : channel_(channel),
       command_buffer_id_(
           CommandBufferIdFromChannelAndRoute(channel->client_id(), route_id)),
-      sequence_(channel->scheduler()->CreateSequence(SchedulingPriority::kLow,
-                                                     channel_->task_runner())),
-      sync_point_client_state_(
-          channel->sync_point_manager()->CreateSyncPointClientState(
-              CommandBufferNamespace::GPU_IO,
-              command_buffer_id_,
-              sequence_)) {
-  base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
-      this, "gpu::SharedImageStub", channel_->task_runner());
+      sequence_(channel->scheduler()->CreateSequence(
+#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+          base::FeatureList::IsEnabled(features::kSharedImageStubHighPriority)
+              ? SchedulingPriority::kHigh
+              : SchedulingPriority::kLow,
+#else
+          SchedulingPriority::kLow,
+#endif
+          channel_->task_runner(),
+          CommandBufferNamespace::GPU_IO,
+          command_buffer_id_)),
+      memory_tracker_(base::MakeRefCounted<MemoryTracker>(
+          command_buffer_id_,
+          channel_->client_tracing_id(),
+          channel_->gpu_channel_manager()->peak_memory_monitor(),
+          GpuPeakMemoryAllocationSource::SHARED_IMAGE_STUB)) {
 }
 
 SharedImageStub::~SharedImageStub() {
   channel_->scheduler()->DestroySequence(sequence_);
-  sync_point_client_state_->Destroy();
   if (factory_ && factory_->HasImages()) {
-    bool have_context = MakeContextCurrent();
+    // Some of the backings might require a current GL context to be destroyed.
+    bool have_context = MakeContextCurrent(/*needs_gl=*/true);
     factory_->DestroyAllSharedImages(have_context);
   }
-  base::trace_event::MemoryDumpManager::GetInstance()->UnregisterDumpProvider(
-      this);
+}
+
+const scoped_refptr<gpu::GpuChannelSharedImageInterface>&
+SharedImageStub::shared_image_interface() {
+  return gpu_channel_shared_image_interface_;
 }
 
 std::unique_ptr<SharedImageStub> SharedImageStub::Create(GpuChannel* channel,
                                                          int32_t route_id) {
   auto stub = base::WrapUnique(new SharedImageStub(channel, route_id));
-  ContextResult result = stub->MakeContextCurrentAndCreateFactory();
+  ContextResult result = stub->Initialize();
   if (result == ContextResult::kSuccess)
     return stub;
 
@@ -67,8 +134,9 @@ std::unique_ptr<SharedImageStub> SharedImageStub::Create(GpuChannel* channel,
 
   // For transient failure, retry once to create a shared context state and
   // hence factory again.
-  if (stub->MakeContextCurrentAndCreateFactory() != ContextResult::kSuccess)
+  if (stub->Initialize() != ContextResult::kSuccess) {
     return nullptr;
+  }
   return stub;
 }
 
@@ -87,19 +155,10 @@ void SharedImageStub::ExecuteDeferredRequest(
           std::move(request->get_create_shared_image_with_data()));
       break;
 
-    case mojom::DeferredSharedImageRequest::Tag::kCreateGmbSharedImage:
-      OnCreateGMBSharedImage(std::move(request->get_create_gmb_shared_image()));
+    case mojom::DeferredSharedImageRequest::Tag::kCreateSharedImageWithBuffer:
+      OnCreateSharedImageWithBuffer(
+          std::move(request->get_create_shared_image_with_buffer()));
       break;
-
-#if defined(OS_ANDROID)
-    case mojom::DeferredSharedImageRequest::Tag::kCreateSharedImageWithAhb: {
-      auto& create_request = *request->get_create_shared_image_with_ahb();
-      OnCreateSharedImageWithAHB(
-          create_request.out_mailbox, create_request.in_mailbox,
-          create_request.usage, create_request.release_id);
-      break;
-    }
-#endif  // defined(OS_ANDROID)
 
     case mojom::DeferredSharedImageRequest::Tag::kRegisterUploadBuffer:
       OnRegisterSharedImageUploadBuffer(
@@ -108,8 +167,13 @@ void SharedImageStub::ExecuteDeferredRequest(
 
     case mojom::DeferredSharedImageRequest::Tag::kUpdateSharedImage: {
       auto& update = *request->get_update_shared_image();
-      OnUpdateSharedImage(update.mailbox, update.release_id,
-                          std::move(update.in_fence_handle));
+      OnUpdateSharedImage(update.mailbox, std::move(update.in_fence_handle));
+      break;
+    }
+
+    case mojom::DeferredSharedImageRequest::Tag::kAddReferenceToSharedImage: {
+      const auto& add_ref = *request->get_add_reference_to_shared_image();
+      OnAddReference(add_ref.mailbox);
       break;
     }
 
@@ -117,147 +181,124 @@ void SharedImageStub::ExecuteDeferredRequest(
       OnDestroySharedImage(request->get_destroy_shared_image());
       break;
 
-#if defined(OS_WIN)
-    case mojom::DeferredSharedImageRequest::Tag::kCreateSharedImageVideoPlanes:
-      OnCreateSharedImageVideoPlanes(
-          std::move(request->get_create_shared_image_video_planes()));
+    case mojom::DeferredSharedImageRequest::Tag::kCopyToGpuMemoryBuffer: {
+      auto& params = *request->get_copy_to_gpu_memory_buffer();
+      OnCopyToGpuMemoryBuffer(params.mailbox);
+      break;
+    }
+
+    case mojom::DeferredSharedImageRequest::Tag::kCreateSharedImagePool:
+      OnCreateSharedImagePool(
+          std::move(request->get_create_shared_image_pool()));
       break;
 
-    case mojom::DeferredSharedImageRequest::Tag::kCreateSwapChain:
-      OnCreateSwapChain(std::move(request->get_create_swap_chain()));
+    case mojom::DeferredSharedImageRequest::Tag::kDestroySharedImagePool:
+      OnDestroySharedImagePool(
+          std::move(request->get_destroy_shared_image_pool()));
       break;
 
-    case mojom::DeferredSharedImageRequest::Tag::kPresentSwapChain:
-      OnPresentSwapChain(request->get_present_swap_chain()->mailbox,
-                         request->get_present_swap_chain()->release_id);
+#if BUILDFLAG(IS_WIN)
+    case mojom::DeferredSharedImageRequest::Tag::kRegisterDxgiFence: {
+      auto& reg = *request->get_register_dxgi_fence();
+      OnRegisterDxgiFence(reg.mailbox, reg.dxgi_token,
+                          std::move(reg.fence_handle));
       break;
-#endif  // defined(OS_WIN)
+    }
+    case mojom::DeferredSharedImageRequest::Tag::kUpdateDxgiFence: {
+      auto& update = *request->get_update_dxgi_fence();
+      OnUpdateDxgiFence(update.mailbox, update.dxgi_token, update.fence_value);
+      break;
+    }
+    case mojom::DeferredSharedImageRequest::Tag::kUnregisterDxgiFence: {
+      auto& unregister = *request->get_unregister_dxgi_fence();
+      OnUnregisterDxgiFence(unregister.mailbox, unregister.dxgi_token);
+      break;
+    }
+#endif  // BUILDFLAG(IS_WIN)
   }
 }
 
-bool SharedImageStub::CreateSharedImage(const Mailbox& mailbox,
-                                        int client_id,
-                                        gfx::GpuMemoryBufferHandle handle,
-                                        gfx::BufferFormat format,
-                                        gfx::BufferPlane plane,
-                                        SurfaceHandle surface_handle,
-                                        const gfx::Size& size,
-                                        const gfx::ColorSpace& color_space,
-                                        GrSurfaceOrigin surface_origin,
-                                        SkAlphaType alpha_type,
-                                        uint32_t usage) {
-  TRACE_EVENT2("gpu", "SharedImageStub::CreateSharedImage", "width",
-               size.width(), "height", size.height());
-  if (!mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to create a SharedImage with a "
-                  "non-SharedImage mailbox.";
+void SharedImageStub::OnCreateSharedImagePool(
+    mojom::CreateSharedImagePoolParamsPtr params) {
+  TRACE_EVENT1("gpu", "SharedImageStub::OnCreateSharedImagePool", "pool_id",
+               params->pool_id.ToString());
+
+  if (!factory_->CreateSharedImagePool(params->pool_id,
+                                       std::move(params->client_remote))) {
+    LOG(ERROR) << "Unable to create SharedImagePool.";
     OnError();
-    return false;
+    return;
   }
-  if (!MakeContextCurrent()) {
-    OnError();
-    return false;
-  }
-  if (!factory_->CreateSharedImage(
-          mailbox, client_id, std::move(handle), format, plane, surface_handle,
-          size, color_space, surface_origin, alpha_type, usage)) {
-    LOG(ERROR) << "SharedImageStub: Unable to create shared image";
-    OnError();
-    return false;
-  }
-  return true;
 }
 
-bool SharedImageStub::UpdateSharedImage(const Mailbox& mailbox,
-                                        gfx::GpuFenceHandle in_fence_handle) {
-  TRACE_EVENT0("gpu", "SharedImageStub::UpdateSharedImage");
-  std::unique_ptr<gfx::GpuFence> in_fence;
-  if (!in_fence_handle.is_null())
-    in_fence = std::make_unique<gfx::GpuFence>(std::move(in_fence_handle));
-  if (!mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to access a SharedImage with a "
-                  "non-SharedImage mailbox.";
-    OnError();
-    return false;
-  }
-  if (!MakeContextCurrent()) {
-    OnError();
-    return false;
-  }
-  if (!factory_->UpdateSharedImage(mailbox, std::move(in_fence))) {
-    LOG(ERROR) << "SharedImageStub: Unable to update shared image";
-    OnError();
-    return false;
-  }
-  return true;
-}
+void SharedImageStub::OnDestroySharedImagePool(
+    mojom::DestroySharedImagePoolParamsPtr params) {
+  TRACE_EVENT1("gpu", "SharedImageStub::OnDestroySharedImagePool", "pool_id",
+               params->pool_id.ToString());
 
-#if defined(OS_ANDROID)
-bool SharedImageStub::CreateSharedImageWithAHB(const Mailbox& out_mailbox,
-                                               const Mailbox& in_mailbox,
-                                               uint32_t usage) {
-  TRACE_EVENT0("gpu", "SharedImageStub::CreateSharedImageWithAHB");
-  if (!out_mailbox.IsSharedImage() || !in_mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to access a SharedImage with a "
-                  "non-SharedImage mailbox.";
+  if (!factory_->DestroySharedImagePool(params->pool_id)) {
+    LOG(ERROR) << "Unable to destroy SharedImagePool.";
     OnError();
-    return false;
+    return;
   }
-  if (!MakeContextCurrent()) {
-    OnError();
-    return false;
-  }
-  if (!factory_->CreateSharedImageWithAHB(out_mailbox, in_mailbox, usage)) {
-    LOG(ERROR) << "SharedImageStub: Unable to update shared image";
-    return false;
-  }
-  return true;
 }
-#endif
 
 void SharedImageStub::OnCreateSharedImage(
     mojom::CreateSharedImageParamsPtr params) {
   TRACE_EVENT2("gpu", "SharedImageStub::OnCreateSharedImage", "width",
-               params->size.width(), "height", params->size.height());
-  if (!params->mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to create a SharedImage with a "
-                  "non-SharedImage mailbox.";
+               params->si_info->meta.size.width(), "height",
+               params->si_info->meta.size.height());
+  if (!ValidateClientInfo(params->si_info->meta)) {
     OnError();
     return;
   }
 
-  if (!MakeContextCurrent()) {
+  bool needs_gl = HasGLES2ReadOrWriteUsage(params->si_info->meta.usage);
+  if (!MakeContextCurrent(needs_gl)) {
     OnError();
     return;
   }
 
-  if (!factory_->CreateSharedImage(params->mailbox, params->format,
-                                   params->size, params->color_space,
-                                   params->surface_origin, params->alpha_type,
-                                   gpu::kNullSurfaceHandle, params->usage)) {
-    LOG(ERROR) << "SharedImageStub: Unable to create shared image";
+  if (!factory_->CreateSharedImage(
+          params->mailbox,
+          SharedImageInfo(params->si_info->meta,
+                          GetLabel(params->si_info->debug_label)),
+          gpu::kNullSurfaceHandle, std::move(params->pool_id))) {
+    LOG(ERROR) << kSICreationFailureError;
     OnError();
     return;
   }
-
-  SyncToken sync_token(sync_point_client_state_->namespace_id(),
-                       sync_point_client_state_->command_buffer_id(),
-                       params->release_id);
-  sync_point_client_state_->ReleaseFenceSync(params->release_id);
 }
 
 void SharedImageStub::OnCreateSharedImageWithData(
     mojom::CreateSharedImageWithDataParamsPtr params) {
   TRACE_EVENT2("gpu", "SharedImageStub::OnCreateSharedImageWithData", "width",
-               params->size.width(), "height", params->size.height());
-  if (!params->mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to create a SharedImage with a "
-                  "non-SharedImage mailbox.";
+               params->si_info->meta.size.width(), "height",
+               params->si_info->meta.size.height());
+
+  auto& metadata = params->si_info->meta;
+  if (!ValidateClientInfo(metadata)) {
     OnError();
     return;
   }
 
-  if (!MakeContextCurrent()) {
+  if (metadata.array_layers > 1) {
+    LOG(ERROR) << "SharedImageStub: array_layers > 1 is not supported for "
+                  "pixel upload";
+    OnError();
+    return;
+  }
+
+  bool needs_gl = HasGLES2ReadOrWriteUsage(metadata.usage);
+  if (!MakeContextCurrent(needs_gl)) {
+    OnError();
+    return;
+  }
+
+  auto min_size = metadata.format.MaybeEstimatedSizeInBytes(metadata.size);
+  if (params->pixel_data_size == 0 || !min_size ||
+      params->pixel_data_size < min_size.value()) {
+    LOG(ERROR) << "SharedImageStub: upload data size is invalid";
     OnError();
     return;
   }
@@ -284,9 +325,10 @@ void SharedImageStub::OnCreateSharedImageWithData(
       memory.subspan(params->pixel_data_offset, params->pixel_data_size);
 
   if (!factory_->CreateSharedImage(
-          params->mailbox, params->format, params->size, params->color_space,
-          params->surface_origin, params->alpha_type, params->usage, subspan)) {
-    LOG(ERROR) << "SharedImageStub: Unable to create shared image";
+          params->mailbox,
+          SharedImageInfo(metadata, GetLabel(params->si_info->debug_label)),
+          subspan)) {
+    LOG(ERROR) << kSICreationFailureError;
     OnError();
     return;
   }
@@ -296,74 +338,95 @@ void SharedImageStub::OnCreateSharedImageWithData(
     upload_memory_mapping_ = base::ReadOnlySharedMemoryMapping();
     upload_memory_ = base::ReadOnlySharedMemoryRegion();
   }
-
-  SyncToken sync_token(sync_point_client_state_->namespace_id(),
-                       sync_point_client_state_->command_buffer_id(),
-                       params->release_id);
-  sync_point_client_state_->ReleaseFenceSync(params->release_id);
 }
 
-void SharedImageStub::OnCreateGMBSharedImage(
-    mojom::CreateGMBSharedImageParamsPtr params) {
-  TRACE_EVENT2("gpu", "SharedImageStub::OnCreateGMBSharedImage", "width",
-               params->size.width(), "height", params->size.height());
-  // TODO(piman): add support for SurfaceHandle (for backbuffers for ozone/drm).
-  constexpr SurfaceHandle surface_handle = kNullSurfaceHandle;
-  if (!CreateSharedImage(params->mailbox, channel_->client_id(),
-                         std::move(params->buffer_handle), params->format,
-                         params->plane, surface_handle, params->size,
-                         params->color_space, params->surface_origin,
-                         params->alpha_type, params->usage)) {
+void SharedImageStub::OnCreateSharedImageWithBuffer(
+    mojom::CreateSharedImageWithBufferParamsPtr params) {
+  TRACE_EVENT2("gpu", "SharedImageStub::OnCreateSharedImageWithBuffer", "width",
+               params->si_info->meta.size.width(), "height",
+               params->si_info->meta.size.height());
+  gfx::GpuMemoryBufferHandle buffer_handle = std::move(params->buffer_handle);
+
+  if (!ValidateGpuMemoryBufferHandleWithMetadata(buffer_handle,
+                                                 params->si_info->meta)) {
+    OnError();
     return;
   }
 
-  SyncToken sync_token(sync_point_client_state_->namespace_id(),
-                       sync_point_client_state_->command_buffer_id(),
-                       params->release_id);
-  sync_point_client_state_->ReleaseFenceSync(params->release_id);
+  if (!CreateSharedImage(
+          params->mailbox,
+          SharedImageInfo(params->si_info->meta,
+                          GetLabel(params->si_info->debug_label)),
+          std::move(buffer_handle), std::move(params->pool_id))) {
+    return;
+  }
+}
+
+bool SharedImageStub::CreateSharedImage(
+    const Mailbox& mailbox,
+    const SharedImageInfo& info,
+    gfx::GpuMemoryBufferHandle handle,
+    std::optional<SharedImagePoolId> pool_id) {
+  TRACE_EVENT2("gpu", "SharedImageStub::CreateSharedImage", "width",
+               info.size.width(), "height", info.size.height());
+  if (!ValidateClientInfo(info)) {
+    OnError();
+    return false;
+  }
+
+  bool needs_gl = HasGLES2ReadOrWriteUsage(info.usage);
+  if (!MakeContextCurrent(needs_gl)) {
+    OnError();
+    return false;
+  }
+
+  if (!factory_->CreateSharedImage(mailbox, info, std::move(handle),
+                                   std::move(pool_id))) {
+    LOG(ERROR) << kSICreationFailureError;
+    OnError();
+    return false;
+  }
+  return true;
 }
 
 void SharedImageStub::OnUpdateSharedImage(const Mailbox& mailbox,
-                                          uint32_t release_id,
                                           gfx::GpuFenceHandle in_fence_handle) {
   TRACE_EVENT0("gpu", "SharedImageStub::OnUpdateSharedImage");
 
   if (!UpdateSharedImage(mailbox, std::move(in_fence_handle)))
     return;
-
-  SyncToken sync_token(sync_point_client_state_->namespace_id(),
-                       sync_point_client_state_->command_buffer_id(),
-                       release_id);
-  sync_point_client_state_->ReleaseFenceSync(release_id);
 }
 
-#if defined(OS_ANDROID)
-void SharedImageStub::OnCreateSharedImageWithAHB(const Mailbox& out_mailbox,
-                                                 const Mailbox& in_mailbox,
-                                                 uint32_t usage,
-                                                 uint32_t release_id) {
-  TRACE_EVENT0("gpu", "SharedImageStub::OnCreateSharedImageWithAHB");
+bool SharedImageStub::UpdateSharedImage(const Mailbox& mailbox,
+                                        gfx::GpuFenceHandle in_fence_handle) {
+  TRACE_EVENT0("gpu", "SharedImageStub::UpdateSharedImage");
 
-  if (!CreateSharedImageWithAHB(out_mailbox, in_mailbox, usage))
-    return;
-
-  SyncToken sync_token(sync_point_client_state_->namespace_id(),
-                       sync_point_client_state_->command_buffer_id(),
-                       release_id);
-  sync_point_client_state_->ReleaseFenceSync(release_id);
+  if (!MakeContextCurrent()) {
+    OnError();
+    return false;
+  }
+  if (!factory_->UpdateSharedImage(mailbox, std::move(in_fence_handle))) {
+    LOG(ERROR) << "SharedImageStub: Unable to update shared image";
+    OnError();
+    return false;
+  }
+  return true;
 }
-#endif
 
-void SharedImageStub::OnDestroySharedImage(const Mailbox& mailbox) {
-  TRACE_EVENT0("gpu", "SharedImageStub::OnDestroySharedImage");
-  if (!mailbox.IsSharedImage()) {
-    LOG(ERROR) << "SharedImageStub: Trying to destroy a SharedImage with a "
-                  "non-SharedImage mailbox.";
+void SharedImageStub::OnAddReference(const Mailbox& mailbox) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnUpdateSharedImage");
+  if (!factory_->AddSecondaryReference(mailbox)) {
+    LOG(ERROR) << "SharedImageStub: Unable to add secondary reference";
     OnError();
     return;
   }
+}
 
-  if (!MakeContextCurrent()) {
+void SharedImageStub::OnDestroySharedImage(const Mailbox& mailbox) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnDestroySharedImage");
+  bool needs_gl =
+      HasGLES2ReadOrWriteUsage(factory_->GetUsageForMailbox(mailbox));
+  if (!MakeContextCurrent(needs_gl)) {
     OnError();
     return;
   }
@@ -373,118 +436,146 @@ void SharedImageStub::OnDestroySharedImage(const Mailbox& mailbox) {
     OnError();
     return;
   }
+
+#if BUILDFLAG(IS_WIN)
+  registered_dxgi_fences_.erase(mailbox);
+#endif
 }
 
-#if defined(OS_WIN)
-void SharedImageStub::OnCreateSharedImageVideoPlanes(
-    mojom::CreateSharedImageVideoPlanesParamsPtr params) {
-  TRACE_EVENT0("gpu", "SharedImageStub::CreateSharedImageVideoPlanes");
-  for (const auto& mailbox : params->mailboxes) {
-    if (!mailbox.IsSharedImage()) {
-      DLOG(ERROR) << "SharedImageStub: Trying to create a SharedImage video "
-                     "plane with a non-SharedImage mailbox.";
-      OnError();
-      return;
-    }
-  }
+void SharedImageStub::OnCopyToGpuMemoryBuffer(const Mailbox& mailbox) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnCopyToGpuMemoryBuffer");
   if (!MakeContextCurrent()) {
     OnError();
     return;
   }
-  if (!factory_->CreateSharedImageVideoPlanes(
-          std::move(params->mailboxes), std::move(params->gmb_handle),
-          params->format, params->size, params->usage)) {
-    DLOG(ERROR)
-        << "SharedImageStub: Failed to create shared image video planes";
+  if (!factory_->CopyToGpuMemoryBuffer(mailbox)) {
+    DLOG(ERROR) << "SharedImageStub: Unable to update shared GMB";
     OnError();
     return;
   }
-  sync_point_client_state_->ReleaseFenceSync(params->release_id);
 }
 
-void SharedImageStub::OnCreateSwapChain(
-    mojom::CreateSwapChainParamsPtr params) {
-  TRACE_EVENT0("gpu", "SharedImageStub::OnCreateSwapChain");
-
-  if (!params->front_buffer_mailbox.IsSharedImage() ||
-      !params->back_buffer_mailbox.IsSharedImage()) {
-    DLOG(ERROR) << "SharedImageStub: Trying to access SharedImage with a "
-                   "non-SharedImage mailbox.";
+#if BUILDFLAG(IS_WIN)
+void SharedImageStub::CopyToGpuMemoryBufferAsync(
+    const Mailbox& mailbox,
+    base::OnceCallback<void(bool)> callback) {
+  TRACE_EVENT0("gpu", "SharedImageStub::CopyToGpuMemoryBufferAsync");
+  auto split_cb = base::SplitOnceCallback(std::move(callback));
+  if (!factory_->CopyToGpuMemoryBufferAsync(mailbox,
+                                            std::move(split_cb.first))) {
+    DLOG(ERROR) << "SharedImageStub: Unable to update shared GMB";
+    std::move(split_cb.second).Run(false);
     OnError();
     return;
   }
-
-  if (!MakeContextCurrent()) {
-    OnError();
-    return;
-  }
-
-  if (!factory_->CreateSwapChain(
-          params->front_buffer_mailbox, params->back_buffer_mailbox,
-          params->format, params->size, params->color_space,
-          params->surface_origin, params->alpha_type, params->usage)) {
-    DLOG(ERROR) << "SharedImageStub: Unable to create swap chain";
-    OnError();
-    return;
-  }
-
-  sync_point_client_state_->ReleaseFenceSync(params->release_id);
 }
 
-void SharedImageStub::OnPresentSwapChain(const Mailbox& mailbox,
-                                         uint32_t release_id) {
-  TRACE_EVENT0("gpu", "SharedImageStub::OnPresentSwapChain");
-
-  if (!mailbox.IsSharedImage()) {
-    DLOG(ERROR) << "SharedImageStub: Trying to access a SharedImage with a "
-                   "non-SharedImage mailbox.";
+void SharedImageStub::OnRegisterDxgiFence(const Mailbox& mailbox,
+                                          gfx::DXGIHandleToken dxgi_token,
+                                          gfx::GpuFenceHandle fence_handle) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnRegisterDxgiFence");
+  if (!factory_->HasSharedImage(mailbox)) {
+    LOG(ERROR) << "SharedImageStub: Trying to register a fence handle to a "
+                  "invalid SharedImage.";
     OnError();
     return;
   }
 
-  if (!MakeContextCurrent()) {
+  auto& mailbox_fences = registered_dxgi_fences_[mailbox];
+  auto it = mailbox_fences.find(dxgi_token);
+  if (it != mailbox_fences.end()) {
+    LOG(ERROR) << "SharedImageStub: Trying to register the same fence handle "
+                  "multiple times in SharedImage.";
     OnError();
     return;
   }
 
-  if (!factory_->PresentSwapChain(mailbox)) {
-    DLOG(ERROR) << "SharedImageStub: Unable to present swap chain";
-    OnError();
-    return;
-  }
-
-  sync_point_client_state_->ReleaseFenceSync(release_id);
+  mailbox_fences.emplace(dxgi_token,
+                         gfx::D3DSharedFence::CreateFromScopedHandle(
+                             fence_handle.Release(), dxgi_token));
 }
-#endif  // OS_WIN
 
-#if defined(OS_FUCHSIA)
+void SharedImageStub::OnUpdateDxgiFence(const Mailbox& mailbox,
+                                        gfx::DXGIHandleToken dxgi_token,
+                                        uint64_t fence_value) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnUpdateDxgiFence");
+  if (!factory_->HasSharedImage(mailbox)) {
+    LOG(ERROR) << "SharedImageStub: Trying to register a fence handle to a "
+                  "invalid SharedImage.";
+    OnError();
+    return;
+  }
+
+  auto mailbox_fences_it = registered_dxgi_fences_.find(mailbox);
+  if (mailbox_fences_it == registered_dxgi_fences_.end()) {
+    LOG(ERROR) << "Trying to update a fence on shared image with no registered "
+                  "fences.";
+    OnError();
+    return;
+  }
+
+  auto& mailbox_fences = mailbox_fences_it->second;
+  auto fence_it = mailbox_fences.find(dxgi_token);
+  if (fence_it == mailbox_fences.end()) {
+    LOG(ERROR) << "Trying to update a fence that has not been registered with "
+                  "shared image.";
+    OnError();
+    return;
+  }
+
+  scoped_refptr<gfx::D3DSharedFence> fence = fence_it->second;
+  fence->Update(fence_value);
+
+  channel_->gpu_channel_manager()->shared_image_manager()->UpdateExternalFence(
+      mailbox, std::move(fence));
+}
+
+void SharedImageStub::OnUnregisterDxgiFence(const Mailbox& mailbox,
+                                            gfx::DXGIHandleToken dxgi_token) {
+  TRACE_EVENT0("gpu", "SharedImageStub::OnUnregisterDxgiFence");
+  auto mailbox_fences_it = registered_dxgi_fences_.find(mailbox);
+  if (mailbox_fences_it == registered_dxgi_fences_.end()) {
+    LOG(ERROR) << "Trying to unregister a fence on shared image with no "
+                  "registered fences.";
+    OnError();
+    return;
+  }
+
+  auto& mailbox_fences = mailbox_fences_it->second;
+  auto fence_it = mailbox_fences.find(dxgi_token);
+  if (fence_it == mailbox_fences.end()) {
+    LOG(ERROR) << "Trying to unregister a fence that has not been registered "
+                  "with shared image.";
+    OnError();
+    return;
+  }
+
+  mailbox_fences.erase(fence_it);
+
+  if (mailbox_fences.empty()) {
+    registered_dxgi_fences_.erase(mailbox_fences_it);
+  }
+}
+
+#endif  // BUILDFLAG(IS_WIN)
+
+#if BUILDFLAG(IS_FUCHSIA)
 void SharedImageStub::RegisterSysmemBufferCollection(
-    gfx::SysmemBufferCollectionId id,
-    zx::channel token,
-    gfx::BufferFormat format,
+    zx::eventpair service_handle,
+    zx::channel sysmem_token,
+    const viz::SharedImageFormat& format,
     gfx::BufferUsage usage,
     bool register_with_image_pipe) {
-  if (!id || !token) {
+  if (!service_handle || !sysmem_token) {
     OnError();
     return;
   }
 
-  if (!factory_->RegisterSysmemBufferCollection(
-          id, std::move(token), format, usage, register_with_image_pipe)) {
-    OnError();
-  }
+  factory_->RegisterSysmemBufferCollection(std::move(service_handle),
+                                           std::move(sysmem_token), format,
+                                           usage, register_with_image_pipe);
 }
-
-void SharedImageStub::ReleaseSysmemBufferCollection(
-    gfx::SysmemBufferCollectionId id) {
-  if (!factory_->ReleaseSysmemBufferCollection(id)) {
-    DLOG(ERROR) << "SharedImageStub: Trying to release unknown "
-                   "SysmemBufferCollectionId.";
-    OnError();
-    return;
-  }
-}
-#endif  // defined(OS_FUCHSIA)
+#endif  // BUILDFLAG(IS_FUCHSIA)
 
 void SharedImageStub::OnRegisterSharedImageUploadBuffer(
     base::ReadOnlySharedMemoryRegion shm) {
@@ -500,7 +591,10 @@ void SharedImageStub::OnRegisterSharedImageUploadBuffer(
 }
 
 bool SharedImageStub::MakeContextCurrent(bool needs_gl) {
-  DCHECK(context_state_);
+  // Software Renderer doesn't have valid context_state_.
+  if (!context_state_) {
+    return true;
+  }
 
   if (context_state_->context_lost()) {
     LOG(ERROR) << "SharedImageStub: context already lost";
@@ -515,110 +609,184 @@ bool SharedImageStub::MakeContextCurrent(bool needs_gl) {
   return context_state_->MakeCurrent(/*surface=*/nullptr, needs_gl);
 }
 
-ContextResult SharedImageStub::MakeContextCurrentAndCreateFactory() {
+ContextResult SharedImageStub::Initialize() {
   auto* channel_manager = channel_->gpu_channel_manager();
   DCHECK(!context_state_);
-  ContextResult result;
-  context_state_ = channel_manager->GetSharedContextState(&result);
-  if (result != ContextResult::kSuccess) {
-    LOG(ERROR) << "SharedImageStub: unable to create context";
-    context_state_ = nullptr;
-    return result;
-  }
-  DCHECK(context_state_);
-  DCHECK(!context_state_->context_lost());
-  // Some shared image backing factories will use GL in ctor, so we need GL even
-  // if chrome is using non-GL backing.
-  if (!MakeContextCurrent(/*needs_gl=*/true)) {
-    context_state_ = nullptr;
-    return ContextResult::kTransientFailure;
+
+  if (gl::GetGLImplementation() != gl::kGLImplementationDisabled) {
+    ContextResult result;
+    context_state_ = channel_manager->GetSharedContextState(&result);
+    if (result != ContextResult::kSuccess) {
+      LOG(ERROR) << "SharedImageStub: unable to create context";
+      context_state_ = nullptr;
+      return result;
+    }
+    DCHECK(context_state_);
+    DCHECK(!context_state_->context_lost());
+    // Some shared image backing factories will use GL in ctor, so we need GL
+    // even if chrome is using non-GL backing.
+    if (!MakeContextCurrent(/*needs_gl=*/true)) {
+      context_state_ = nullptr;
+      return ContextResult::kTransientFailure;
+    }
   }
 
-  gpu::GpuMemoryBufferFactory* gmb_factory =
-      channel_manager->gpu_memory_buffer_factory();
   factory_ = std::make_unique<SharedImageFactory>(
       channel_manager->gpu_preferences(),
       channel_manager->gpu_driver_bug_workarounds(),
       channel_manager->gpu_feature_info(), context_state_.get(),
-      channel_manager->mailbox_manager(),
-      channel_manager->shared_image_manager(),
-      gmb_factory ? gmb_factory->AsImageFactory() : nullptr, this,
-      features::IsUsingSkiaRenderer());
+      channel_manager->shared_image_manager(), memory_tracker(),
+      /*is_for_display_compositor=*/false);
+  gpu_channel_shared_image_interface_ =
+      base::MakeRefCounted<GpuChannelSharedImageInterface>(
+          weak_factory_.GetWeakPtr());
   return ContextResult::kSuccess;
 }
 
 void SharedImageStub::OnError() {
-  channel_->OnChannelError();
-}
-
-void SharedImageStub::TrackMemoryAllocatedChange(int64_t delta) {
-  DCHECK(delta >= 0 || size_ >= static_cast<uint64_t>(-delta));
-  uint64_t old_size = size_;
-  size_ += delta;
-  channel_->gpu_channel_manager()
-      ->peak_memory_monitor()
-      ->OnMemoryAllocatedChange(
-          command_buffer_id_, old_size, size_,
-          GpuPeakMemoryAllocationSource::SHARED_IMAGE_STUB);
+  channel_->Stop();
 }
 
 uint64_t SharedImageStub::GetSize() const {
-  return size_;
+  return memory_tracker_->GetSize();
 }
 
-uint64_t SharedImageStub::ClientTracingId() const {
-  return channel_->client_tracing_id();
+bool SharedImageStub::CopyNativeBufferToSharedMemoryAsync(
+    gfx::GpuMemoryBufferHandle buffer_handle,
+    base::UnsafeSharedMemoryRegion shared_memory) {
+  if (!ValidateGpuMemoryBufferHandle(buffer_handle)) {
+    return false;
+  }
+
+  return factory_->CopyNativeBufferToSharedMemoryAsync(
+      std::move(buffer_handle), std::move(shared_memory));
 }
 
-int SharedImageStub::ClientId() const {
-  return channel_->client_id();
+gfx::GpuMemoryBufferHandle SharedImageStub::CreateGpuMemoryBufferHandle(
+    const gfx::Size& size,
+    const viz::SharedImageFormat& format,
+    gfx::BufferUsage buffer_usage) {
+  if (SharedImageFactory::IsNativeBufferSupported(format, buffer_usage)) {
+#if BUILDFLAG(IS_ANDROID)
+    // Creation of native buffer handles is not supported on Android (the
+    // only way that a non-null GpuMemoryBufferHandle can be created on
+    // Android is by importing an external AHB).
+    return gfx::GpuMemoryBufferHandle();
+#else
+    return factory_->CreateNativeGpuMemoryBufferHandle(size, format,
+                                                       buffer_usage);
+#endif
+  } else {
+    if (SharedMemoryImageBackingFactory::IsBufferUsageSupported(buffer_usage) &&
+        SharedMemoryImageBackingFactory::IsSizeValidForFormat(size, format)) {
+      return SharedMemoryImageBackingFactory::CreateGpuMemoryBufferHandle(
+          size, format);
+    }
+  }
+  return gfx::GpuMemoryBufferHandle();
 }
 
-uint64_t SharedImageStub::ContextGroupTracingId() const {
-  return sync_point_client_state_->command_buffer_id().GetUnsafeValue();
+gfx::GpuMemoryBufferHandle SharedImageStub::CreateSharedImageWithHandle(
+    const Mailbox& mailbox,
+    mojom::SharedImageInfoPtr info,
+    gfx::BufferUsage buffer_usage,
+    const std::optional<SharedImagePoolId>& pool_id) {
+  auto handle_for_client = CreateGpuMemoryBufferHandle(
+      info->meta.size, info->meta.format, buffer_usage);
+  auto handle_for_service = handle_for_client.Clone();
+
+  if (!handle_for_service.is_null()) {
+    CHECK(!handle_for_client.is_null());
+
+    // Clear the external sampler prefs for shared memory case if it is set.
+    // Note that the |si_info.format| is a reference, so any modifications to it
+    // will also be reflected at the place from which this method is called
+    // from. https://issues.chromium.org/339546249.
+    if (info->meta.format.PrefersExternalSampler() &&
+        (handle_for_service.type ==
+         gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER)) {
+      info->meta.format.ClearPrefersExternalSampler();
+      if (info->meta.alpha_type == kPremul_SkAlphaType) {
+        info->meta.alpha_type = kUnpremul_SkAlphaType;
+      }
+    }
+    auto run_on_main = base::BindOnce(
+        [](base::WeakPtr<SharedImageStub> stub, const Mailbox& mailbox,
+           mojom::SharedImageInfoPtr info, gfx::GpuMemoryBufferHandle handle,
+           std::optional<SharedImagePoolId> pool_id) {
+          if (stub) {
+            stub->CreateSharedImage(
+                mailbox,
+                SharedImageInfo(info->meta, stub->GetLabel(info->debug_label)),
+                std::move(handle), std::move(pool_id));
+          }
+        },
+        weak_factory_.GetWeakPtr(), mailbox, std::move(info),
+        std::move(handle_for_service), pool_id);
+    channel_->scheduler()->ScheduleTask(
+        Scheduler::Task(sequence_, std::move(run_on_main), {}, SyncToken()));
+  }
+
+  return handle_for_client;
 }
 
-bool SharedImageStub::OnMemoryDump(
-    const base::trace_event::MemoryDumpArgs& args,
-    base::trace_event::ProcessMemoryDump* pmd) {
-  if (!factory_)
-    return true;
-
-  if (args.level_of_detail ==
-      base::trace_event::MemoryDumpLevelOfDetail::BACKGROUND) {
-    std::string dump_name =
-        base::StringPrintf("gpu/shared_images/client_0x%" PRIX32, ClientId());
-    base::trace_event::MemoryAllocatorDump* dump =
-        pmd->CreateAllocatorDump(dump_name);
-    dump->AddScalar(base::trace_event::MemoryAllocatorDump::kNameSize,
-                    base::trace_event::MemoryAllocatorDump::kUnitsBytes, size_);
-
-    // Early out, no need for more detail in a BACKGROUND dump.
+bool SharedImageStub::ValidateGpuMemoryBufferHandle(
+    const gfx::GpuMemoryBufferHandle& buffer_handle) {
+  // Shared memory always allowed.
+  if (buffer_handle.type == gfx::GpuMemoryBufferType::SHARED_MEMORY_BUFFER) {
     return true;
   }
 
-  return factory_->OnMemoryDump(args, pmd, ClientId(), ClientTracingId());
+#if BUILDFLAG(IS_ANDROID)
+  if (channel_->client_type() == viz::mojom::GpuClientType::kRenderer) {
+    LOG(ERROR) << "AHardwareBuffers are not allowed from renderer processes";
+    return false;
+  }
+#endif
+
+  // TODO(crbug.com/565252393): Add validation
+  return true;
 }
 
-SharedImageStub::SharedImageDestructionCallback
-SharedImageStub::GetSharedImageDestructionCallback(const Mailbox& mailbox) {
-  return base::BindOnce(&SharedImageStub::DestroySharedImage,
-                        weak_factory_.GetWeakPtr(), mailbox);
-}
-
-void SharedImageStub::DestroySharedImage(const Mailbox& mailbox,
-                                         const SyncToken& sync_token) {
-  // If there is no sync token, we don't need to wait.
-  if (!sync_token.HasData()) {
-    OnDestroySharedImage(mailbox);
-    return;
+bool SharedImageStub::ValidateGpuMemoryBufferHandleWithMetadata(
+    const gfx::GpuMemoryBufferHandle& buffer_handle,
+    const SharedImageMetadata& metadata) {
+  if (!ValidateGpuMemoryBufferHandle(buffer_handle)) {
+    return false;
   }
 
-  auto done_cb = base::BindOnce(&SharedImageStub::OnDestroySharedImage,
-                                weak_factory_.GetWeakPtr(), mailbox);
-  channel_->scheduler()->ScheduleTask(
-      gpu::Scheduler::Task(sequence_, std::move(done_cb),
-                           std::vector<gpu::SyncToken>({sync_token})));
+#if BUILDFLAG(IS_OZONE)
+  if (channel_->client_type() == viz::mojom::GpuClientType::kOOPVD &&
+      buffer_handle.type == gfx::NATIVE_PIXMAP) {
+    const auto& pixmap_handle = buffer_handle.native_pixmap_handle();
+    auto format = metadata.format;
+    // Video Buffer may be packed to have a tighter stride than shared memory
+    // row, examples are NV15 or MT2T, where there's no padding bits within the
+    // component.
+    if (!gfx::CanFitImageForSizeAndFormat(pixmap_handle, metadata.size, format,
+                                          /*assume_single_memory_object=*/false,
+                                          /*maybe_packed=*/true)) {
+      LOG(ERROR)
+          << "SharedImageStub: Unable to import buffer, failed validation.";
+      return false;
+    }
+    if (gfx::CloneHandleForIPC(pixmap_handle).planes.empty()) {
+      LOG(ERROR) << "SharedImageStub: Unable to import buffer, failed to dup "
+                    "buffer fds.";
+      return false;
+    }
+  }
+
+#endif  // BUILDFLAG(IS_OZONE)
+
+  // TODO(crbug.com/565252393): Add validation
+  return true;
+}
+
+std::string SharedImageStub::GetLabel(const std::string& debug_label) const {
+  // For cross process shared images, compose the label from the client pid for
+  // easier identification in debug tools.
+  return debug_label + "_Pid:" + base::NumberToString(channel_->client_pid());
 }
 
 }  // namespace gpu

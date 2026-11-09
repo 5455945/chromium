@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,22 @@
 #include <stdint.h>
 
 #include <string>
+#include <string_view>
 
 #include "base/base64.h"
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/format_macros.h"
+#include "base/memory/raw_span.h"
+#include "base/numerics/checked_math.h"
+#include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
-#include "base/third_party/icu/icu_utf.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "chrome/test/chromedriver/chrome/browser_info.h"
 #include "chrome/test/chromedriver/chrome/chrome.h"
@@ -30,8 +36,6 @@
 #include "chrome/test/chromedriver/session.h"
 #include "third_party/zlib/google/zip.h"
 
-const char kWindowHandlePrefix[] = "CDwindow-";
-
 std::string GenerateId() {
   uint64_t msb = base::RandUint64();
   uint64_t lsb = base::RandUint64();
@@ -43,18 +47,12 @@ const double kCentimetersPerInch = 2.54;
 
 Status FlattenStringArray(const base::ListValue* src, std::u16string* dest) {
   std::u16string keys;
-  for (size_t i = 0; i < src->GetSize(); ++i) {
-    std::u16string keys_list_part;
-    if (!src->GetString(i, &keys_list_part))
+  for (const base::Value& i : *src) {
+    if (!i.is_string())
       return Status(kUnknownError, "keys should be a string");
-    for (size_t j = 0; j < keys_list_part.size(); ++j) {
-      if (CBU16_IS_SURROGATE(keys_list_part[j])) {
-        return Status(
-            kUnknownError,
-            base::StringPrintf("%s only supports characters in the BMP",
-                               kChromeDriverProductShortName));
-      }
-    }
+
+    std::u16string keys_list_part = base::UTF8ToUTF16(i.GetString());
+
     keys.append(keys_list_part);
   }
   *dest = keys;
@@ -63,11 +61,10 @@ Status FlattenStringArray(const base::ListValue* src, std::u16string* dest) {
 
 }  // namespace
 
-Status SendKeysOnWindow(
-    WebView* web_view,
-    const base::ListValue* key_list,
-    bool release_modifiers,
-    int* sticky_modifiers) {
+Status SendKeysOnWindow(WebView* web_view,
+                        const base::ListValue* key_list,
+                        bool release_modifiers,
+                        int* sticky_modifiers) {
   std::u16string keys;
   Status status = FlattenStringArray(key_list, &keys);
   if (status.IsError())
@@ -103,9 +100,9 @@ Status UnzipArchive(const base::FilePath& unzip_dir,
     return Status(kUnknownError, "unable to create temp dir");
 
   base::FilePath archive = dir.GetPath().AppendASCII("temp.zip");
-  int length = bytes.length();
-  if (base::WriteFile(archive, bytes.c_str(), length) != length)
+  if (!base::WriteFile(archive, bytes)) {
     return Status(kUnknownError, "could not write file to temp dir");
+  }
 
   if (!zip::Unzip(archive, unzip_dir))
     return Status(kUnknownError, "could not unzip archive");
@@ -115,23 +112,28 @@ Status UnzipArchive(const base::FilePath& unzip_dir,
 // Stream for writing binary data.
 class DataOutputStream {
  public:
-  DataOutputStream() {}
-  ~DataOutputStream() {}
+  DataOutputStream() = default;
+  ~DataOutputStream() = default;
 
-  void WriteUInt16(uint16_t data) { WriteBytes(&data, sizeof(data)); }
-
-  void WriteUInt32(uint32_t data) { WriteBytes(&data, sizeof(data)); }
-
-  void WriteString(const std::string& data) {
-    WriteBytes(data.c_str(), data.length());
+  void WriteUInt16(uint16_t data) {
+    WriteBytes(base::byte_span_from_ref(data));
   }
 
-  void WriteBytes(const void* bytes, int size) {
-    if (!size)
+  void WriteUInt32(uint32_t data) {
+    WriteBytes(base::byte_span_from_ref(data));
+  }
+
+  void WriteString(std::string_view data) {
+    WriteBytes(base::as_byte_span(data));
+  }
+
+  void WriteBytes(base::span<const uint8_t> bytes) {
+    if (bytes.empty()) {
       return;
-    size_t next = buffer_.length();
-    buffer_.resize(next + size);
-    memcpy(&buffer_[next], bytes, size);
+    }
+    const size_t old_size = buffer_.length();
+    buffer_.resize(base::CheckAdd(old_size, bytes.size()).ValueOrDie());
+    base::as_writable_byte_span(buffer_).subspan(old_size).copy_from(bytes);
   }
 
   const std::string& buffer() const { return buffer_; }
@@ -143,40 +145,42 @@ class DataOutputStream {
 // Stream for reading binary data.
 class DataInputStream {
  public:
-  DataInputStream(const char* data, int size)
-      : data_(data), size_(size), iter_(0) {}
-  ~DataInputStream() {}
+  explicit DataInputStream(base::span<const uint8_t> data)
+      : remaining_data_(data) {}
+  ~DataInputStream() = default;
 
-  bool ReadUInt16(uint16_t* data) { return ReadBytes(data, sizeof(*data)); }
-
-  bool ReadUInt32(uint32_t* data) { return ReadBytes(data, sizeof(*data)); }
-
-  bool ReadString(std::string* data, int length) {
-    if (length < 0)
-      return false;
-    // Check here to make sure we don't allocate wastefully.
-    if (iter_ + length > size_)
-      return false;
-    data->resize(length);
-    if (length == 0)
-      return true;
-    return ReadBytes(&(*data)[0], length);
+  bool ReadUInt16(uint16_t& data) {
+    return ReadBytes(base::byte_span_from_ref(data));
   }
 
-  bool ReadBytes(void* bytes, int size) {
-    if (iter_ + size > size_)
+  bool ReadUInt32(uint32_t& data) {
+    return ReadBytes(base::byte_span_from_ref(data));
+  }
+
+  bool ReadString(std::string& data, size_t length) {
+    // Check here to make sure we don't allocate wastefully.
+    if (length > remaining()) {
       return false;
-    memcpy(bytes, &data_[iter_], size);
-    iter_ += size;
+    }
+    data.resize(length);
+    if (length == 0) {
+      return true;
+    }
+    return ReadBytes(base::as_writable_byte_span(data));
+  }
+
+  bool ReadBytes(base::span<uint8_t> bytes) {
+    if (bytes.size() > remaining()) {
+      return false;
+    }
+    bytes.copy_from(remaining_data_.take_first(bytes.size()));
     return true;
   }
 
-  int remaining() const { return size_ - iter_; }
+  size_t remaining() const { return remaining_data_.size(); }
 
  private:
-  const char* data_;
-  int size_;
-  int iter_;
+  base::raw_span<const uint8_t> remaining_data_;
 };
 
 // A file entry within a zip archive. This may be incomplete and is not
@@ -188,61 +192,61 @@ struct ZipEntry {
   // although the entry may include a data descriptor.
   static bool FromBytes(const std::string& bytes, ZipEntry* zip,
                         std::string* error_msg) {
-    DataInputStream stream(bytes.c_str(), bytes.length());
+    DataInputStream stream(base::as_byte_span(bytes));
 
     uint32_t signature;
-    if (!stream.ReadUInt32(&signature) || signature != kFileHeaderSignature) {
+    if (!stream.ReadUInt32(signature) || signature != kFileHeaderSignature) {
       *error_msg = "invalid file header signature";
       return false;
     }
-    if (!stream.ReadUInt16(&zip->version_needed)) {
+    if (!stream.ReadUInt16(zip->version_needed)) {
       *error_msg = "invalid version";
       return false;
     }
-    if (!stream.ReadUInt16(&zip->bit_flag)) {
+    if (!stream.ReadUInt16(zip->bit_flag)) {
       *error_msg = "invalid bit flag";
       return false;
     }
-    if (!stream.ReadUInt16(&zip->compression_method)) {
+    if (!stream.ReadUInt16(zip->compression_method)) {
       *error_msg = "invalid compression method";
       return false;
     }
-    if (!stream.ReadUInt16(&zip->mod_time)) {
+    if (!stream.ReadUInt16(zip->mod_time)) {
       *error_msg = "invalid file last modified time";
       return false;
     }
-    if (!stream.ReadUInt16(&zip->mod_date)) {
+    if (!stream.ReadUInt16(zip->mod_date)) {
       *error_msg = "invalid file last modified date";
       return false;
     }
-    if (!stream.ReadUInt32(&zip->crc)) {
+    if (!stream.ReadUInt32(zip->crc)) {
       *error_msg = "invalid crc";
       return false;
     }
     uint32_t compressed_size;
-    if (!stream.ReadUInt32(&compressed_size)) {
+    if (!stream.ReadUInt32(compressed_size)) {
       *error_msg = "invalid compressed size";
       return false;
     }
-    if (!stream.ReadUInt32(&zip->uncompressed_size)) {
-      *error_msg = "invalid compressed size";
+    if (!stream.ReadUInt32(zip->uncompressed_size)) {
+      *error_msg = "invalid uncompressed size";
       return false;
     }
     uint16_t name_length;
-    if (!stream.ReadUInt16(&name_length)) {
+    if (!stream.ReadUInt16(name_length)) {
       *error_msg = "invalid name length";
       return false;
     }
     uint16_t field_length;
-    if (!stream.ReadUInt16(&field_length)) {
+    if (!stream.ReadUInt16(field_length)) {
       *error_msg = "invalid field length";
       return false;
     }
-    if (!stream.ReadString(&zip->name, name_length)) {
+    if (!stream.ReadString(zip->name, name_length)) {
       *error_msg = "invalid name";
       return false;
     }
-    if (!stream.ReadString(&zip->fields, field_length)) {
+    if (!stream.ReadString(zip->fields, field_length)) {
       *error_msg = "invalid fields";
       return false;
     }
@@ -253,20 +257,20 @@ struct ZipEntry {
         return false;
       }
       compressed_size = stream.remaining() - 16;
-      if (!stream.ReadString(&zip->compressed_data, compressed_size)) {
+      if (!stream.ReadString(zip->compressed_data, compressed_size)) {
         *error_msg = "invalid compressed data before descriptor";
         return false;
       }
-      if (!stream.ReadUInt32(&signature) ||
+      if (!stream.ReadUInt32(signature) ||
           signature != kDataDescriptorSignature) {
         *error_msg = "invalid data descriptor signature";
         return false;
       }
-      if (!stream.ReadUInt32(&zip->crc)) {
+      if (!stream.ReadUInt32(zip->crc)) {
         *error_msg = "invalid crc";
         return false;
       }
-      if (!stream.ReadUInt32(&compressed_size)) {
+      if (!stream.ReadUInt32(compressed_size)) {
         *error_msg = "invalid compressed size";
         return false;
       }
@@ -274,13 +278,13 @@ struct ZipEntry {
         *error_msg = "compressed data does not match data descriptor";
         return false;
       }
-      if (!stream.ReadUInt32(&zip->uncompressed_size)) {
+      if (!stream.ReadUInt32(zip->uncompressed_size)) {
         *error_msg = "invalid compressed size";
         return false;
       }
     } else {
       // Just has compressed data.
-      if (!stream.ReadString(&zip->compressed_data, compressed_size)) {
+      if (!stream.ReadString(zip->compressed_data, compressed_size)) {
         *error_msg = "invalid compressed data";
         return false;
       }
@@ -445,17 +449,20 @@ double ConvertCentimeterToInch(double centimeter) {
 namespace {
 
 template <typename T>
-bool GetOptionalValue(const base::DictionaryValue* dict,
-                      base::StringPiece path,
+bool GetOptionalValue(const base::DictValue& dict,
+                      std::string_view path,
                       T* out_value,
                       bool* has_value,
-                      bool (base::Value::*getter)(T*) const) {
+                      std::optional<T> (base::Value::*getter)() const) {
   if (has_value != nullptr)
     *has_value = false;
-  const base::Value* value;
-  if (!dict->Get(path, &value))
+
+  const base::Value* value = dict.FindByDottedPath(path);
+  if (!value)
     return true;
-  if ((value->*getter)(out_value)) {
+  std::optional<T> maybe_value = (value->*getter)();
+  if (maybe_value.has_value()) {
+    *out_value = maybe_value.value();
     if (has_value != nullptr)
       *has_value = true;
     return true;
@@ -465,28 +472,31 @@ bool GetOptionalValue(const base::DictionaryValue* dict,
 
 }  // namespace
 
-bool GetOptionalBool(const base::DictionaryValue* dict,
-                     base::StringPiece path,
+bool GetOptionalBool(const base::DictValue& dict,
+                     std::string_view path,
                      bool* out_value,
                      bool* has_value) {
   return GetOptionalValue(dict, path, out_value, has_value,
-                          &base::Value::GetAsBoolean);
+                          &base::Value::GetIfBool);
 }
 
-bool GetOptionalInt(const base::DictionaryValue* dict,
-                    base::StringPiece path,
+bool GetOptionalInt(const base::DictValue& dict,
+                    std::string_view path,
                     int* out_value,
                     bool* has_value) {
   if (GetOptionalValue(dict, path, out_value, has_value,
-                       &base::Value::GetAsInteger)) {
+                       &base::Value::GetIfInt)) {
     return true;
   }
   // See if we have a double that contains an int value.
-  double d;
-  if (!dict->GetDouble(path, &d))
+  std::optional<double> maybe_decimal = dict.FindDoubleByDottedPath(path);
+  if (!maybe_decimal.has_value() ||
+      !base::IsValueInRangeForNumericType<int>(maybe_decimal.value())) {
     return false;
-  int i = static_cast<int>(d);
-  if (i == d) {
+  }
+
+  int i = static_cast<int>(maybe_decimal.value());
+  if (i == maybe_decimal.value()) {
     *out_value = i;
     if (has_value != nullptr)
       *has_value = true;
@@ -495,48 +505,82 @@ bool GetOptionalInt(const base::DictionaryValue* dict,
   return false;
 }
 
-bool GetOptionalDouble(const base::DictionaryValue* dict,
-                       base::StringPiece path,
+bool GetOptionalDouble(const base::DictValue& dict,
+                       std::string_view path,
                        double* out_value,
                        bool* has_value) {
-  // base::Value::GetAsDouble already converts int to double if needed.
   return GetOptionalValue(dict, path, out_value, has_value,
-                          &base::Value::GetAsDouble);
+                          &base::Value::GetIfDouble);
 }
 
-bool GetOptionalString(const base::DictionaryValue* dict,
-                       base::StringPiece path,
+bool GetOptionalString(const base::DictValue& dict,
+                       std::string_view path,
                        std::string* out_value,
                        bool* has_value) {
-  return GetOptionalValue(dict, path, out_value, has_value,
-                          &base::Value::GetAsString);
+  if (has_value != nullptr)
+    *has_value = false;
+
+  const base::Value* value = dict.FindByDottedPath(path);
+  if (!value)
+    return true;
+
+  if (value->is_string()) {
+    *out_value = value->GetString();
+    if (has_value != nullptr)
+      *has_value = true;
+    return true;
+  }
+  return false;
 }
 
-bool GetOptionalDictionary(const base::DictionaryValue* dict,
-                           base::StringPiece path,
-                           const base::DictionaryValue** out_value,
+bool GetOptionalDictionary(const base::DictValue& dict,
+                           std::string_view path,
+                           const base::DictValue** out_value,
                            bool* has_value) {
-  return GetOptionalValue(dict, path, out_value, has_value,
-                          &base::Value::GetAsDictionary);
+  if (has_value != nullptr)
+    *has_value = false;
+  const base::Value* value = dict.FindByDottedPath(path);
+  if (value == nullptr)
+    return true;
+  if (value->is_dict()) {
+    *out_value = value->GetIfDict();
+    if (has_value != nullptr)
+      *has_value = true;
+    return true;
+  }
+  return false;
 }
 
-bool GetOptionalList(const base::DictionaryValue* dict,
-                     base::StringPiece path,
+bool GetOptionalList(const base::DictValue& dict,
+                     std::string_view path,
                      const base::ListValue** out_value,
                      bool* has_value) {
-  return GetOptionalValue(dict, path, out_value, has_value,
-                          &base::Value::GetAsList);
+  if (has_value != nullptr)
+    *has_value = false;
+
+  const base::Value* value = dict.FindByDottedPath(path);
+  if (!value)
+    return true;
+
+  if (value->is_list()) {
+    *out_value = &value->GetList();
+    if (has_value != nullptr)
+      *has_value = true;
+    return true;
+  }
+
+  return false;
 }
 
-bool GetOptionalSafeInt(const base::DictionaryValue* dict,
-                        base::StringPiece path,
+bool GetOptionalSafeInt(const base::DictValue& dict,
+                        std::string_view path,
                         int64_t* out_value,
                         bool* has_value) {
   // Check if we have a normal int, which is always a safe int.
   int temp_int;
   bool temp_has_value;
   if (GetOptionalValue(dict, path, &temp_int, &temp_has_value,
-                       &base::Value::GetAsInteger)) {
+                       &base::Value::GetIfInt)) {
     if (has_value != nullptr)
       *has_value = temp_has_value;
     if (temp_has_value)
@@ -545,13 +589,13 @@ bool GetOptionalSafeInt(const base::DictionaryValue* dict,
   }
 
   // Check if we have a double, which may or may not contain a safe int value.
-  double temp_double;
-  if (!dict->GetDouble(path, &temp_double))
+  std::optional<double> maybe_decimal = dict.FindDoubleByDottedPath(path);
+  if (!maybe_decimal.has_value())
     return false;
 
   // Verify that the value is an integer.
-  int64_t temp_int64 = static_cast<int64_t>(temp_double);
-  if (temp_int64 != temp_double)
+  int64_t temp_int64 = static_cast<int64_t>(maybe_decimal.value());
+  if (temp_int64 != maybe_decimal.value())
     return false;
 
   // Verify that the value is in the range for safe integer.
@@ -565,26 +609,12 @@ bool GetOptionalSafeInt(const base::DictionaryValue* dict,
   return true;
 }
 
-bool SetSafeInt(base::DictionaryValue* dict,
-                const base::StringPiece path,
+bool SetSafeInt(base::DictValue& dict,
+                std::string_view path,
                 int64_t in_value_64) {
   int int_value = static_cast<int>(in_value_64);
   if (in_value_64 == int_value)
-    return dict->SetInteger(path, in_value_64);
+    return dict.SetByDottedPath(path, int_value);
   else
-    return dict->SetDouble(path, in_value_64);
-}
-
-std::string WebViewIdToWindowHandle(const std::string& web_view_id) {
-  return kWindowHandlePrefix + web_view_id;
-}
-
-bool WindowHandleToWebViewId(const std::string& window_handle,
-                             std::string* web_view_id) {
-  if (!base::StartsWith(window_handle, kWindowHandlePrefix,
-                        base::CompareCase::SENSITIVE)) {
-    return false;
-  }
-  *web_view_id = window_handle.substr(sizeof(kWindowHandlePrefix) - 1);
-  return true;
+    return dict.SetByDottedPath(path, static_cast<double>(in_value_64));
 }

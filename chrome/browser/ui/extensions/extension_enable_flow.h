@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,20 +8,16 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/scoped_observation.h"
 #include "chrome/browser/extensions/extension_install_prompt.h"
-#include "chrome/browser/extensions/load_error_reporter.h"
-#include "chrome/common/buildflags.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
-
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
+#include "extensions/browser/load_error_reporter.h"
 #include "extensions/browser/supervised_user_extensions_delegate.h"
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
+#include "extensions/common/extension_id.h"
 
 class ExtensionEnableFlowDelegate;
 
@@ -42,6 +38,10 @@ class ExtensionEnableFlow : public extensions::LoadErrorReporter::Observer,
   ExtensionEnableFlow(Profile* profile,
                       const std::string& extension_id,
                       ExtensionEnableFlowDelegate* delegate);
+
+  ExtensionEnableFlow(const ExtensionEnableFlow&) = delete;
+  ExtensionEnableFlow& operator=(const ExtensionEnableFlow&) = delete;
+
   ~ExtensionEnableFlow() override;
 
   // Starts the flow and the logic continues on |delegate_| after enabling is
@@ -55,12 +55,12 @@ class ExtensionEnableFlow : public extensions::LoadErrorReporter::Observer,
   void StartForNativeWindow(gfx::NativeWindow parent_window);
   void Start();
 
-  const std::string& extension_id() const { return extension_id_; }
+  const extensions::ExtensionId& extension_id() const { return extension_id_; }
 
   // LoadErrorReporter::Observer:
   void OnLoadFailure(content::BrowserContext* browser_context,
                      const base::FilePath& file_path,
-                     const std::string& error) override;
+                     const std::u16string& error) override;
 
  private:
   // Runs the enable flow. It starts by checking if the extension is loaded.
@@ -69,25 +69,20 @@ class ExtensionEnableFlow : public extensions::LoadErrorReporter::Observer,
   // CheckPermissionAndMaybePromptUser finish the flow.
   void Run();
 
-  // Checks if there is permission escalation while the extension is
-  // disabled/terminated. If no, enables the extension and notify |delegate_|
-  // synchronously. Otherwise, creates an ExtensionInstallPrompt and asks user
-  // to confirm.
+  // Checks if the extension can be re-enabled and whether user confirmation is
+  // needed. If privileges weren't escalated and the extension only has
+  // supported disable reasons, enables the extension and notifies |delegate_|
+  // synchronously. If permissions need to be confirmed, creates an
+  // ExtensionInstallPrompt and asks user to confirm. If other disable reasons
+  // are present, aborts the flow.
   void CheckPermissionAndMaybePromptUser();
 
-  // Creates an ExtensionInstallPrompt in |prompt_|.
-  void CreatePrompt();
+  // Creates an ExtensionInstallPrompt in |prompt_| with the given prompt data.
+  void CreatePrompt(std::unique_ptr<extensions::InstallPromptData> prompt);
 
-#if BUILDFLAG(ENABLE_SUPERVISED_USERS)
-  // Called when the user dismisses the Parent Permission Dialog.
-  void OnParentPermissionDialogDone(
-      extensions::SupervisedUserExtensionsDelegate::ParentPermissionDialogResult
-          result);
-
-  // Called when the user dismisses the Extension Install Blocked By Parent
-  // Dialog.
-  void OnBlockedByParentDialogDone();
-#endif  // BUILDFLAG(ENABLE_SUPERVISED_USERS)
+  // Called when the extension approval flow is complete.
+  void OnExtensionApprovalDone(
+      extensions::SupervisedExtensionApprovalResult result);
 
   // Starts/stops observing extension load notifications.
   void StartObserving();
@@ -102,19 +97,19 @@ class ExtensionEnableFlow : public extensions::LoadErrorReporter::Observer,
 
   void EnableExtension();
 
-  void InstallPromptDone(ExtensionInstallPrompt::Result result);
+  void InstallPromptDone(ExtensionInstallPrompt::DoneCallbackPayload payload);
 
-  Profile* const profile_;
-  const std::string extension_id_;
-  ExtensionEnableFlowDelegate* const delegate_;  // Not owned.
+  const raw_ptr<Profile> profile_;
+  const extensions::ExtensionId extension_id_;
+  const raw_ptr<ExtensionEnableFlowDelegate> delegate_;  // Not owned.
 
   // Parent web contents for ExtensionInstallPrompt that may be created during
   // the flow. Note this is mutually exclusive with |parent_window_| below.
-  content::WebContents* parent_contents_ = nullptr;
+  raw_ptr<content::WebContents> parent_contents_ = nullptr;
 
   // Parent native window for ExtensionInstallPrompt. Note this is mutually
   // exclusive with |parent_contents_| above.
-  gfx::NativeWindow parent_window_ = nullptr;
+  gfx::NativeWindow parent_window_ = gfx::NativeWindow();
 
   std::unique_ptr<ExtensionInstallPrompt> prompt_;
 
@@ -128,8 +123,6 @@ class ExtensionEnableFlow : public extensions::LoadErrorReporter::Observer,
       load_error_observation_{this};
 
   base::WeakPtrFactory<ExtensionEnableFlow> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(ExtensionEnableFlow);
 };
 
 #endif  // CHROME_BROWSER_UI_EXTENSIONS_EXTENSION_ENABLE_FLOW_H_

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,26 +6,36 @@
 #define COMPONENTS_SIGNIN_PUBLIC_BASE_SIGNIN_CLIENT_H_
 
 #include <memory>
+#include <optional>
 
-#include "base/callback.h"
-#include "base/callback_list.h"
+#include "base/functional/callback.h"
+#include "base/scoped_observation_traits.h"
 #include "build/build_config.h"
-#include "build/chromeos_buildflags.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/signin/public/base/account_consistency_method.h"
+#include "components/signin/public/base/consent_level.h"
+#include "components/signin/public/base/oauth_consumer.h"
+#include "components/signin/public/base/oauth_consumer_id.h"
+#include "components/signin/public/base/oauth_consumer_registry.h"
+#include "components/signin/public/base/signin_buildflags.h"
 #include "components/signin/public/base/signin_metrics.h"
-#include "google_apis/gaia/gaia_auth_fetcher.h"
-#include "url/gurl.h"
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-#include "components/account_manager_core/account.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#endif
+namespace signin {
+class BoundSessionOAuthMultiLoginDelegate;
+class PrimaryAccountChangeEvent;
+}
 
+class GaiaAuthConsumer;
+class GaiaAuthFetcher;
+class GaiaId;
 class PrefService;
 
 namespace content_settings {
 class Observer;
+}
+
+namespace gaia {
+class GaiaSource;
 }
 
 namespace network {
@@ -33,15 +43,24 @@ class SharedURLLoaderFactory;
 
 namespace mojom {
 class CookieManager;
-}
+class DeviceBoundSessionManager;
+class NetworkContext;
+}  // namespace mojom
 }  // namespace network
+
+namespace version_info {
+enum class Channel;
+}
 
 // An interface that needs to be supplied to the Signin component by its
 // embedder.
 class SigninClient : public KeyedService {
  public:
   // Argument to PreSignOut() callback, indicating client decision.
-  enum class SignoutDecision { ALLOW_SIGNOUT, DISALLOW_SIGNOUT };
+  enum class SignoutDecision {
+    ALLOW,
+    CLEAR_PRIMARY_ACCOUNT_DISALLOWED,
+  };
 
   ~SigninClient() override = default;
 
@@ -60,6 +79,26 @@ class SigninClient : public KeyedService {
 
   // Returns the CookieManager for the client.
   virtual network::mojom::CookieManager* GetCookieManager() = 0;
+
+  // Returns the DeviceBoundSessionManager for the client.
+  //
+  // TODO(crbug.com/463979316): Make it pure virtual to make sure all embedders
+  // explicitly provide an implementation.
+  virtual network::mojom::DeviceBoundSessionManager*
+  GetDeviceBoundSessionManager() const;
+
+  // Returns the NetworkContext for the client.
+  virtual network::mojom::NetworkContext* GetNetworkContext() = 0;
+
+  // Returns true if clearing the primary account is allowed regardless of the
+  // consent level.
+  virtual bool IsClearPrimaryAccountAllowed() const;
+
+  bool is_clear_primary_account_allowed_for_testing() const;
+
+  void set_is_clear_primary_account_allowed_for_testing(SignoutDecision value) {
+    is_clear_primary_account_allowed_for_testing_ = value;
+  }
 
   // Called before Google sign-out started. Implementers must run the
   // |on_signout_decision_reached|, passing a SignoutDecision to allow/disallow
@@ -82,7 +121,11 @@ class SigninClient : public KeyedService {
   virtual void RemoveContentSettingsObserver(
       content_settings::Observer* observer) = 0;
 
-  // Execute |callback| if and when there is a network connection.
+  // Returns `true` if network calls will be delayed by `DelayNetworkCall()`.
+  virtual bool AreNetworkCallsDelayed() = 0;
+
+  // Execute `callback` if and when there is a network connection. Also see
+  // `AreNetworkCallsDelayed()`.
   virtual void DelayNetworkCall(base::OnceClosure callback) = 0;
 
   // Creates a new platform-specific GaiaAuthFetcher.
@@ -90,18 +133,44 @@ class SigninClient : public KeyedService {
       GaiaAuthConsumer* consumer,
       gaia::GaiaSource source) = 0;
 
-  // Marks the DICE migration completed.
-  virtual void SetDiceMigrationCompleted() {}
+  // Returns the channel for the client installation.
+  virtual version_info::Channel GetClientChannel() = 0;
 
-  // Checks whether a user is known to be non-enterprise. Domains such as
-  // gmail.com and googlemail.com are known to not be managed. Also returns
-  // false if the username is empty.
-  virtual bool IsNonEnterpriseUser(const std::string& username);
+  // Called when the primary account is changed. `event_details` contains
+  // information on how the account changed, and on how the signin/signout
+  // happened.
+  virtual void OnPrimaryAccountChanged(
+      signin::PrimaryAccountChangeEvent event_details) = 0;
 
-#if BUILDFLAG(IS_CHROMEOS_LACROS)
-  virtual absl::optional<account_manager::Account>
-  GetInitialPrimaryAccount() = 0;
-#endif
+  virtual std::unique_ptr<signin::BoundSessionOAuthMultiLoginDelegate>
+  CreateBoundSessionOAuthMultiloginDelegate() const;
+
+  // Returns the OAuthConsumer associated with `oauth_consumer_id`.
+  virtual signin::OAuthConsumer GetOAuthConsumerFromId(
+      signin::OAuthConsumerId oauth_consumer_id) const = 0;
+
+  // Returns true if `gaia_id` is currently signed in as the primary account
+  // of another profile on this client (excluding the current profile).
+  virtual bool IsAccountSignedInOnOtherProfile(const GaiaId& gaia_id) const;
+
+ protected:
+  std::optional<SignoutDecision> is_clear_primary_account_allowed_for_testing_;
 };
+
+namespace base {
+
+template <>
+struct ScopedObservationTraits<SigninClient, content_settings::Observer> {
+  static void AddObserver(SigninClient* source,
+                          content_settings::Observer* observer) {
+    source->AddContentSettingsObserver(observer);
+  }
+  static void RemoveObserver(SigninClient* source,
+                             content_settings::Observer* observer) {
+    source->RemoveContentSettingsObserver(observer);
+  }
+};
+
+}  // namespace base
 
 #endif  // COMPONENTS_SIGNIN_PUBLIC_BASE_SIGNIN_CLIENT_H_

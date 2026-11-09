@@ -1,16 +1,8 @@
-// Copyright 2018 The Closure Library Authors. All Rights Reserved.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//      http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS-IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/**
+ * @license
+ * Copyright The Closure Library Authors.
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
 /**
  * @fileoverview RelativeDateTimeFormat provides methods to format simple
@@ -29,11 +21,11 @@ goog.module('goog.i18n.RelativeDateTimeFormat');
 
 // For referencing goog.i18n.USE_ECMASCRIPT_I18N_RDTF to determine compile-time
 // choice of ECMAScript vs. JavaScript implementation and data.
-var LocaleFeature = goog.require('goog.i18n.LocaleFeature');
+const LocaleFeature = goog.require('goog.i18n.LocaleFeature');
 
-var MessageFormat = goog.require('goog.i18n.MessageFormat');
-var asserts = goog.require('goog.asserts');
-var relativeDateTimeSymbols = goog.require('goog.i18n.relativeDateTimeSymbols');
+const MessageFormat = goog.require('goog.i18n.MessageFormat');
+const asserts = goog.require('goog.asserts');
+const relativeDateTimeSymbols = goog.require('goog.i18n.relativeDateTimeSymbols');
 
 /**
  * @constructor
@@ -53,7 +45,7 @@ var relativeDateTimeSymbols = goog.require('goog.i18n.relativeDateTimeSymbols');
  *     relativedatetimesymbols.
  * @final
  */
-var RelativeDateTimeFormat = function(
+let RelativeDateTimeFormat = function(
     opt_numeric, opt_style, opt_relativeDateTimeSymbols) {
   /**
    * Records if the implementation is ECMAScript
@@ -189,12 +181,12 @@ RelativeDateTimeFormat.prototype.formatPolyfill_ = function(
   /**
    * Find the right data based on Unit, quantity, and plural.
    */
-  var rdtfUnitPattern = this.getUnitStylePattern_(relativeUnit);
+  const rdtfUnitPattern = this.getUnitStylePattern_(relativeUnit);
   // Formats using Closure Javascript. Check for forcing numeric and having
   // relative value with the given quantity.
   if (!useNumeric && rdtfUnitPattern && rdtfUnitPattern.R &&
-      rdtfUnitPattern.R[quantity]) {
-    return rdtfUnitPattern.R[quantity];
+      rdtfUnitPattern.R['' + quantity]) {
+    return rdtfUnitPattern.R['' + quantity];
   } else {
     // Direction data doesn't exist. Fallback to format numeric.
     return this.formatNumericInternal_(quantity, rdtfUnitPattern);
@@ -214,7 +206,7 @@ RelativeDateTimeFormat.prototype.formatPolyfill_ = function(
 RelativeDateTimeFormat.prototype.formatNative_ = function(
     quantity, relativeUnit, useNumeric) {
   // Use built-in ECMAScript Intl object.
-  var options = {
+  let options = {
     'numeric': useNumeric ? 'always' : 'auto',
   };
   switch (this.style_) {
@@ -231,17 +223,18 @@ RelativeDateTimeFormat.prototype.formatNative_ = function(
   }
 
   // Use built-in ECMAScript Intl object.
-  var intl = goog.global.Intl;
+  const intl = goog.global.Intl;
+  let intlFormatter;
   try {
     // Fix "_" to "-" to correspond to BCP-47.
-    var intlFormatter =
+    intlFormatter =
         new intl.RelativeTimeFormat(goog.LOCALE.replace(/_/g, '-'), options);
   } catch (err) {
     // An empty string is returned for an unsupported LOCALE.
     return '';
   }
 
-  var unit = 'year';
+  let unit = 'year';
   switch (relativeUnit) {
     case RelativeDateTimeFormat.Unit.YEAR:
       unit = 'year';
@@ -288,8 +281,8 @@ RelativeDateTimeFormat.prototype.formatNumericInternal_ = function(
    * Stores the plural formatting string.
    * @type {string}
    */
-  var relTimeString;
-  var absQuantity = Math.abs(quantity);
+  let relTimeString;
+  const absQuantity = Math.abs(quantity);
 
   // Apply MessageFormat to the unit with FUTURE or PAST quantity, with test for
   // signed zero value.
@@ -305,7 +298,7 @@ RelativeDateTimeFormat.prototype.formatNumericInternal_ = function(
    * @type {?MessageFormat}
    */
   // Take basic message and wrap with plural message type.
-  var msgFormatter = new MessageFormat('{N,plural,' + relTimeString + '}');
+  const msgFormatter = new MessageFormat('{N,plural,' + relTimeString + '}');
   return msgFormatter.format({'N': absQuantity});
 };
 
@@ -317,7 +310,7 @@ RelativeDateTimeFormat.prototype.formatNumericInternal_ = function(
  * @private
  */
 RelativeDateTimeFormat.prototype.getUnitStylePattern_ = function(relativeUnit) {
-  var unitInfo = this.getUnitPattern_(relativeUnit);
+  const unitInfo = this.getUnitPattern_(relativeUnit);
   asserts.assertObject(unitInfo);
   return this.getStylePattern_(unitInfo);
 };
@@ -411,13 +404,13 @@ RelativeDateTimeFormat.prototype.isOffsetDefinedForUnit = function(
     return undefined;
   }
 
-  var rdtfUnitPattern = this.getUnitStylePattern_(unit);
+  const rdtfUnitPattern = this.getUnitStylePattern_(unit);
   // Check for force numeric and requested unit and offset.
   if (typeof (offset) == 'string') {
     offset = Number(offset);
   }
-  if (rdtfUnitPattern && rdtfUnitPattern.R && rdtfUnitPattern.R[offset]) {
-    return rdtfUnitPattern.R[offset];
+  if (rdtfUnitPattern && rdtfUnitPattern.R && rdtfUnitPattern.R['' + offset]) {
+    return rdtfUnitPattern.R['' + offset];
   } else {
     return undefined;
   }
@@ -438,7 +431,7 @@ RelativeDateTimeFormat.prototype.isNativeMode = function() {
  * @package
  */
 RelativeDateTimeFormat.prototype.hasNativeRdtf = function() {
-  var intl = goog.global.Intl;
+  const intl = goog.global.Intl;
   return (Boolean(intl && intl.RelativeTimeFormat));
 };
 

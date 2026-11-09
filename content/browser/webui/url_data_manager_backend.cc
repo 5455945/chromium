@@ -1,26 +1,24 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/webui/url_data_manager_backend.h"
 
+#include <algorithm>
 #include <set>
 #include <utility>
 
-#include "base/bind.h"
-#include "base/containers/contains.h"
+#include "base/functional/bind.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/single_thread_task_runner.h"
+#include "base/no_destructor.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
-#include "base/task/post_task.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/blob_storage/chrome_blob_storage_context.h"
+#include "base/values.h"
 #include "content/browser/webui/shared_resources_data_source.h"
 #include "content/browser/webui/url_data_source_impl.h"
 #include "content/browser/webui/web_ui_data_source_impl.h"
@@ -30,11 +28,10 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/content_client.h"
-#include "content/public/common/content_features.h"
 #include "content/public/common/url_constants.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
-#include "net/filter/source_stream.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
 #include "net/log/net_log_util.h"
 #include "services/network/public/mojom/content_security_policy.mojom.h"
@@ -48,10 +45,6 @@ namespace {
 
 const char kChromeURLContentSecurityPolicyHeaderName[] =
     "Content-Security-Policy";
-const char kChromeURLContentSecurityPolicyReportOnlyHeaderName[] =
-    "Content-Security-Policy-Report-Only";
-const char kChromeURLContentSecurityPolicyReportOnlyHeaderValue[] =
-    "require-trusted-types-for 'script'";
 
 const char kChromeURLCrossOriginOpenerPolicyName[] =
     "Cross-Origin-Opener-Policy";
@@ -65,24 +58,53 @@ const char kChromeURLXFrameOptionsHeaderValue[] = "DENY";
 const char kNetworkErrorKey[] = "netError";
 const char kURLDataManagerBackendKeyName[] = "url_data_manager_backend";
 
-bool SchemeIsInSchemes(const std::string& scheme,
-                       const std::vector<std::string>& schemes) {
-  return base::Contains(schemes, scheme);
+bool g_disallow_webui_scheme_caching_for_testing = false;
+
+std::vector<std::string> GetWebUISchemesSlow() {
+  std::vector<std::string> schemes = {kChromeUIScheme,
+                                      kChromeUIUntrustedScheme};
+  GetContentClient()->browser()->GetAdditionalWebUISchemes(&schemes);
+  return schemes;
+}
+
+std::vector<std::string> GetWebUISchemesCached() {
+  // It's OK to cache this in a static because the class implementing
+  // GetAdditionalWebUISchemes() won't change while the application is
+  // running, and because those methods always add the same items.
+  //
+  // However, be careful using this with unit tests which use
+  // GetAdditionalWebUISchemes() to change the list of WebUI schemes, since
+  // this caching may persist across tests. For those, this caching should be
+  // disabled via SetDisallowWebUISchemeCachingForTesting().
+  static base::NoDestructor<std::vector<std::string>> webui_schemes(
+      GetWebUISchemesSlow());
+
+  return *webui_schemes;
 }
 
 }  // namespace
 
-URLDataManagerBackend::URLDataManagerBackend() : next_request_id_(0) {
-  // Add a shared data source for chrome://resources.
-  AddDataSource(
-      static_cast<WebUIDataSourceImpl*>(CreateSharedResourcesDataSource()));
+URLDataManagerBackend::URLDataManagerBackend() {
+  {
+    // Add a shared data source for chrome://resources.
+    auto* source = new WebUIDataSourceImpl(kChromeUIResourcesHost);
+    PopulateSharedResourcesDataSource(source);
+    AddDataSource(source);  // Takes ownership.
+  }
+
+  {
+    // Add a shared data source for chrome-untrusted://resources.
+    auto* source = new WebUIDataSourceImpl(kChromeUIUntrustedResourcesURL);
+    PopulateSharedResourcesDataSource(source);
+    AddDataSource(source);  // Takes ownership.
+  }
 }
 
 URLDataManagerBackend::~URLDataManagerBackend() = default;
 
 URLDataManagerBackend* URLDataManagerBackend::GetForBrowserContext(
     BrowserContext* context) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
   if (!context->GetUserData(kURLDataManagerBackendKeyName)) {
     context->SetUserData(kURLDataManagerBackendKeyName,
                          std::make_unique<URLDataManagerBackend>());
@@ -92,11 +114,10 @@ URLDataManagerBackend* URLDataManagerBackend::GetForBrowserContext(
 }
 
 void URLDataManagerBackend::AddDataSource(URLDataSourceImpl* source) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  if (!source->source()->ShouldReplaceExistingSource()) {
-    auto i = data_sources_.find(source->source_name());
-    if (i != data_sources_.end())
-      return;
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M158);
+  if (!source->source()->ShouldReplaceExistingSource() &&
+      data_sources_.contains(source->source_name())) {
+    return;
   }
   data_sources_[source->source_name()] = source;
   source->backend_ = weak_factory_.GetWeakPtr();
@@ -104,11 +125,10 @@ void URLDataManagerBackend::AddDataSource(URLDataSourceImpl* source) {
 
 void URLDataManagerBackend::UpdateWebUIDataSource(
     const std::string& source_name,
-    const base::DictionaryValue& update) {
+    const base::DictValue& update) {
   auto it = data_sources_.find(source_name);
   if (it == data_sources_.end() || !it->second->IsWebUIDataSourceImpl()) {
     NOTREACHED();
-    return;
   }
   static_cast<WebUIDataSourceImpl*>(it->second.get())
       ->AddLocalizedStrings(update);
@@ -117,8 +137,8 @@ void URLDataManagerBackend::UpdateWebUIDataSource(
 URLDataSourceImpl* URLDataManagerBackend::GetDataSourceFromURL(
     const GURL& url) {
   // chrome-untrusted:// sources keys are of the form "chrome-untrusted://host".
-  if (url.scheme() == kChromeUIUntrustedScheme) {
-    auto i = data_sources_.find(url.GetOrigin().spec());
+  if (url.GetScheme() == kChromeUIUntrustedScheme) {
+    auto i = data_sources_.find(url.DeprecatedGetOriginAsURL().spec());
     if (i == data_sources_.end())
       return nullptr;
     return i->second.get();
@@ -126,13 +146,13 @@ URLDataSourceImpl* URLDataManagerBackend::GetDataSourceFromURL(
 
   // The input usually looks like: chrome://source_name/extra_bits?foo
   // so do a lookup using the host of the URL.
-  auto i = data_sources_.find(url.host());
+  auto i = data_sources_.find(url.GetHost());
   if (i != data_sources_.end())
     return i->second.get();
 
   // No match using the host of the URL, so do a lookup using the scheme for
   // URLs on the form source_name://extra_bits/foo .
-  i = data_sources_.find(url.scheme() + "://");
+  i = data_sources_.find(url.GetScheme() + "://");
   if (i != data_sources_.end())
     return i->second.get();
 
@@ -142,7 +162,7 @@ URLDataSourceImpl* URLDataManagerBackend::GetDataSourceFromURL(
 
 scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
     URLDataSourceImpl* source_impl,
-    const std::string& path,
+    const GURL& url,
     const std::string& origin) {
   // Set the headers so that requests serviced by ChromeURLDataManager return a
   // status code of 200. Without this they return a 0, which makes the status
@@ -159,12 +179,14 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
   if (source->ShouldAddContentSecurityPolicy()) {
     std::string csp_header;
 
-    const network::mojom::CSPDirectiveName kAllDirectives[] = {
+    constexpr network::mojom::CSPDirectiveName kAllDirectives[] = {
         network::mojom::CSPDirectiveName::BaseURI,
         network::mojom::CSPDirectiveName::ChildSrc,
         network::mojom::CSPDirectiveName::ConnectSrc,
         network::mojom::CSPDirectiveName::DefaultSrc,
+        network::mojom::CSPDirectiveName::FencedFrameSrc,
         network::mojom::CSPDirectiveName::FormAction,
+        network::mojom::CSPDirectiveName::FontSrc,
         network::mojom::CSPDirectiveName::FrameSrc,
         network::mojom::CSPDirectiveName::ImgSrc,
         network::mojom::CSPDirectiveName::MediaSrc,
@@ -174,12 +196,11 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
         network::mojom::CSPDirectiveName::StyleSrc,
         network::mojom::CSPDirectiveName::TrustedTypes,
         network::mojom::CSPDirectiveName::WorkerSrc};
-
-    for (auto& directive : kAllDirectives) {
+    for (const auto& directive : kAllDirectives) {
       csp_header.append(source->GetContentSecurityPolicy(directive));
     }
 
-    // TODO(crbug.com/1051745): Both CSP frame ancestors and XFO headers may be
+    // TODO(crbug.com/40118579): Both CSP frame ancestors and XFO headers may be
     // added to the response but frame ancestors would take precedence. In the
     // future, XFO will be removed so when that happens remove the check and
     // always add frame ancestors.
@@ -196,15 +217,10 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
                        kChromeURLXFrameOptionsHeaderValue);
   }
 
-  if (base::FeatureList::IsEnabled(features::kWebUIReportOnlyTrustedTypes)) {
-    headers->SetHeader(kChromeURLContentSecurityPolicyReportOnlyHeaderName,
-                       kChromeURLContentSecurityPolicyReportOnlyHeaderValue);
-  }
-
   if (!source->AllowCaching())
     headers->SetHeader("Cache-Control", "no-cache");
 
-  std::string mime_type = source->GetMimeType(path);
+  std::string mime_type = source->GetMimeType(url);
   if (source->ShouldServeMimeTypeAsContentTypeHeader() && !mime_type.empty())
     headers->SetHeader(net::HttpRequestHeaders::kContentType, mime_type);
 
@@ -223,8 +239,9 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
 
   if (!origin.empty()) {
     std::string header = source->GetAccessControlAllowOriginForOrigin(origin);
-    DCHECK(header.empty() || header == origin || header == "*" ||
-           header == "null");
+    CHECK(
+        header.empty() || header == origin || header == "*" || header == "null",
+        base::NotFatalUntil::M158);
     if (!header.empty()) {
       headers->SetHeader("Access-Control-Allow-Origin", header);
       headers->SetHeader("Vary", "Origin");
@@ -236,47 +253,45 @@ scoped_refptr<net::HttpResponseHeaders> URLDataManagerBackend::GetHeaders(
 
 bool URLDataManagerBackend::CheckURLIsValid(const GURL& url) {
   std::vector<std::string> additional_schemes;
-  DCHECK(url.SchemeIs(kChromeUIScheme) ||
-         url.SchemeIs(kChromeUIUntrustedScheme) ||
-         (GetContentClient()->browser()->GetAdditionalWebUISchemes(
-              &additional_schemes),
-          SchemeIsInSchemes(url.scheme(), additional_schemes)));
+  CHECK(url.SchemeIs(kChromeUIScheme) ||
+            url.SchemeIs(kChromeUIUntrustedScheme) ||
+            (GetContentClient()->browser()->GetAdditionalWebUISchemes(
+                 &additional_schemes),
+             std::ranges::contains(additional_schemes, url.GetScheme())),
+        base::NotFatalUntil::M158);
 
   if (!url.is_valid()) {
     NOTREACHED();
-    return false;
   }
 
   return true;
 }
 
 bool URLDataManagerBackend::IsValidNetworkErrorCode(int error_code) {
-  base::Value error_codes = net::GetNetConstants();
-  const base::DictionaryValue* net_error_codes_dict = nullptr;
-
-  for (auto item : error_codes.DictItems()) {
-    if (item.first == kNetworkErrorKey) {
-      item.second.GetAsDictionary(&net_error_codes_dict);
-      break;
-    }
-  }
-
-  if (net_error_codes_dict != nullptr) {
-    for (base::DictionaryValue::Iterator itr(*net_error_codes_dict);
-         !itr.IsAtEnd(); itr.Advance()) {
-      if (error_code == itr.value().GetInt())
+  base::DictValue error_codes = net::GetNetConstants();
+  const base::DictValue* net_error_codes_dict =
+      error_codes.FindDict(kNetworkErrorKey);
+  if (net_error_codes_dict) {
+    for (auto [key, value] : *net_error_codes_dict) {
+      if (error_code == value.GetInt()) {
         return true;
+      }
     }
   }
   return false;
 }
 
 std::vector<std::string> URLDataManagerBackend::GetWebUISchemes() {
-  std::vector<std::string> schemes;
-  schemes.push_back(kChromeUIScheme);
-  schemes.push_back(kChromeUIUntrustedScheme);
-  GetContentClient()->browser()->GetAdditionalWebUISchemes(&schemes);
-  return schemes;
+  if (g_disallow_webui_scheme_caching_for_testing) {
+    return GetWebUISchemesSlow();
+  }
+
+  return GetWebUISchemesCached();
+}
+
+void URLDataManagerBackend::SetDisallowWebUISchemeCachingForTesting(
+    bool disallow_caching) {
+  g_disallow_webui_scheme_caching_for_testing = disallow_caching;
 }
 
 }  // namespace content

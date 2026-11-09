@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ import java.util.List;
  */
 public class TestBrowsingHistoryObserver implements BrowsingHistoryObserver {
     private List<HistoryItem> mHistory;
-    private CallbackHelper mQueryCallback;
+    private final CallbackHelper mQueryCallback;
 
     public TestBrowsingHistoryObserver() {
         mQueryCallback = new CallbackHelper();
@@ -32,6 +32,9 @@ public class TestBrowsingHistoryObserver implements BrowsingHistoryObserver {
 
     @Override
     public void hasOtherFormsOfBrowsingData(boolean hasOtherForms) {}
+
+    @Override
+    public void onQueryAppsComplete(List<String> items) {}
 
     /**
      * Simple accessor to the internal CallbackHelper.

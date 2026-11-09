@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,10 @@
 #define CHROME_BROWSER_SAFE_BROWSING_INCIDENT_REPORTING_INCIDENT_REPORT_UPLOADER_IMPL_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "base/compiler_specific.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "chrome/browser/safe_browsing/incident_reporting/incident_report_uploader.h"
 #include "url/gurl.h"
@@ -31,7 +30,11 @@ class ClientIncidentReport;
 class IncidentReportUploaderImpl : public IncidentReportUploader {
  public:
   // The id associated with the URLFetcher, for use by tests.
-  static const int kTestUrlFetcherId;
+  static constexpr int kTestUrlFetcherId = 47;
+
+  IncidentReportUploaderImpl(const IncidentReportUploaderImpl&) = delete;
+  IncidentReportUploaderImpl& operator=(const IncidentReportUploaderImpl&) =
+      delete;
 
   ~IncidentReportUploaderImpl() override;
 
@@ -55,7 +58,7 @@ class IncidentReportUploaderImpl : public IncidentReportUploader {
   static GURL GetIncidentReportUrl();
 
   // Callback when SimpleURLLoader gets the response.
-  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body);
+  void OnURLLoaderComplete(std::optional<std::string> response_body);
 
   void OnURLLoaderCompleteInternal(const std::string& response_body,
                                    int response_code,
@@ -67,8 +70,6 @@ class IncidentReportUploaderImpl : public IncidentReportUploader {
 
   // The time at which the upload was initiated.
   base::TimeTicks time_begin_;
-
-  DISALLOW_COPY_AND_ASSIGN(IncidentReportUploaderImpl);
 };
 
 }  // namespace safe_browsing

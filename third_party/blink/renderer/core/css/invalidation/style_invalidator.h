@@ -1,17 +1,20 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_INVALIDATION_STYLE_INVALIDATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_INVALIDATION_STYLE_INVALIDATOR_H_
 
+#include "base/memory/raw_ptr.h"
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/invalidation/invalidation_flags.h"
 #include "third_party/blink/renderer/core/css/invalidation/pending_invalidations.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 
 namespace blink {
 
 class ContainerNode;
+class Document;
 class Element;
 class HTMLSlotElement;
 class InvalidationSet;
@@ -48,7 +51,6 @@ class CORE_EXPORT StyleInvalidator {
 
   bool MatchesCurrentInvalidationSets(Element&) const;
   bool MatchesCurrentInvalidationSetsAsSlotted(Element&) const;
-  bool MatchesCurrentInvalidationSetsAsParts(Element&) const;
 
   bool HasInvalidationSets() const {
     return !WholeSubtreeInvalid() &&
@@ -77,8 +79,9 @@ class CORE_EXPORT StyleInvalidator {
     pending_nth_sets_.push_back(&nth_set);
   }
   void PushNthSiblingInvalidationSets(SiblingData& sibling_data) {
-    for (const auto* invalidation_set : pending_nth_sets_)
+    for (const auto* invalidation_set : pending_nth_sets_) {
       sibling_data.PushInvalidationSet(*invalidation_set);
+    }
     ClearPendingNthSiblingInvalidationSets();
   }
   void ClearPendingNthSiblingInvalidationSets() { pending_nth_sets_.resize(0); }
@@ -88,8 +91,10 @@ class CORE_EXPORT StyleInvalidator {
   DescendantInvalidationSets invalidation_sets_;
   // NthSiblingInvalidationSets are added here from the parent node on which it
   // is scheduled, and pushed to SiblingData before invalidating the children.
-  // See the NthSiblingInvalidationSet documentation.
-  Vector<const NthSiblingInvalidationSet*> pending_nth_sets_;
+  // See the NthSiblingInvalidationSet documentation. Currently at most two sets
+  // can be scheduled on a node (RuleInvalidationData::nth_invalidation_set and
+  // InvalidationSet::TreeCountingInvalidationSet()).
+  Vector<const NthSiblingInvalidationSet*, 2> pending_nth_sets_;
   InvalidationFlags invalidation_flags_;
 
   class SiblingData {
@@ -101,7 +106,7 @@ class CORE_EXPORT StyleInvalidator {
     void PushInvalidationSet(const SiblingInvalidationSet&);
     bool MatchCurrentInvalidationSets(Element&, StyleInvalidator&);
 
-    bool IsEmpty() const { return invalidation_entries_.IsEmpty(); }
+    bool IsEmpty() const { return invalidation_entries_.empty(); }
     void Advance() { element_index_++; }
 
    private:
@@ -112,7 +117,9 @@ class CORE_EXPORT StyleInvalidator {
           : invalidation_set_(invalidation_set),
             invalidation_limit_(invalidation_limit) {}
 
-      const SiblingInvalidationSet* invalidation_set_;
+      raw_ptr<const SiblingInvalidationSet,
+              UnprotectedInRelease | DanglingUntriaged>
+          invalidation_set_;
       unsigned invalidation_limit_;
     };
 

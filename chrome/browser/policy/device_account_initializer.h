@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,22 +6,23 @@
 #define CHROME_BROWSER_POLICY_DEVICE_ACCOUNT_INITIALIZER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
-#include "chrome/browser/policy/enrollment_status.h"
-
-#include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 #include "components/policy/proto/device_management_backend.pb.h"
 #include "google_apis/gaia/gaia_oauth_client.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace policy {
-class EnrollmentStatus;
 
 // Implements the logic that initializes device account during enrollment.
 //   1. Download the OAuth2 authorization code for device-level API access.
@@ -45,8 +46,13 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
     // Called when OAuth2 refresh token is successfully stored.
     virtual void OnDeviceAccountTokenStored() = 0;
 
-    // Called when an error happens during token fetching or saving.
-    virtual void OnDeviceAccountTokenError(EnrollmentStatus status) = 0;
+    // Called when an error happens during token fetching. `dm_status` is
+    // nullopt if error happened before requesting device management service.
+    virtual void OnDeviceAccountTokenFetchError(
+        std::optional<DeviceManagementStatus> dm_status) = 0;
+
+    // Called when an error happens during token saving.
+    virtual void OnDeviceAccountTokenStoreError() = 0;
 
     // Called when an error happens during cloud policy client calls.
     virtual void OnDeviceAccountClientError(DeviceManagementStatus status) = 0;
@@ -58,14 +64,15 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
 
     // Returns the oauth scopes for which to request auth codes.
     virtual std::set<std::string> GetRobotOAuthScopes() = 0;
-
-    // Returns a url loader factory that the DeviceAccountInitializer will use
-    // for GAIA requests.
-    virtual scoped_refptr<network::SharedURLLoaderFactory>
-    GetURLLoaderFactory() = 0;
   };
 
-  DeviceAccountInitializer(CloudPolicyClient* client, Delegate* delegate);
+  // `shared_url_loader_factory` is used for GAIA requests. It must be non-null.
+  DeviceAccountInitializer(
+      scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
+      CloudPolicyClient* client,
+      Delegate* delegate);
+  DeviceAccountInitializer(const DeviceAccountInitializer&) = delete;
+  DeviceAccountInitializer& operator=(const DeviceAccountInitializer&) = delete;
   ~DeviceAccountInitializer() override;
 
   // Starts process that downloads OAuth2 auth code and exchanges it to OAuth2
@@ -81,8 +88,6 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
   void Stop();
 
   // CloudPolicyClient::Observer:
-  void OnPolicyFetched(CloudPolicyClient* client) override;
-  void OnRegistrationStateChanged(CloudPolicyClient* client) override;
   void OnClientError(CloudPolicyClient* client) override;
 
   // GaiaOAuthClient::Delegate:
@@ -102,9 +107,12 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
   void OnRobotAuthCodesFetched(DeviceManagementStatus status,
                                const std::string& auth_code);
 
+  const scoped_refptr<network::SharedURLLoaderFactory>
+      shared_url_loader_factory_;
+
   // Owned by this class owner.
-  CloudPolicyClient* client_;
-  Delegate* delegate_;
+  raw_ptr<CloudPolicyClient> client_;
+  raw_ptr<Delegate> delegate_;
 
   std::unique_ptr<gaia::GaiaOAuthClient> gaia_oauth_client_;
 
@@ -117,7 +125,6 @@ class DeviceAccountInitializer : public CloudPolicyClient::Observer,
   std::string robot_refresh_token_;
 
   base::WeakPtrFactory<DeviceAccountInitializer> weak_ptr_factory_{this};
-  DISALLOW_COPY_AND_ASSIGN(DeviceAccountInitializer);
 };
 
 }  // namespace policy

@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -74,21 +74,21 @@ bool CrxInstallError::IsCrxVerificationFailedError() const {
       SandboxedUnpackerFailureReason::CRX_EXPECTED_HASH_INVALID,
       SandboxedUnpackerFailureReason::CRX_REQUIRED_PROOF_MISSING,
   };
-  if (type() != CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE)
+  if (type() != CrxInstallErrorType::SANDBOXED_UNPACKER_FAILURE) {
     return false;
+  }
   const SandboxedUnpackerFailureReason unpacker_failure_reason =
       sandbox_failure_detail();
-  return std::find(std::begin(kVerificationFailureReasons),
-                   std::end(kVerificationFailureReasons),
-                   unpacker_failure_reason) !=
-         std::end(kVerificationFailureReasons);
+  return std::ranges::contains(kVerificationFailureReasons,
+                               unpacker_failure_reason);
 }
 
 // Returns true if the error occurred during crx installation due to mismatch in
 // expectations from the manifest.
 bool CrxInstallError::IsCrxExpectationsFailedError() const {
-  if (type() != CrxInstallErrorType::OTHER)
+  if (type() != CrxInstallErrorType::OTHER) {
     return false;
+  }
   const CrxInstallErrorDetail failure_reason = detail();
   return failure_reason == CrxInstallErrorDetail::UNEXPECTED_ID ||
          failure_reason == CrxInstallErrorDetail::MISMATCHED_VERSION;

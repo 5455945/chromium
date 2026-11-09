@@ -1,27 +1,31 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/compositor/layer_owner.h"
 
-// layer_owner.h is a widely included header and its size impacts build
-// time. Try not to raise this limit unless necessary. See
-// https://chromium.googlesource.com/chromium/src/+/HEAD/docs/wmax_tokens.md
-#pragma clang max_tokens_here 480000
-
-#include "ui/compositor/layer.h"
-
 #include <utility>
 
+#include "base/auto_reset.h"
+#include "base/check.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
+#include "ui/compositor/compositor.h"
+#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_observer.h"
 
 namespace ui {
+
+LayerOwner::LayerOwner() = default;
 
 LayerOwner::LayerOwner(std::unique_ptr<Layer> layer) {
   if (layer)
     SetLayer(std::move(layer));
 }
 
-LayerOwner::~LayerOwner() = default;
+LayerOwner::~LayerOwner() {
+  CHECK(!recreating_layer_);
+}
 
 void LayerOwner::AddObserver(Observer* observer) {
   observers_.AddObserver(observer);
@@ -32,7 +36,7 @@ void LayerOwner::RemoveObserver(Observer* observer) {
 }
 
 void LayerOwner::SetLayer(std::unique_ptr<Layer> layer) {
-  DCHECK(!OwnsLayer());
+  CHECK(!OwnsLayer(), base::NotFatalUntil::M163);
   layer_owner_ = std::move(layer);
   layer_ = layer_owner_.get();
   layer_->owner_ = this;
@@ -55,9 +59,13 @@ void LayerOwner::Reset(std::unique_ptr<Layer> layer) {
 }
 
 std::unique_ptr<Layer> LayerOwner::RecreateLayer() {
+  CHECK(!recreating_layer_);
+  base::AutoReset<bool> auto_reset(&recreating_layer_, true);
+
   std::unique_ptr<ui::Layer> old_layer(AcquireLayer());
-  if (!old_layer)
+  if (!old_layer) {
     return old_layer;
+  }
 
   LayerDelegate* old_delegate = old_layer->delegate();
   old_layer->set_delegate(nullptr);
@@ -76,10 +84,11 @@ std::unique_ptr<Layer> LayerOwner::RecreateLayer() {
 
   // Migrate all the child layers over to the new layer. Copy the list because
   // the items are removed during iteration.
-  std::vector<ui::Layer*> children_copy = old_layer->children();
-  for (std::vector<ui::Layer*>::const_iterator it = children_copy.begin();
-       it != children_copy.end();
-       ++it) {
+  std::vector<raw_ptr<ui::Layer, VectorExperimental>> children_copy =
+      old_layer->children();
+  for (std::vector<raw_ptr<ui::Layer, VectorExperimental>>::const_iterator it =
+           children_copy.begin();
+       it != children_copy.end(); ++it) {
     ui::Layer* child = *it;
     layer_->Add(child);
   }
@@ -88,8 +97,9 @@ std::unique_ptr<Layer> LayerOwner::RecreateLayer() {
   // state to the new layer.
   layer_->set_delegate(old_delegate);
 
-  for (auto& observer : observers_)
-    observer.OnLayerRecreated(old_layer.get());
+  old_layer->observer_list_.Notify(&LayerObserver::OnLayerRecreated,
+                                   old_layer.get(), layer_.get());
+  observers_.Notify(&Observer::OnLayerRecreated, old_layer.get());
 
   return old_layer;
 }

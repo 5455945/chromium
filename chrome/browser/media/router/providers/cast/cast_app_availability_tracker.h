@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,12 +10,12 @@
 
 #include "base/containers/flat_map.h"
 #include "base/containers/flat_set.h"
-#include "base/macros.h"
 #include "base/time/time.h"
-#include "components/cast_channel/cast_message_util.h"
 #include "components/media_router/common/discovery/media_sink_internal.h"
 #include "components/media_router/common/media_source.h"
 #include "components/media_router/common/providers/cast/cast_media_source.h"
+#include "components/media_router/common/providers/cast/channel/cast_device_capability.h"
+#include "components/media_router/common/providers/cast/channel/cast_message_util.h"
 
 namespace media_router {
 
@@ -54,6 +54,11 @@ class CastAppAvailabilityTracker {
       std::pair<cast_channel::GetAppAvailabilityResult, base::TimeTicks>;
 
   CastAppAvailabilityTracker();
+
+  CastAppAvailabilityTracker(const CastAppAvailabilityTracker&) = delete;
+  CastAppAvailabilityTracker& operator=(const CastAppAvailabilityTracker&) =
+      delete;
+
   ~CastAppAvailabilityTracker();
 
   // Registers |source| with the tracker. Returns a list of new app IDs that
@@ -110,7 +115,7 @@ class CastAppAvailabilityTracker {
     CapabilitiesAndAvailabilityMap(const CapabilitiesAndAvailabilityMap&);
     ~CapabilitiesAndAvailabilityMap();
 
-    BitwiseOr<cast_channel::CastDeviceCapability> capabilities;
+    cast_channel::CastDeviceCapabilitySet capabilities;
     AppAvailabilityMap availabilities;
   };
 
@@ -123,8 +128,6 @@ class CastAppAvailabilityTracker {
   // IDs and app availabilities of known sinks.
   base::flat_map<MediaSink::Id, CapabilitiesAndAvailabilityMap>
       capabilities_and_availabilities_;
-
-  DISALLOW_COPY_AND_ASSIGN(CastAppAvailabilityTracker);
 };
 
 }  // namespace media_router

@@ -1,17 +1,20 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include <algorithm>
+#include <string>
+#include <tuple>
 
 #include "base/json/json_reader.h"
+#include "base/logging.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/trace_event_analyzer.h"
+#include "base/test/tracing/trace_event_analyzer.h"
+#include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_base.h"
 #include "chrome/browser/media/webrtc/webrtc_browsertest_common.h"
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_tabstrip.h"
 #include "chrome/test/base/tracing.h"
 #include "chrome/test/base/ui_test_utils.h"
@@ -21,6 +24,7 @@
 #include "content/public/test/browser_test.h"
 #include "content/public/test/browser_test_utils.h"
 #include "media/base/media_switches.h"
+#include "media/media_buildflags.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "testing/perf/perf_test.h"
 #include "third_party/blink/public/common/features.h"
@@ -42,7 +46,7 @@ static const char kSetFrameEventName[] =
 static const char kGetFrameEventName[] =
     "WebMediaPlayerMSCompositor::GetCurrentFrame";
 static const char kVideoResourceEventName[] =
-    "VideoResourceUpdater::ObtainFrameResources";
+    "VideoResourceUpdater::ObtainFrameResource";
 static const char kVsyncEventName[] = "Display::DrawAndSwap";
 
 // VideoFrameSubmitter dumps the delay from the handover of a decoded remote
@@ -115,58 +119,6 @@ void AssociateEvents(trace_analyzer::TraceAnalyzer* analyzer,
   }
 }
 
-content::WebContents* OpenWebrtcInternalsTab(Browser* browser) {
-  chrome::AddTabAt(browser, GURL(url::kAboutBlankURL), -1, true);
-  ui_test_utils::NavigateToURL(browser, GURL("chrome://webrtc-internals"));
-  return browser->tab_strip_model()->GetActiveWebContents();
-}
-
-std::vector<double> ParseGoogMaxDecodeFromWebrtcInternalsTab(
-    const std::string& webrtc_internals_stats_json) {
-  std::vector<double> goog_decode_ms;
-
-  std::unique_ptr<base::Value> parsed_json =
-      base::JSONReader::ReadDeprecated(webrtc_internals_stats_json);
-  base::DictionaryValue* dictionary = nullptr;
-  if (!parsed_json.get() || !parsed_json->GetAsDictionary(&dictionary))
-    return goog_decode_ms;
-  ignore_result(parsed_json.release());
-
-  // |dictionary| should have exactly two entries, one per ssrc.
-  if (!dictionary || dictionary->DictSize() != 2u)
-    return goog_decode_ms;
-
-  // Only a given |dictionary| entry will have a "stats" entry that has a key
-  // that ends with "recv-googMaxDecodeMs" inside (it will start with the ssrc
-  // id, but we don't care about that). Then collect the string of "values" out
-  // of that key and convert those into the |goog_decode_ms| vector of doubles.
-  for (auto dictionary_entry : dictionary->DictItems()) {
-    for (auto ssrc_entry : dictionary_entry.second.DictItems()) {
-      if (ssrc_entry.first != "stats")
-        continue;
-
-      for (auto stat_entry : ssrc_entry.second.DictItems()) {
-        if (!base::EndsWith(stat_entry.first, "recv-googMaxDecodeMs",
-                            base::CompareCase::SENSITIVE)) {
-          continue;
-        }
-        base::Value* values_entry = stat_entry.second.FindKey({"values"});
-        if (!values_entry)
-          continue;
-        base::StringTokenizer values_tokenizer(values_entry->GetString(),
-                                               "[,]");
-        while (values_tokenizer.GetNext()) {
-          if (values_tokenizer.token_is_delim())
-            continue;
-          goog_decode_ms.push_back(atof(values_tokenizer.token().c_str()) *
-                                   base::Time::kMicrosecondsPerMillisecond);
-        }
-      }
-    }
-  }
-  return goog_decode_ms;
-}
-
 }  // anonymous namespace
 
 // Tests the performance of Chrome displaying remote video.
@@ -211,13 +163,6 @@ class WebRtcVideoDisplayPerfBrowserTest
 
   void TestVideoDisplayPerf(const std::string& video_codec) {
     ASSERT_TRUE(embedded_test_server()->Start());
-    // chrome:webrtc-internals doesn't start tracing anything until the
-    // connection(s) are up.
-    content::WebContents* webrtc_internals_tab =
-        OpenWebrtcInternalsTab(browser());
-    EXPECT_TRUE(content::ExecuteScript(
-        webrtc_internals_tab,
-        "currentGetStatsMethod = OPTION_GETSTATS_LEGACY"));
 
     content::WebContents* left_tab =
         OpenPageAndGetUserMediaInNewTabWithConstraints(
@@ -231,7 +176,7 @@ class WebRtcVideoDisplayPerfBrowserTest
         OpenPageAndGetUserMediaInNewTabWithConstraints(
             embedded_test_server()->GetURL(kMainWebrtcTestHtmlPage),
             "{audio: true, video: false}");
-    const int process_id = right_tab->GetMainFrame()
+    const int process_id = right_tab->GetPrimaryMainFrame()
                                ->GetRenderViewHost()
                                ->GetProcess()
                                ->GetProcess()
@@ -259,14 +204,6 @@ class WebRtcVideoDisplayPerfBrowserTest
     ASSERT_TRUE(tracing::BeginTracing("media,viz,webrtc"));
     // Run the connection for 5 seconds to collect metrics.
     test::SleepInJavascript(left_tab, 5000);
-
-    const std::string webrtc_internals_stats_json = ExecuteJavascript(
-        "window.domAutomationController.send("
-        "    JSON.stringify(peerConnectionDataStore));",
-        webrtc_internals_tab);
-    webrtc_decode_latencies_ =
-        ParseGoogMaxDecodeFromWebrtcInternalsTab(webrtc_internals_stats_json);
-    chrome::CloseWebContents(browser(), webrtc_internals_tab, false);
 
     std::string json_events;
     ASSERT_TRUE(tracing::EndTracing(&json_events));
@@ -296,8 +233,10 @@ class WebRtcVideoDisplayPerfBrowserTest
     TraceEventVector start_render_events;
     FindEvents(analyzer, kStartRenderEventName, match_process_id,
                &start_render_events);
-    if (start_render_events.empty())
+    if (start_render_events.empty()) {
+      DLOG(WARNING) << "No " << kStartRenderEventName << " events";
       return false;
+    }
 
     // We are only interested in vsync events coming after the first render
     // event. Earlier ones are already missed.
@@ -307,8 +246,10 @@ class WebRtcVideoDisplayPerfBrowserTest
     TraceEventVector vsync_events;
     FindEvents(analyzer, kVsyncEventName, after_first_render_event,
                &vsync_events);
-    if (vsync_events.empty())
+    if (vsync_events.empty()) {
+      DLOG(WARNING) << "No " << kVsyncEventName << " events";
       return false;
+    }
 
     size_t found_vsync_index = 0;
     size_t skipped_frame_count = 0;
@@ -372,8 +313,10 @@ class WebRtcVideoDisplayPerfBrowserTest
       total_durations_.push_back(total_duration);
     }
 
-    if (start_render_events.size() == skipped_frame_count)
+    if (start_render_events.size() == skipped_frame_count) {
+      DLOG(WARNING) << "All frames skipped";
       return false;
+    }
 
     // Calculate the percentage by dividing by the number of frames received.
     skipped_frame_percentage_ =
@@ -437,8 +380,6 @@ class WebRtcVideoDisplayPerfBrowserTest
 
     PrintMeanAndMax("Post-decode-to-raster latency", name_modifier,
                     video_frame_submmitter_latencies_);
-    PrintMeanAndMax("WebRTC decode latency", name_modifier,
-                    webrtc_decode_latencies_);
   }
 
   VideoDisplayPerfTestConfig test_config_;
@@ -455,7 +396,6 @@ class WebRtcVideoDisplayPerfBrowserTest
   // These two put together represent the whole delay from encoded video frames
   // to OS swap buffers call (or callback, depending on the platform).
   std::vector<double> video_frame_submmitter_latencies_;
-  std::vector<double> webrtc_decode_latencies_;
 };
 
 INSTANTIATE_TEST_SUITE_P(WebRtcVideoDisplayPerfBrowserTests,
@@ -471,12 +411,11 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoDisplayPerfBrowserTest,
   TestVideoDisplayPerf("VP9");
 }
 
-#if BUILDFLAG(RTC_USE_H264)
+#if BUILDFLAG(ENABLE_OPENH264)
 IN_PROC_BROWSER_TEST_P(WebRtcVideoDisplayPerfBrowserTest,
                        MANUAL_TestVideoDisplayPerfH264) {
-  if (!base::FeatureList::IsEnabled(
-          blink::features::kWebRtcH264WithOpenH264FFmpeg)) {
-    LOG(WARNING) << "Run-time feature WebRTC-H264WithOpenH264FFmpeg disabled. "
+  if (!base::FeatureList::IsEnabled(media::kOpenH264SoftwareEncoder)) {
+    LOG(WARNING) << "Run-time feature OpenH264SoftwareEncoder disabled. "
                     "Skipping WebRtcVideoDisplayPerfBrowserTest.MANUAL_"
                     "TestVideoDisplayPerfH264 "
                     "(test \"OK\")";
@@ -484,4 +423,4 @@ IN_PROC_BROWSER_TEST_P(WebRtcVideoDisplayPerfBrowserTest,
   }
   TestVideoDisplayPerf("H264");
 }
-#endif  // BUILDFLAG(RTC_USE_H264)
+#endif  // BUILDFLAG(ENABLE_OPENH264)

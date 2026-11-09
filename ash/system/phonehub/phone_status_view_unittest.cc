@@ -1,15 +1,19 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/system/phonehub/phone_status_view.h"
 
+#include <optional>
+
 #include "ash/constants/ash_features.h"
+#include "ash/style/icon_button.h"
 #include "ash/test/ash_test_base.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/scoped_feature_list.h"
-#include "chromeos/components/phonehub/mutable_phone_model.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "chromeos/ash/components/phonehub/mutable_phone_model.h"
+#include "ui/events/test/test_event.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/controls/label.h"
 #include "ui/views/test/button_test_api.h"
@@ -17,13 +21,7 @@
 
 namespace ash {
 
-using PhoneStatusModel = chromeos::phonehub::PhoneStatusModel;
-
-class DummyEvent : public ui::Event {
- public:
-  DummyEvent() : Event(ui::ET_UNKNOWN, base::TimeTicks(), 0) {}
-  ~DummyEvent() override = default;
-};
+using PhoneStatusModel = phonehub::PhoneStatusModel;
 
 class PhoneStatusViewTest : public AshTestBase,
                             public PhoneStatusView::Delegate {
@@ -33,14 +31,17 @@ class PhoneStatusViewTest : public AshTestBase,
 
   // AshTestBase:
   void SetUp() override {
-    feature_list_.InitAndEnableFeature(chromeos::features::kPhoneHub);
+    feature_list_.InitAndEnableFeature(features::kPhoneHub);
     AshTestBase::SetUp();
+
+    // `widget_` owns `status_view_`.
     widget_ = CreateFramelessTestWidget();
     status_view_ = widget_->SetContentsView(
         std::make_unique<PhoneStatusView>(&phone_model_, this));
   }
 
   void TearDown() override {
+    status_view_ = nullptr;
     widget_.reset();
     AshTestBase::TearDown();
   }
@@ -56,8 +57,8 @@ class PhoneStatusViewTest : public AshTestBase,
 
  protected:
   std::unique_ptr<views::Widget> widget_;
-  PhoneStatusView* status_view_ = nullptr;
-  chromeos::phonehub::MutablePhoneModel phone_model_;
+  raw_ptr<PhoneStatusView> status_view_ = nullptr;
+  phonehub::MutablePhoneModel phone_model_;
   base::test::ScopedFeatureList feature_list_;
   bool can_open_connected_device_settings_ = false;
   bool connected_device_settings_opened_ = false;
@@ -101,7 +102,7 @@ TEST_F(PhoneStatusViewTest, PhoneStatusLabelsContent) {
   EXPECT_EQ(expected_battery_text, status_view_->battery_label_->GetText());
 
   // Simulate phone disconnected with a null |PhoneStatusModel| returned.
-  phone_model_.SetPhoneStatusModel(absl::nullopt);
+  phone_model_.SetPhoneStatusModel(std::nullopt);
 
   // Existing phone status will be cleared to reflect the model change.
   EXPECT_TRUE(status_view_->battery_label_->GetText().empty());
@@ -115,13 +116,15 @@ TEST_F(PhoneStatusViewTest, ClickOnSettings) {
 
   // The settings button is visible if we can open settings.
   can_open_connected_device_settings_ = true;
+  status_view_ = nullptr; // Reset the raw pointer to prevent a dangling pointer
+                          // upon calling `SetContentsView()`.
   status_view_ = widget_->SetContentsView(
       std::make_unique<PhoneStatusView>(&phone_model_, this));
   EXPECT_TRUE(status_view_->settings_button_->GetVisible());
 
   // Click on the settings button.
   views::test::ButtonTestApi(status_view_->settings_button_)
-      .NotifyClick(DummyEvent());
+      .NotifyClick(ui::test::TestEvent());
   EXPECT_TRUE(connected_device_settings_opened_);
 }
 

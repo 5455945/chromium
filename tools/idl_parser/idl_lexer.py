@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# Copyright (c) 2013 The Chromium Authors. All rights reserved.
+# Copyright 2013 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
-""" Lexer for Web IDL
+"""Lexer for Web IDL
 
 The lexer uses the PLY library to build a tokenizer which understands
 Web IDL tokens.
 
 Web IDL, and Web IDL regular expressions can be found at:
-   http://heycam.github.io/webidl/
+   http://webidl.spec.whatwg.org/
 PLY can be found at:
    http://www.dabeaz.com/ply/
 """
@@ -37,73 +37,75 @@ class IDLLexer(object):
   # of valid token types.
   tokens = [
     # Data types
-      'float',
-      'integer',
-      'string',
-
+    'float',
+    'integer',
+    'string',
     # Symbol and keywords types
-      'SPECIAL_COMMENT',
-      'identifier',
-
+    'SPECIAL_COMMENT',
+    'identifier',
     # MultiChar operators
-      'ELLIPSIS',
+    'ELLIPSIS',
   ]
 
   # 'keywords' is a map of string to token type.  All tokens matching
   # KEYWORD_OR_SYMBOL are matched against keywords dictionary, to determine
   # if the token is actually a keyword.
   keywords = {
-      'any': 'ANY',
-      'async': 'ASYNC',
-      'attribute': 'ATTRIBUTE',
-      'boolean': 'BOOLEAN',
-      'byte': 'BYTE',
-      'ByteString': 'BYTESTRING',
-      'callback': 'CALLBACK',
-      'const': 'CONST',
-      'constructor': 'CONSTRUCTOR',
-      'deleter': 'DELETER',
-      'dictionary': 'DICTIONARY',
-      'DOMString': 'DOMSTRING',
-      'double': 'DOUBLE',
-      'enum': 'ENUM',
-      'false': 'FALSE',
-      'float': 'FLOAT',
-      'FrozenArray': 'FROZENARRAY',
-      'getter': 'GETTER',
-      'includes': 'INCLUDES',
-      'Infinity': 'INFINITY',
-      'inherit': 'INHERIT',
-      'interface': 'INTERFACE',
-      'iterable': 'ITERABLE',
-      'long': 'LONG',
-      'maplike': 'MAPLIKE',
-      'mixin': 'MIXIN',
-      'namespace': 'NAMESPACE',
-      'NaN': 'NAN',
-      'null': 'NULL',
-      'object': 'OBJECT',
-      'ObservableArray': 'OBSERVABLEARRAY',
-      'octet': 'OCTET',
-      'optional': 'OPTIONAL',
-      'or': 'OR',
-      'partial': 'PARTIAL',
-      'Promise': 'PROMISE',
-      'readonly': 'READONLY',
-      'record': 'RECORD',
-      'required': 'REQUIRED',
-      'sequence': 'SEQUENCE',
-      'setlike': 'SETLIKE',
-      'setter': 'SETTER',
-      'short': 'SHORT',
-      'static': 'STATIC',
-      'stringifier': 'STRINGIFIER',
-      'true': 'TRUE',
-      'typedef': 'TYPEDEF',
-      'unrestricted': 'UNRESTRICTED',
-      'unsigned': 'UNSIGNED',
-      'USVString': 'USVSTRING',
-      'void': 'VOID'
+    'any': 'ANY',
+    'async': 'ASYNC',
+    'async_iterable': 'ASYNC_ITERABLE',
+    'async_sequence': 'ASYNC_SEQUENCE',
+    'attribute': 'ATTRIBUTE',
+    'bigint': 'BIGINT',
+    'boolean': 'BOOLEAN',
+    'byte': 'BYTE',
+    'ByteString': 'BYTESTRING',
+    'callback': 'CALLBACK',
+    'const': 'CONST',
+    'constructor': 'CONSTRUCTOR',
+    'deleter': 'DELETER',
+    'dictionary': 'DICTIONARY',
+    'DOMString': 'DOMSTRING',
+    'double': 'DOUBLE',
+    'enum': 'ENUM',
+    'false': 'FALSE',
+    'float': 'FLOAT',
+    'FrozenArray': 'FROZENARRAY',
+    'getter': 'GETTER',
+    'includes': 'INCLUDES',
+    'Infinity': 'INFINITY',
+    'inherit': 'INHERIT',
+    'interface': 'INTERFACE',
+    'iterable': 'ITERABLE',
+    'long': 'LONG',
+    'maplike': 'MAPLIKE',
+    'mixin': 'MIXIN',
+    'namespace': 'NAMESPACE',
+    'NaN': 'NAN',
+    'null': 'NULL',
+    'object': 'OBJECT',
+    'ObservableArray': 'OBSERVABLEARRAY',
+    'octet': 'OCTET',
+    'optional': 'OPTIONAL',
+    'or': 'OR',
+    'partial': 'PARTIAL',
+    'Promise': 'PROMISE',
+    'readonly': 'READONLY',
+    'record': 'RECORD',
+    'required': 'REQUIRED',
+    'sequence': 'SEQUENCE',
+    'setlike': 'SETLIKE',
+    'setter': 'SETTER',
+    'short': 'SHORT',
+    'static': 'STATIC',
+    'stringifier': 'STRINGIFIER',
+    'true': 'TRUE',
+    'typedef': 'TYPEDEF',
+    'undefined': 'UNDEFINED',
+    'unrestricted': 'UNRESTRICTED',
+    'unsigned': 'UNSIGNED',
+    'USVString': 'USVSTRING',
+    'void': 'VOID',
   }
 
   # Token definitions
@@ -114,13 +116,11 @@ class IDLLexer(object):
   # definitions come from WebIDL.
   #
   # These need to be methods for lexer construction, despite not using self.
-  # pylint: disable=R0201
   def t_ELLIPSIS(self, t):
     r'\.\.\.'
     return t
 
   # Regex needs to be in the docstring
-  # pylint: disable=C0301
   def t_float(self, t):
     r'-?(([0-9]+\.[0-9]*|[0-9]*\.[0-9]+)([Ee][+-]?[0-9]+)?|[0-9]+[Ee][+-]?[0-9]+)'
     return t
@@ -128,7 +128,6 @@ class IDLLexer(object):
   def t_integer(self, t):
     r'-?([1-9][0-9]*|0[Xx][0-9A-Fa-f]+|0[0-7]*)'
     return t
-
 
   # A line ending '\n', we use this to increment the line number
   def t_LINE_END(self, t):
@@ -189,7 +188,6 @@ class IDLLexer(object):
     sys.stderr.write(out + '\n')
     self._lex_errors += 1
 
-
   def AddLines(self, count):
     # Set the lexer position for the beginning of the next line.  In the case
     # of multiple lines, tokens can not exist on any of the lines except the
@@ -215,21 +213,36 @@ class IDLLexer(object):
 
   def ErrorMessage(self, line, pos, msg):
     return "\n%s\n%s" % (
-        self.FileLineMsg(line, msg),
-        self.SourceLine(line, pos))
+      self.FileLineMsg(line, msg),
+      self.SourceLine(line, pos),
+    )
 
-#
-# Tokenizer
-#
-# The token function returns the next token provided by IDLLexer for matching
-# against the leaf paterns.
-#
+  @property
+  def lineno(self):
+    # We generally want to forward these to lexer, but lexer also calls
+    # these accessor at construction time, so check if we have lexer already.
+    if not self._lexobj:
+      return None
+    return self._lexobj.lineno
+
+  @property
+  def lexpos(self):
+    # See comment in `lineno()` above.
+    if not self._lexobj:
+      return None
+    return self._lexobj.lexpos
+
+  #
+  # Tokenizer
+  #
+  # The token function returns the next token provided by IDLLexer for matching
+  # against the leaf paterns.
+  #
   def token(self):
     tok = self.Lexer().token()
     if tok:
       self.last = tok
     return tok
-
 
   def GetTokens(self):
     outlist = []
@@ -251,8 +264,6 @@ class IDLLexer(object):
     return self.tokens
 
   def Lexer(self):
-    if not self._lexobj:
-      self._lexobj = lex.lex(object=self, lextab=None, optimize=0)
     return self._lexobj
 
   def _AddToken(self, token):
@@ -275,7 +286,7 @@ class IDLLexer(object):
       self.tokens.remove(key.upper())
       del self.keywords[key]
 
-  def __init__(self):
+  def __init__(self, optimize=True):
     self.index = [0]
     self._lex_errors = 0
     self.linex = []
@@ -284,9 +295,13 @@ class IDLLexer(object):
     self.tokens = []
     self._AddTokens(IDLLexer.tokens)
     self._AddKeywords(IDLLexer.keywords)
+    # Let lineno/lexpos getters know we're not done initialization yet
+    # (see comments there for additional context).
     self._lexobj = None
+    self._lexobj = lex.lex(object=self, lextab=False, optimize=optimize)
     self.last = None
     self.lines = None
+
 
 # If run by itself, attempt to build the lexer
 if __name__ == '__main__':

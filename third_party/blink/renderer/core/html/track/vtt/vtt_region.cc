@@ -32,15 +32,17 @@
 
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_token_list.h"
 #include "third_party/blink/renderer/core/dom/element_traversal.h"
 #include "third_party/blink/renderer/core/geometry/dom_rect.h"
 #include "third_party/blink/renderer/core/html/html_div_element.h"
+#include "third_party/blink/renderer/core/html/track/vtt/vtt_cue_box.h"
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_parser.h"
 #include "third_party/blink/renderer/core/html/track/vtt/vtt_scanner.h"
 #include "third_party/blink/renderer/platform/bindings/exception_messages.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
-#include "third_party/blink/renderer/platform/heap/heap.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/scheduler/public/thread.h"
 #include "third_party/blink/renderer/platform/wtf/math_extras.h"
 
@@ -63,14 +65,11 @@ constexpr int kDefaultHeightInLines = 3;
 constexpr double kDefaultAnchorPointX = 0;
 constexpr double kDefaultAnchorPointY = 100;
 
-// The region doesn't have scrolling text, by default.
-constexpr bool kDefaultScroll = false;
-
 // Default region line-height (vh units)
 constexpr float kLineHeight = 5.33;
 
 // Default scrolling animation time period (s).
-constexpr base::TimeDelta kScrollTime = base::TimeDelta::FromMilliseconds(433);
+constexpr base::TimeDelta kScrollTime = base::Milliseconds(433);
 
 bool IsNonPercentage(double value,
                      const char* method,
@@ -88,15 +87,14 @@ bool IsNonPercentage(double value,
 
 }  // namespace
 
-VTTRegion::VTTRegion()
+VTTRegion::VTTRegion(Document& document)
     : id_(g_empty_string),
       width_(kDefaultRegionWidth),
       lines_(kDefaultHeightInLines),
-      region_anchor_(DoublePoint(kDefaultAnchorPointX, kDefaultAnchorPointY)),
-      viewport_anchor_(DoublePoint(kDefaultAnchorPointX, kDefaultAnchorPointY)),
-      scroll_(kDefaultScroll),
+      region_anchor_(gfx::PointF(kDefaultAnchorPointX, kDefaultAnchorPointY)),
+      viewport_anchor_(gfx::PointF(kDefaultAnchorPointX, kDefaultAnchorPointY)),
       current_top_(0),
-      scroll_timer_(Thread::Current()->GetTaskRunner(),
+      scroll_timer_(document.GetTaskRunner(TaskType::kInternalMedia),
                     this,
                     &VTTRegion::ScrollTimerFired) {}
 
@@ -122,7 +120,7 @@ void VTTRegion::setRegionAnchorX(double value,
   if (IsNonPercentage(value, "regionAnchorX", exception_state))
     return;
 
-  region_anchor_.SetX(value);
+  region_anchor_.set_x(value);
 }
 
 void VTTRegion::setRegionAnchorY(double value,
@@ -130,7 +128,7 @@ void VTTRegion::setRegionAnchorY(double value,
   if (IsNonPercentage(value, "regionAnchorY", exception_state))
     return;
 
-  region_anchor_.SetY(value);
+  region_anchor_.set_y(value);
 }
 
 void VTTRegion::setViewportAnchorX(double value,
@@ -138,7 +136,7 @@ void VTTRegion::setViewportAnchorX(double value,
   if (IsNonPercentage(value, "viewportAnchorX", exception_state))
     return;
 
-  viewport_anchor_.SetX(value);
+  viewport_anchor_.set_x(value);
 }
 
 void VTTRegion::setViewportAnchorY(double value,
@@ -146,17 +144,15 @@ void VTTRegion::setViewportAnchorY(double value,
   if (IsNonPercentage(value, "viewportAnchorY", exception_state))
     return;
 
-  viewport_anchor_.SetY(value);
+  viewport_anchor_.set_y(value);
 }
 
-const AtomicString VTTRegion::scroll() const {
-  DEFINE_STATIC_LOCAL(const AtomicString, up_scroll_value_keyword, ("up"));
-  return scroll_ ? up_scroll_value_keyword : g_empty_atom;
+V8ScrollSetting VTTRegion::scroll() const {
+  return V8ScrollSetting(scroll_);
 }
 
-void VTTRegion::setScroll(const AtomicString& value) {
-  DCHECK(value == "up" || value == g_empty_atom);
-  scroll_ = value != g_empty_atom;
+void VTTRegion::setScroll(const V8ScrollSetting& value) {
+  scroll_ = value.AsEnum();
 }
 
 void VTTRegion::SetRegionSettings(const String& input_string) {
@@ -199,69 +195,66 @@ VTTRegion::RegionSetting VTTRegion::ScanSettingName(VTTScanner& input) {
   return kNone;
 }
 
-static inline bool ParsedEntireRun(const VTTScanner& input,
-                                   const VTTScanner::Run& run) {
-  return input.IsAt(run.end());
-}
-
 void VTTRegion::ParseSettingValue(RegionSetting setting, VTTScanner& input) {
-  DEFINE_STATIC_LOCAL(const AtomicString, scroll_up_value_keyword, ("up"));
-
-  VTTScanner::Run value_run = input.CollectUntil<VTTParser::IsASpace>();
+  VTTScanner value_input = input.SubrangeUntil<VTTParser::IsASpace>();
 
   switch (setting) {
     case kId: {
-      String string_value = input.ExtractString(value_run);
-      if (string_value.Find("-->") == kNotFound)
+      String string_value = value_input.RestOfInputAsString();
+      if (!string_value.empty() && !string_value.contains("-->")) {
         id_ = string_value;
+      }
       break;
     }
     case kWidth: {
       double width;
-      if (VTTParser::ParsePercentageValue(input, width) &&
-          ParsedEntireRun(input, value_run))
+      if (VTTParser::ParsePercentageValue(value_input, width) &&
+          value_input.IsAtEnd()) {
         width_ = width;
-      else
+      } else {
         DVLOG(VTT_LOG_LEVEL) << "parseSettingValue, invalid Width";
+      }
       break;
     }
     case kLines: {
       unsigned number;
-      if (input.ScanDigits(number) && ParsedEntireRun(input, value_run))
+      if (value_input.ScanDigits(number) && value_input.IsAtEnd()) {
         lines_ = number;
-      else
+      } else {
         DVLOG(VTT_LOG_LEVEL) << "parseSettingValue, invalid Lines";
+      }
       break;
     }
     case kRegionAnchor: {
-      DoublePoint anchor;
-      if (VTTParser::ParsePercentageValuePair(input, ',', anchor) &&
-          ParsedEntireRun(input, value_run))
+      gfx::PointF anchor;
+      if (VTTParser::ParsePercentageValuePair(value_input, ',', anchor) &&
+          value_input.IsAtEnd()) {
         region_anchor_ = anchor;
-      else
+      } else {
         DVLOG(VTT_LOG_LEVEL) << "parseSettingValue, invalid RegionAnchor";
+      }
       break;
     }
     case kViewportAnchor: {
-      DoublePoint anchor;
-      if (VTTParser::ParsePercentageValuePair(input, ',', anchor) &&
-          ParsedEntireRun(input, value_run))
+      gfx::PointF anchor;
+      if (VTTParser::ParsePercentageValuePair(value_input, ',', anchor) &&
+          value_input.IsAtEnd()) {
         viewport_anchor_ = anchor;
-      else
+      } else {
         DVLOG(VTT_LOG_LEVEL) << "parseSettingValue, invalid ViewportAnchor";
+      }
       break;
     }
     case kScroll:
-      if (input.ScanRun(value_run, scroll_up_value_keyword))
-        scroll_ = true;
-      else
+      if (value_input.Scan("up") && value_input.IsAtEnd()) {
+        scroll_ = V8ScrollSetting::Enum::kUp;
+      } else {
         DVLOG(VTT_LOG_LEVEL) << "parseSettingValue, invalid Scroll";
+      }
       break;
     case kNone:
       break;
   }
-
-  input.SkipRun(value_run);
 }
 
 const AtomicString& VTTRegion::TextTrackCueContainerScrollingClass() {
@@ -278,14 +271,14 @@ HTMLDivElement* VTTRegion::GetDisplayTree(Document& document) {
     PrepareRegionDisplayTree();
   }
 
-  return region_display_tree_;
+  return region_display_tree_.Get();
 }
 
 void VTTRegion::WillRemoveVTTCueBox(VTTCueBox* box) {
   DVLOG(VTT_LOG_LEVEL) << "willRemoveVTTCueBox";
   DCHECK(cue_container_->contains(box));
 
-  double box_height = box->getBoundingClientRect()->height();
+  double box_height = box->GetBoundingClientRect()->height();
 
   cue_container_->classList().Remove(TextTrackCueContainerScrollingClass());
 
@@ -320,11 +313,11 @@ void VTTRegion::DisplayLastVTTCueBox() {
     cue_container_->classList().Add(TextTrackCueContainerScrollingClass());
 
   double region_bottom =
-      region_display_tree_->getBoundingClientRect()->bottom();
+      region_display_tree_->GetBoundingClientRect()->bottom();
 
   // Find first cue that is not entirely displayed and scroll it upwards.
   for (Element& child : ElementTraversal::ChildrenOf(*cue_container_)) {
-    DOMRect* client_rect = child.getBoundingClientRect();
+    DOMRect* client_rect = child.GetBoundingClientRect();
     double child_bottom = client_rect->bottom();
 
     if (region_bottom >= child_bottom)
@@ -366,18 +359,18 @@ void VTTRegion::PrepareRegionDisplayTree() {
   // anchor and regionAnchorX be the x dimension of the text track region
   // anchor. Let leftOffset be regionAnchorX multiplied by width divided by
   // 100.0. Let left be leftOffset subtracted from 'viewportAnchorX vw'.
-  double left_offset = region_anchor_.X() * width_ / 100;
+  double left_offset = region_anchor_.x() * width_ / 100;
   region_display_tree_->SetInlineStyleProperty(
-      CSSPropertyID::kLeft, viewport_anchor_.X() - left_offset,
+      CSSPropertyID::kLeft, viewport_anchor_.x() - left_offset,
       CSSPrimitiveValue::UnitType::kPercentage);
 
   // Let viewportAnchorY be the y dimension of the text track region viewport
   // anchor and regionAnchorY be the y dimension of the text track region
   // anchor. Let topOffset be regionAnchorY multiplied by height divided by
   // 100.0. Let top be topOffset subtracted from 'viewportAnchorY vh'.
-  double top_offset = region_anchor_.Y() * height / 100;
+  double top_offset = region_anchor_.y() * height / 100;
   region_display_tree_->SetInlineStyleProperty(
-      CSSPropertyID::kTop, viewport_anchor_.Y() - top_offset,
+      CSSPropertyID::kTop, viewport_anchor_.y() - top_offset,
       CSSPrimitiveValue::UnitType::kPercentage);
 
   // The cue container is used to wrap the cues and it is the object which is

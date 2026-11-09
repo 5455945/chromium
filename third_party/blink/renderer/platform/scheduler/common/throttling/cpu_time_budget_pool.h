@@ -1,14 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_CPU_TIME_BUDGET_POOL_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_SCHEDULER_COMMON_THROTTLING_CPU_TIME_BUDGET_POOL_H_
 
-#include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
+#include <optional>
 
 #include "base/gtest_prod_util.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "base/time/time.h"
+#include "third_party/blink/renderer/platform/scheduler/common/throttling/budget_pool.h"
 #include "third_party/blink/renderer/platform/scheduler/common/tracing_helper.h"
 
 namespace blink {
@@ -18,27 +19,29 @@ namespace scheduler {
 // on total cpu time.
 class PLATFORM_EXPORT CPUTimeBudgetPool : public BudgetPool {
  public:
-  CPUTimeBudgetPool(const char* name,
-                    BudgetPoolController* budget_pool_controller,
-                    TraceableVariableController* tracing_controller,
-                    base::TimeTicks now);
+  CPUTimeBudgetPool(
+      const char* name,
+      TraceableVariableController* tracing_controller,
+      base::TimeTicks now,
+      perfetto::StaticString counter_track_name = "Scheduler.CpuBudgetMs",
+      perfetto::Track parent_track = perfetto::ThreadTrack::Current());
   CPUTimeBudgetPool(const CPUTimeBudgetPool&) = delete;
   CPUTimeBudgetPool& operator=(const CPUTimeBudgetPool&) = delete;
 
   ~CPUTimeBudgetPool() override;
 
-  // Set max budget level, absl::nullopt represent absence of max level.
+  // Set max budget level, std::nullopt represent absence of max level.
   // Max budget level prevents accumulating arbitrary large budgets when
   // page is inactive for a very long time.
   void SetMaxBudgetLevel(base::TimeTicks now,
-                         absl::optional<base::TimeDelta> max_budget_level);
+                         std::optional<base::TimeDelta> max_budget_level);
 
-  // Set max throttling duration, absl::nullopt represents absense of it.
+  // Set max throttling duration, std::nullopt represents absense of it.
   // Max throttling duration prevents page from being throttled for
   // a very long period after a single long task.
   void SetMaxThrottlingDelay(
       base::TimeTicks now,
-      absl::optional<base::TimeDelta> max_throttling_delay);
+      std::optional<base::TimeDelta> max_throttling_delay);
 
   // Throttle task queues from this time budget pool if tasks are running
   // for more than |cpu_percentage| per cent of wall time.
@@ -56,17 +59,12 @@ class PLATFORM_EXPORT CPUTimeBudgetPool : public BudgetPool {
       base::RepeatingCallback<void(base::TimeDelta)> reporting_callback);
 
   // BudgetPool implementation:
-  void RecordTaskRunTime(base::sequence_manager::TaskQueue* queue,
-                         base::TimeTicks start_time,
+  void RecordTaskRunTime(base::TimeTicks start_time,
                          base::TimeTicks end_time) final;
-  bool CanRunTasksAt(base::TimeTicks moment, bool is_wake_up) const final;
-  base::TimeTicks GetTimeTasksCanRunUntil(base::TimeTicks now,
-                                          bool is_wake_up) const final;
+  bool CanRunTasksAt(base::TimeTicks moment) const final;
+  base::TimeTicks GetTimeTasksCanRunUntil(base::TimeTicks now) const final;
   base::TimeTicks GetNextAllowedRunTime(
       base::TimeTicks desired_run_time) const final;
-  void OnQueueNextWakeUpChanged(base::sequence_manager::TaskQueue* queue,
-                                base::TimeTicks now,
-                                base::TimeTicks desired_run_time) final;
   void OnWakeUp(base::TimeTicks now) final;
   void WriteIntoTrace(perfetto::TracedValue context,
                       base::TimeTicks) const final;
@@ -90,15 +88,15 @@ class PLATFORM_EXPORT CPUTimeBudgetPool : public BudgetPool {
   // Max budget level which we can accrue.
   // Tasks will be allowed to run for this time before being throttled
   // after a very long period of inactivity.
-  absl::optional<base::TimeDelta> max_budget_level_;
+  std::optional<base::TimeDelta> max_budget_level_;
   // Max throttling delay places a lower limit on time budget level,
   // ensuring that one long task does not cause extremely long throttling.
   // Note that this is not a guarantee that every task will run
   // after desired run time + max throttling duration, but a guarantee
   // that at least one task will be run every max_throttling_delay.
-  absl::optional<base::TimeDelta> max_throttling_delay_;
+  std::optional<base::TimeDelta> max_throttling_delay_;
 
-  TraceableCounter<base::TimeDelta, TracingCategoryName::kInfo>
+  TraceableCounter<base::TimeDelta, "renderer.scheduler.status">
       current_budget_level_;
   base::TimeTicks last_checkpoint_;
   double cpu_percentage_;

@@ -1,10 +1,12 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/views/controls/menu/menu_host_root_view.h"
 
 #include "ui/base/metadata/metadata_impl_macros.h"
+#include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/size.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_item_view.h"
 #include "ui/views/controls/menu/submenu_view.h"
@@ -25,13 +27,15 @@ bool MenuHostRootView::OnMouseDragged(const ui::MouseEvent& event) {
 }
 
 void MenuHostRootView::OnMouseReleased(const ui::MouseEvent& event) {
-  if (GetMenuControllerForInputEvents())
+  if (GetMenuControllerForInputEvents()) {
     GetMenuControllerForInputEvents()->OnMouseReleased(submenu_, event);
+  }
 }
 
 void MenuHostRootView::OnMouseMoved(const ui::MouseEvent& event) {
-  if (GetMenuControllerForInputEvents())
+  if (GetMenuControllerForInputEvents()) {
     GetMenuControllerForInputEvents()->OnMouseMoved(submenu_, event);
+  }
 }
 
 bool MenuHostRootView::OnMouseWheel(const ui::MouseWheelEvent& event) {
@@ -48,9 +52,19 @@ View* MenuHostRootView::GetTooltipHandlerForPoint(const gfx::Point& point) {
 
 void MenuHostRootView::ViewHierarchyChanged(
     const ViewHierarchyChangedDetails& details) {
-  if (GetMenuControllerForInputEvents())
+  if (GetMenuControllerForInputEvents()) {
     GetMenuControllerForInputEvents()->ViewHierarchyChanged(submenu_, details);
+  }
   RootView::ViewHierarchyChanged(details);
+}
+
+View* MenuHostRootView::TargetForRect(View* root, const gfx::Rect& rect) {
+  // MenuController resolves unhandled gestures using the gesture's center
+  // point. Target the view under that same point, like mouse events, so
+  // rect-based fuzzing cannot hand a tap on a menu button to an adjacent
+  // non-interactive icon or separator.
+  return RootView::TargetForRect(
+      root, gfx::Rect(rect.CenterPoint(), gfx::Size(1, 1)));
 }
 
 bool MenuHostRootView::ProcessMousePressed(const ui::MouseEvent& event) {
@@ -81,8 +95,9 @@ void MenuHostRootView::OnEventProcessingFinished(ui::Event* event) {
   // TODO(tdanderson): Investigate whether this should be moved into a
   //                   post-target handler installed on |this| instead
   //                   (invoked only if event->target() == this).
-  if (event->IsGestureEvent() && !event->handled() && GetMenuController())
+  if (event->IsGestureEvent() && !event->handled() && GetMenuController()) {
     GetMenuController()->OnGestureEvent(submenu_, event->AsGestureEvent());
+  }
 }
 
 MenuController* MenuHostRootView::GetMenuController() {
@@ -95,6 +110,6 @@ MenuController* MenuHostRootView::GetMenuControllerForInputEvents() {
              : nullptr;
 }
 
-BEGIN_METADATA(MenuHostRootView, internal::RootView)
+BEGIN_METADATA(MenuHostRootView)
 END_METADATA
 }  // namespace views

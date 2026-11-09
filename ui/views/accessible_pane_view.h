@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,7 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "ui/base/accelerators/accelerator.h"
 #include "ui/views/focus/focus_manager.h"
@@ -24,10 +24,14 @@ class ViewTracker;
 class VIEWS_EXPORT AccessiblePaneView : public View,
                                         public FocusChangeListener,
                                         public FocusTraversable {
- public:
-  METADATA_HEADER(AccessiblePaneView);
+  METADATA_HEADER(AccessiblePaneView, View)
 
+ public:
   AccessiblePaneView();
+
+  AccessiblePaneView(const AccessiblePaneView&) = delete;
+  AccessiblePaneView& operator=(const AccessiblePaneView&) = delete;
+
   ~AccessiblePaneView() override;
 
   // Set focus to the pane with complete keyboard access.
@@ -45,11 +49,15 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
   // Returns true if the pane was able to receive focus.
   virtual bool SetPaneFocusAndFocusDefault();
 
+  // When true allows the pane to handle the up and down arrow keys to navigate
+  // the children. Defaults to false.
+  // Note: If true, the down arrow will no longer open submenus.
+  virtual bool TraverseUsingUpDownKeys();
+
   // Overridden from View:
   FocusTraversable* GetPaneFocusTraversable() override;
   bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   void SetVisible(bool flag) override;
-  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
   void RequestFocus() override;
 
   // Overridden from FocusChangeListener:
@@ -65,6 +73,8 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
   const ui::Accelerator& home_key() const { return home_key_; }
   const ui::Accelerator& end_key() const { return end_key_; }
   const ui::Accelerator& escape_key() const { return escape_key_; }
+  const ui::Accelerator& up_key() const { return up_key_; }
+  const ui::Accelerator& down_key() const { return down_key_; }
   const ui::Accelerator& left_key() const { return left_key_; }
   const ui::Accelerator& right_key() const { return right_key_; }
 
@@ -106,7 +116,7 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
 
   // Save the focus manager rather than calling GetFocusManager(),
   // so that we can remove focus listeners in the destructor.
-  FocusManager* focus_manager_ = nullptr;
+  raw_ptr<FocusManager> focus_manager_ = nullptr;
 
   // Our custom focus search implementation that traps focus in this
   // pane and traverses all views that are focusable for accessibility,
@@ -117,6 +127,8 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
   ui::Accelerator home_key_{ui::VKEY_HOME, ui::EF_NONE};
   ui::Accelerator end_key_{ui::VKEY_END, ui::EF_NONE};
   ui::Accelerator escape_key_{ui::VKEY_ESCAPE, ui::EF_NONE};
+  ui::Accelerator up_key_{ui::VKEY_UP, ui::EF_NONE};
+  ui::Accelerator down_key_{ui::VKEY_DOWN, ui::EF_NONE};
   ui::Accelerator left_key_{ui::VKEY_LEFT, ui::EF_NONE};
   ui::Accelerator right_key_{ui::VKEY_RIGHT, ui::EF_NONE};
 
@@ -126,8 +138,6 @@ class VIEWS_EXPORT AccessiblePaneView : public View,
   friend class AccessiblePaneViewFocusSearch;
 
   base::WeakPtrFactory<AccessiblePaneView> method_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AccessiblePaneView);
 };
 
 }  // namespace views

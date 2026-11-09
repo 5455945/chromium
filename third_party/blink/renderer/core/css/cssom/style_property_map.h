@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_STYLE_PROPERTY_MAP_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_STYLE_PROPERTY_MAP_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/cssom/style_property_map_read_only_main_thread.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 
@@ -35,6 +36,9 @@ class CORE_EXPORT StylePropertyMap : public StylePropertyMapReadOnlyMainThread {
   void clear();
 
  protected:
+  // Some subclasses only allow a subset of properties. For example,
+  // CSSPrivateRule only allows custom properties.
+  virtual bool IsPropertyValid(CSSPropertyID) const { return true; }
   virtual void SetProperty(CSSPropertyID, const CSSValue&) = 0;
   virtual bool SetShorthandProperty(CSSPropertyID,
                                     const String&,

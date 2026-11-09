@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,54 +7,119 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "base/memory/raw_ptr.h"
 #include "base/test/scoped_feature_list.h"
+#include "chrome/browser/sync/test/integration/fake_server_match_status_checker.h"
 #include "chrome/browser/sync/test/integration/single_client_status_change_checker.h"
 #include "chrome/browser/sync/test/integration/status_change_checker.h"
 #include "components/sync/base/passphrase_enums.h"
-#include "components/sync/driver/trusted_vault_client.h"
-#include "components/sync/test/fake_server/fake_server.h"
+#include "components/sync/test/fake_server.h"
+#include "components/trusted_vault/trusted_vault_client.h"
+#include "google_apis/gaia/gaia_id.h"
+#include "net/test/embedded_test_server/embedded_test_server.h"
+
+namespace encryption_helper {
+
+// Setups `test_server` in a way it will redirect from trusted vault URLs (key
+// retrieval URL and degraded recoverability URL) to fake pages. These pages
+// will populate parameters (`trusted_vault_key` and its version in case of key
+// retrieval, `recovery_method_public_key` in case of degraded recoverability)
+// to Chrome upon loading and will close themselves automatically.
+// Must be called before `test_server` starts to accept connections.
+// `test_server` must not be null.
+void SetupFakeTrustedVaultPages(
+    const GaiaId& gaia_id,
+    const std::vector<uint8_t>& trusted_vault_key,
+    int trusted_vault_key_version,
+    const std::vector<uint8_t>& recovery_method_public_key,
+    net::test_server::EmbeddedTestServer* test_server);
+
+}  // namespace encryption_helper
 
 // Checker used to block until a Nigori with a given passphrase type is
 // available on the server.
-class ServerNigoriChecker : public SingleClientStatusChangeChecker {
+class ServerPassphraseTypeChecker
+    : public fake_server::FakeServerMatchStatusChecker {
  public:
-  ServerNigoriChecker(syncer::SyncServiceImpl* service,
-                      fake_server::FakeServer* fake_server,
-                      syncer::PassphraseType expected_passphrase_type);
+  explicit ServerPassphraseTypeChecker(
+      syncer::PassphraseType expected_passphrase_type);
 
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  fake_server::FakeServer* const fake_server_;
   const syncer::PassphraseType expected_passphrase_type_;
+};
+
+// Checker used to block until a Nigori populated with a new public key
+// available on the server. If the previous public key value is not provided,
+// waits for a non-empty public key.
+class ServerCrossUserSharingPublicKeyChangedChecker
+    : public fake_server::FakeServerMatchStatusChecker {
+ public:
+  ServerCrossUserSharingPublicKeyChangedChecker(
+      const std::string& previous_public_key = "");
+
+  // fake_server::FakeServerMatchStatusChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override;
+
+ private:
+  const std::string previous_public_key_;
 };
 
 // Checker used to block until a Nigori with a given keybag encryption key name
 // is available on the server.
-class ServerNigoriKeyNameChecker : public SingleClientStatusChangeChecker {
+class ServerNigoriKeyNameChecker
+    : public fake_server::FakeServerMatchStatusChecker {
  public:
-  ServerNigoriKeyNameChecker(const std::string& expected_key_name,
-                             syncer::SyncServiceImpl* service,
-                             fake_server::FakeServer* fake_server);
+  explicit ServerNigoriKeyNameChecker(const std::string& expected_key_name);
 
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  fake_server::FakeServer* const fake_server_;
   const std::string expected_key_name_;
 };
 
-// Checker used to block until Sync requires or stops requiring a passphrase.
-class PassphraseRequiredStateChecker : public SingleClientStatusChangeChecker {
+// Checker to block until service is waiting for a passphrase.
+class PassphraseRequiredChecker : public SingleClientStatusChangeChecker {
  public:
-  PassphraseRequiredStateChecker(syncer::SyncServiceImpl* service,
-                                 bool desired_state);
+  explicit PassphraseRequiredChecker(syncer::SyncServiceImpl* service);
 
+  // StatusChangeChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override;
+};
+
+// Checker to block until service is waiting for keystore keys.
+class KeystoreKeysRequiredChecker : public SingleClientStatusChangeChecker {
+ public:
+  explicit KeystoreKeysRequiredChecker(syncer::SyncServiceImpl* service);
+
+  // StatusChangeChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override;
+};
+
+// Checker to block until service has accepted a new passphrase.
+class PassphraseAcceptedChecker : public SingleClientStatusChangeChecker {
+ public:
+  explicit PassphraseAcceptedChecker(syncer::SyncServiceImpl* service);
+
+  // StatusChangeChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override;
+};
+
+// Checker to block until service has finished setting up a given passphrase
+// type.
+class PassphraseTypeChecker : public SingleClientStatusChangeChecker {
+ public:
+  PassphraseTypeChecker(syncer::SyncServiceImpl* service,
+                        syncer::PassphraseType expected_passphrase_type);
+
+  // StatusChangeChecker implementation.
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  const bool desired_state_;
+  const syncer::PassphraseType expected_passphrase_type_;
 };
 
 // Checker used to block until Sync requires or stops requiring trusted vault
@@ -74,7 +139,7 @@ class TrustedVaultKeyRequiredStateChecker
 // Checker used to block until trusted vault keys are changed.
 class TrustedVaultKeysChangedStateChecker
     : public StatusChangeChecker,
-      syncer::TrustedVaultClient::Observer {
+      trusted_vault::TrustedVaultClient::Observer {
  public:
   explicit TrustedVaultKeysChangedStateChecker(
       syncer::SyncServiceImpl* service);
@@ -83,25 +148,32 @@ class TrustedVaultKeysChangedStateChecker
   // StatusChangeChecker overrides.
   bool IsExitConditionSatisfied(std::ostream* os) override;
 
-  // TrustedVaultClient::Observer overrides.
-  void OnTrustedVaultKeysChanged() override;
+  // TrustedVaultClient::Observer implementation.
+  void OnTrustedVaultKeysChanged(
+      std::optional<trusted_vault::TrustedVaultUserActionTriggerForUMA> trigger)
+      override;
   void OnTrustedVaultRecoverabilityChanged() override;
 
  private:
-  syncer::SyncServiceImpl* const service_;
-  bool keys_changed_;
+  const raw_ptr<syncer::SyncServiceImpl> service_;
+  bool keys_changed_ = false;
 };
 
-// Helper for setting scrypt-related feature flags.
-// NOTE: DO NOT INSTANTIATE THIS CLASS IN THE TEST BODY FOR INTEGRATION TESTS!
-// That causes data races, see crbug.com/915219. Instead, instantiate it in the
-// test fixture class.
-class ScopedScryptFeatureToggler {
+// Used to wait until IsTrustedVaultRecoverabilityDegraded() returns the desired
+// value.
+class TrustedVaultRecoverabilityDegradedStateChecker
+    : public SingleClientStatusChangeChecker {
  public:
-  ScopedScryptFeatureToggler(bool force_disabled, bool use_for_new_passphrases);
+  TrustedVaultRecoverabilityDegradedStateChecker(
+      syncer::SyncServiceImpl* service,
+      bool degraded);
+  ~TrustedVaultRecoverabilityDegradedStateChecker() override = default;
+
+  // StatusChangeChecker implementation.
+  bool IsExitConditionSatisfied(std::ostream* os) override;
 
  private:
-  base::test::ScopedFeatureList feature_list_;
+  const bool degraded_;
 };
 
 #endif  // CHROME_BROWSER_SYNC_TEST_INTEGRATION_ENCRYPTION_HELPER_H_

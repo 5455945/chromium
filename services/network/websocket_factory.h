@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,9 +8,15 @@
 #include <set>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/component_export.h"
 #include "base/containers/unique_ptr_adapters.h"
-#include "base/memory/weak_ptr.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "net/base/network_handle.h"
+#include "net/log/net_log.h"
+#include "net/storage_access_api/status.h"
+#include "services/network/public/mojom/client_security_state.mojom.h"
+#include "services/network/public/mojom/ip_address_space.mojom.h"
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/websocket.mojom.h"
 #include "services/network/websocket.h"
@@ -20,8 +26,7 @@ class GURL;
 
 namespace net {
 class IsolationInfo;
-class SiteForCookies;
-class SSLInfo;
+class OriginatingProcessId;
 struct NetworkTrafficAnnotationTag;
 }  // namespace net
 
@@ -34,19 +39,26 @@ namespace network {
 class NetworkContext;
 class WebSocket;
 
-class WebSocketFactory final {
+class COMPONENT_EXPORT(NETWORK_SERVICE) WebSocketFactory final {
  public:
   explicit WebSocketFactory(NetworkContext* context);
+
+  NetworkContext* context() { return context_; }
+
+  WebSocketFactory(const WebSocketFactory&) = delete;
+  WebSocketFactory& operator=(const WebSocketFactory&) = delete;
+
   ~WebSocketFactory();
 
   void CreateWebSocket(
       const GURL& url,
       const std::vector<std::string>& requested_protocols,
-      const net::SiteForCookies& site_for_cookies,
+      net::StorageAccessApiStatus storage_access_api_status,
       const net::IsolationInfo& isolation_info,
       std::vector<mojom::HttpHeaderPtr> additional_headers,
-      int32_t process_id,
+      const network::OriginatingProcessId& process_id,
       const url::Origin& origin,
+      network::mojom::ClientSecurityStatePtr client_security_state,
       uint32_t options,
       net::NetworkTrafficAnnotationTag traffic_annotation,
       mojo::PendingRemote<mojom::WebSocketHandshakeClient> handshake_client,
@@ -54,33 +66,37 @@ class WebSocketFactory final {
           url_loader_network_observer,
       mojo::PendingRemote<mojom::WebSocketAuthenticationHandler> auth_handler,
       mojo::PendingRemote<mojom::TrustedHeaderClient> header_client,
-      const absl::optional<base::UnguessableToken>& throttling_profile_id);
+      const std::optional<base::UnguessableToken>& throttling_profile_id,
+      const base::UnguessableToken& network_restrictions_id,
+      mojom::IPAddressSpace target_address_space,
+      net::handles::NetworkHandle target_network);
 
   // Returns a URLRequestContext associated with this factory.
   net::URLRequestContext* GetURLRequestContext();
 
-  // Called when a WebSocket sees a SSL certificate error.
-  void OnSSLCertificateError(base::OnceCallback<void(int)> callback,
-                             const GURL& url,
-                             int process_id,
-                             int render_frame_id,
-                             int net_error,
-                             const net::SSLInfo& ssl_info,
-                             bool fatal);
-
   // Removes and deletes |impl|.
   void Remove(WebSocket* impl);
 
+  // Creates synthetic WEBSOCKET_ALIVE NetLog entries for pre-existing
+  // WebSocket connections. Called when NetLog capture starts to provide
+  // visibility into active WebSockets that were created before logging began.
+  // Pending/throttled connections (where the channel hasn't been created yet)
+  // are silently skipped. Each entry uses the WebSocket's original creation
+  // time, which predates the log start, so they appear with negative time
+  // offsets in the export.
+  void CreateNetLogEntriesForActiveConnections(
+      net::NetLog::ThreadSafeObserver* observer) const;
+
  private:
+  using WebSocketSet =
+      std::set<std::unique_ptr<WebSocket>, base::UniquePtrComparator>;
   // The connections held by this factory.
-  std::set<std::unique_ptr<WebSocket>, base::UniquePtrComparator> connections_;
+  WebSocketSet connections_;
 
   WebSocketThrottler throttler_;
 
   // |context_| outlives this object.
-  NetworkContext* const context_;
-
-  DISALLOW_COPY_AND_ASSIGN(WebSocketFactory);
+  const raw_ptr<NetworkContext> context_;
 };
 
 }  // namespace network

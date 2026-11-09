@@ -1,26 +1,37 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_BASE_ACCELERATORS_ACCELERATOR_MAP_H_
 #define UI_BASE_ACCELERATORS_ACCELERATOR_MAP_H_
 
+// TODO(oshima): Remove this.
 #include <map>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "base/component_export.h"
+#include "build/build_config.h"
 #include "ui/base/accelerators/accelerator.h"
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
 #include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/events/keycodes/dom/keycode_converter.h"
 #endif
 
+namespace std {
+template <>
+struct hash<ui::Accelerator> {
+  size_t operator()(const ui::Accelerator& a) const { return a.hash(); }
+};
+
+}  // namespace std
+
 namespace ui {
 
-// This is a wrapper around an internal std::map of type
-// |std::map<Accelerator, V>| where |V| is the mapped value.
+// This is a wrapper around an internal std::unordered_map of type
+// |std::unordered_map<Accelerator, V>| where |V| is the mapped value.
 //
 // Accelerators in Chrome on all platforms are specified with the |key_code|,
 // aka VKEY, however certain keys (eg. brackets, comma, period, plus, minus),
@@ -47,8 +58,9 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
   AcceleratorMap() = default;
   ~AcceleratorMap() = default;
 
-  using iterator = typename std::map<Accelerator, V>::iterator;
-  using const_iterator = typename std::map<Accelerator, V>::const_iterator;
+  using iterator = typename std::unordered_map<Accelerator, V>::iterator;
+  using const_iterator =
+      typename std::unordered_map<Accelerator, V>::const_iterator;
 
   // Lookup an accelerator and return a pointer to the value. If the
   // accelerator is not in the map, this returns nullptr.
@@ -67,7 +79,7 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
   // accelerator is not present this function will DCHECK.
   const V& Get(const Accelerator& accelerator) const {
     auto iter = FindImpl(accelerator);
-    DCHECK(iter != map_.end());
+    CHECK(iter != map_.end(), base::NotFatalUntil::M163);
     return iter->second;
   }
 
@@ -78,7 +90,7 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
   }
 
   V& GetOrInsertDefault(const Accelerator& accelerator) {
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
     // Ensure the DomCode is NONE before registering. The DomCode is only
     // used during lookup to select the correct VKEY.
     if (accelerator.code() != DomCode::NONE) {
@@ -95,10 +107,12 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
     return map_.erase(accelerator) > 0;
   }
 
+  void Clear() { map_.clear(); }
+
   // Inserts a new accelerator and value into the map. DCHECKs if the
   // accelerator was already in the map.
   void InsertNew(const std::pair<const Accelerator, V>& value) {
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
     // Ensure the DomCode is NONE before registering. The DomCode is only
     // used during lookup to select the correct VKEY.
     if (value.first.code() != DomCode::NONE) {
@@ -106,17 +120,19 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
       accelerator_copy.reset_code();
       auto value_copy = std::make_pair(accelerator_copy, value.second);
       auto result = map_.insert(value_copy);
-      DCHECK(result.second);
+      CHECK(result.second, base::NotFatalUntil::M163);
       return;
     }
 #endif
     auto result = map_.insert(value);
-    DCHECK(result.second);
+    CHECK(result.second, base::NotFatalUntil::M163);
   }
 
   // Iterators for the internal map.
   iterator begin() { return map_.begin(); }
   iterator end() { return map_.end(); }
+  const_iterator begin() const { return map_.begin(); }
+  const_iterator end() const { return map_.end(); }
 
   // Returns the number of items in the map.
   size_t size() const { return map_.size(); }
@@ -124,7 +140,7 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
   // Returns true if the map is empty.
   bool empty() const { return map_.empty(); }
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   // When true, lookup operators on the map will remap the |key_code| of
   // position-based keys based on the |code|.
   void set_use_positional_lookup(bool use_positional_lookup) {
@@ -133,9 +149,9 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
 #endif
 
  private:
-  std::map<Accelerator, V> map_;
+  std::unordered_map<Accelerator, V> map_;
 
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
   bool use_positional_lookup_ = false;
 
   // For the shortcuts that use positional mapping, the lookup is done based
@@ -159,7 +175,7 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
       // If there's a valid remapping, use that |KeyboardCode| instead.
       KeyboardCode remapped_key_code =
           KeycodeConverter::MapPositionalDomCodeToUSShortcutKey(
-              accelerator.code());
+              accelerator.code(), accelerator.key_code());
       lookup_key_code = remapped_key_code != VKEY_UNKNOWN ? remapped_key_code
                                                           : lookup_key_code;
     }
@@ -167,15 +183,16 @@ class COMPONENT_EXPORT(UI_BASE) AcceleratorMap {
     return Accelerator(lookup_key_code, DomCode::NONE, accelerator.modifiers(),
                        accelerator.key_state());
   }
-#endif  // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
   const_iterator FindImpl(const Accelerator& accelerator) const {
-#if defined(OS_CHROMEOS)
+#if BUILDFLAG(IS_CHROMEOS)
     auto iter = map_.find(RemapAcceleratorForLookup(accelerator));
     // Sanity check that a DomCode was never inserted into the map.
-    DCHECK(iter == map_.end() || iter->first.code() == DomCode::NONE);
+    CHECK(iter == map_.end() || iter->first.code() == DomCode::NONE,
+          base::NotFatalUntil::M163);
     return iter;
-#endif  // defined(OS_CHROMEOS)
+#endif  // BUILDFLAG(IS_CHROMEOS)
 
     return map_.find(accelerator);
   }

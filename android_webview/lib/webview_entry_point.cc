@@ -1,42 +1,39 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "android_webview/lib/webview_jni_onload.h"
-#include "base/android/jni_android.h"
+#include "base/android/base_jni_init.h"
 #include "base/android/library_loader/library_loader_hooks.h"
+#include "base/logging.h"
+#include "base/notreached.h"
+#include "build/is_android_web_view.h"
 
-#if defined(WEBVIEW_INCLUDES_WEBLAYER)
-#include "weblayer/app/jni_onload.h"
-#include "weblayer/browser/web_view_compatibility_helper_impl.h"
-#endif
+namespace build {
 
-namespace {
-
-bool NativeInit(base::android::LibraryProcessType library_process_type) {
-  switch (library_process_type) {
-#if defined(WEBVIEW_INCLUDES_WEBLAYER)
-    case base::android::PROCESS_WEBLAYER:
-    case base::android::PROCESS_WEBLAYER_CHILD:
-      return weblayer::OnJNIOnLoadInit();
-      break;
-#endif
-
-    default:
-      return android_webview::OnJNIOnLoadInit();
-  }
+// Overrides the weak definition from //build.
+bool IsAndroidWebView() {
+  return true;
 }
 
-}  // namespace
+}  // namespace build
 
-// This is called by the VM when the shared library is first loaded.
-// Most of the initialization is done in LibraryLoadedOnMainThread(), not here.
-JNI_EXPORT jint JNI_OnLoad(JavaVM* vm, void* reserved) {
-  base::android::InitVM(vm);
-#if defined(WEBVIEW_INCLUDES_WEBLAYER)
-  if (!weblayer::MaybeRegisterNatives())
-    return -1;
-#endif
-  base::android::SetNativeInitializationHook(&NativeInit);
-  return JNI_VERSION_1_4;
+bool NativeInitializationHook(
+    base::android::LibraryProcessType library_process_type) {
+  switch (library_process_type) {
+    case base::android::PROCESS_WEBVIEW:
+    case base::android::PROCESS_WEBVIEW_CHILD:
+      return android_webview::OnJNIOnLoadInit();
+
+    case base::android::PROCESS_WEBVIEW_NONEMBEDDED:
+      return base::android::OnJNIOnLoadInit();
+
+    case base::android::PROCESS_CHILD:
+      LOG(FATAL) << "WebView cannot be started with a child process type.";
+    case base::android::PROCESS_BROWSER:
+      LOG(FATAL) << "WebView cannot be started with a browser process type.";
+
+    default:
+      NOTREACHED();
+  }
 }

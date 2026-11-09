@@ -1,14 +1,17 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/core/html/parser/preload_request.h"
 
+#include "base/memory/ptr_util.h"
+#include "base/metrics/histogram_functions.h"
 #include "third_party/blink/public/common/features.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/frame/settings.h"
+#include "third_party/blink/renderer/core/lcp_critical_path_predictor/lcp_critical_path_predictor.h"
 #include "third_party/blink/renderer/core/loader/document_loader.h"
 #include "third_party/blink/renderer/core/loader/preload_helper.h"
 #include "third_party/blink/renderer/core/script/document_write_intervention.h"
@@ -18,6 +21,7 @@
 #include "third_party/blink/renderer/platform/loader/fetch/fetch_parameters.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_fetcher.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
+#include "third_party/blink/renderer/platform/network/http_names.h"
 #include "third_party/blink/renderer/platform/network/network_state_notifier.h"
 #include "third_party/blink/renderer/platform/weborigin/security_policy.h"
 
@@ -35,44 +39,47 @@ PreloadRequest::ExclusionInfo::~ExclusionInfo() = default;
 bool PreloadRequest::ExclusionInfo::ShouldExclude(
     const KURL& base_url,
     const String& resource_url) const {
-  if (resources_.IsEmpty() && scopes_.IsEmpty())
+  if (resources_.empty() && scopes_.empty())
     return false;
   KURL url = KURL(base_url.IsEmpty() ? document_url_ : base_url, resource_url);
   if (resources_.Contains(url))
     return true;
   for (const auto& scope : scopes_) {
-    if (url.GetString().StartsWith(scope.GetString()))
+    if (url.GetString().starts_with(scope.GetString())) {
       return true;
+    }
   }
   return false;
 }
 
 KURL PreloadRequest::CompleteURL(Document* document) {
-  if (!base_url_.IsEmpty())
-    return document->CompleteURLWithOverride(resource_url_, base_url_);
-  return document->CompleteURL(resource_url_);
+  if (!base_url_.IsEmpty()) {
+    return document->CompleteURLWithOverride(resource_url_, base_url_,
+                                             Document::kIsPreload);
+  }
+  return document->CompleteURL(resource_url_, Document::kIsPreload);
 }
 
 // static
 std::unique_ptr<PreloadRequest> PreloadRequest::CreateIfNeeded(
     const String& initiator_name,
-    const TextPosition& initiator_position,
     const String& resource_url,
     const KURL& base_url,
     ResourceType resource_type,
     const network::mojom::ReferrerPolicy referrer_policy,
-    ReferrerSource referrer_source,
     ResourceFetcher::IsImageSet is_image_set,
     const ExclusionInfo* exclusion_info,
-    const FetchParameters::ResourceWidth& resource_width,
-    const ClientHintsPreferences& client_hints_preferences,
+    std::optional<float> resource_width,
+    std::optional<float> resource_height,
     RequestType request_type) {
   // Never preload data URLs. We also disallow relative ref URLs which become
   // data URLs if the document's URL is a data URL. We don't want to create
   // extra resource requests with data URLs to avoid copy / initialization
   // overhead, which can be significant for large URLs.
-  if (resource_url.IsEmpty() || resource_url.StartsWith("#") ||
-      ProtocolIs(resource_url, "data")) {
+  if (resource_url.empty() || resource_url.starts_with('#') ||
+      (ProtocolIs(resource_url, "data") &&
+       (!RuntimeEnabledFeatures::PreloadLinkRelDataUrlsEnabled() ||
+        request_type != PreloadRequest::kRequestTypeLinkRelPreload))) {
     return nullptr;
   }
 
@@ -80,13 +87,14 @@ std::unique_ptr<PreloadRequest> PreloadRequest::CreateIfNeeded(
     return nullptr;
 
   return base::WrapUnique(new PreloadRequest(
-      initiator_name, initiator_position, resource_url, base_url, resource_type,
-      resource_width, client_hints_preferences, request_type, referrer_policy,
-      referrer_source, is_image_set));
+      initiator_name, resource_url, base_url, resource_type, resource_width,
+      resource_height, request_type, referrer_policy, is_image_set));
 }
 
 Resource* PreloadRequest::Start(Document* document) {
   DCHECK(document->domWindow());
+  base::UmaHistogramTimes("Blink.PreloadRequestWaitTime",
+                          base::TimeTicks::Now() - creation_time_);
 
   FetchInitiatorInfo initiator_info;
   initiator_info.name = AtomicString(initiator_name_);
@@ -94,27 +102,21 @@ Resource* PreloadRequest::Start(Document* document) {
 
   const KURL& url = CompleteURL(document);
   // Data URLs are filtered out in the preload scanner.
-  DCHECK(!url.ProtocolIsData());
+  // If the PreloadLinkRelDataUrls feature is enabled, only data URLs that are
+  // not preloaded via the link element are filtered out in the preload scanner.
+  DCHECK(!url.ProtocolIsData() ||
+         (RuntimeEnabledFeatures::PreloadLinkRelDataUrlsEnabled() &&
+          request_type_ == RequestType::kRequestTypeLinkRelPreload));
 
   ResourceRequest resource_request(url);
   resource_request.SetReferrerPolicy(referrer_policy_);
-  if (referrer_source_ == kBaseUrlIsReferrer) {
-    resource_request.SetReferrerString(base_url_.StrippedForUseAsReferrer());
-  }
 
   resource_request.SetRequestContext(
       ResourceFetcher::DetermineRequestContext(resource_type_, is_image_set_));
   resource_request.SetRequestDestination(
       ResourceFetcher::DetermineRequestDestination(resource_type_));
-
-  resource_request.SetFetchImportanceMode(importance_);
-
-  if (resource_type_ == ResourceType::kImage && url.ProtocolIsInHTTPFamily() &&
-      base::FeatureList::IsEnabled(blink::features::kSubresourceRedirect) &&
-      blink::GetNetworkStateNotifier().SaveDataEnabled()) {
-    resource_request.SetPreviewsState(resource_request.GetPreviewsState() |
-                                      PreviewsTypes::kSubresourceRedirectOn);
-  }
+  resource_request.SetExpectedPublicKeys(integrity_metadata_);
+  resource_request.SetFetchPriorityHint(fetch_priority_hint_);
 
   ResourceLoaderOptions options(document->domWindow()->GetCurrentWorld());
   options.initiator_info = initiator_info;
@@ -132,7 +134,7 @@ Resource* PreloadRequest::Start(Document* document) {
 
   params.SetDefer(defer_);
   params.SetResourceWidth(resource_width_);
-  params.GetClientHintsPreferences().UpdateFrom(client_hints_preferences_);
+  params.SetResourceHeight(resource_height_);
   params.SetIntegrityMetadata(integrity_metadata_);
   params.SetContentSecurityPolicyNonce(nonce_);
   params.SetParserDisposition(kParserInserted);
@@ -145,8 +147,8 @@ Resource* PreloadRequest::Start(Document* document) {
     params.SetDecoderOptions(TextResourceDecoderOptions::CreateUTF8Decode());
   } else if (resource_type_ == ResourceType::kScript ||
              resource_type_ == ResourceType::kCSSStyleSheet) {
-    params.SetCharset(charset_.IsEmpty() ? document->Encoding()
-                                         : WTF::TextEncoding(charset_));
+    TextEncoding charset(charset_);
+    params.SetCharset(charset.IsValid() ? charset : document->Encoding());
   }
   FetchParameters::SpeculativePreloadType speculative_preload_type =
       FetchParameters::SpeculativePreloadType::kInDocument;
@@ -160,8 +162,23 @@ Resource* PreloadRequest::Start(Document* document) {
     // We intentionally ignore the returned value, because we don't resend
     // the async request to the blocked script here.
     MaybeDisallowFetchForDocWrittenScript(params, *document);
+
+    if (base::FeatureList::IsEnabled(features::kLCPScriptObserver)) {
+      if (LCPCriticalPathPredictor* lcpp = document->GetFrame()->GetLCPP()) {
+        if (lcpp->lcp_influencer_scripts().Contains(url)) {
+          is_potentially_lcp_influencer_ = true;
+        }
+      }
+    }
   }
   params.SetRenderBlockingBehavior(render_blocking_behavior_);
+
+  params.SetIsPotentiallyLCPElement(is_potentially_lcp_element_);
+  params.SetIsPotentiallyLCPInfluencer(is_potentially_lcp_influencer_);
+
+  if (LCPCriticalPathPredictor* lcpp = document->GetFrame()->GetLCPP()) {
+    lcpp->OnStartPreload(url, resource_type_);
+  }
 
   return PreloadHelper::StartPreload(resource_type_, params, *document);
 }

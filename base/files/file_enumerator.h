@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,13 +14,17 @@
 #include "base/containers/stack.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/functional/function_ref.h"
 #include "base/time/time.h"
 #include "build/build_config.h"
 
-#if defined(OS_WIN)
-#include <windows.h>
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_WIN)
+#include "base/win/windows_types.h"
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+#include <sys/stat.h>
 #include <unistd.h>
+
+#include <unordered_map>
 #include <unordered_set>
 #endif
 
@@ -35,6 +39,9 @@ namespace base {
 //
 //   base::FileEnumerator e(my_dir, false, base::FileEnumerator::FILES,
 //                          FILE_PATH_LITERAL("*.txt"));
+// Using `ForEach` with a lambda:
+//   e.ForEach([](const base::FilePath& item) {...});
+// Using a `for` loop:
 //   for (base::FilePath name = e.Next(); !name.empty(); name = e.Next())
 //     ...
 class BASE_EXPORT FileEnumerator {
@@ -43,6 +50,22 @@ class BASE_EXPORT FileEnumerator {
   class BASE_EXPORT FileInfo {
    public:
     FileInfo();
+#if BUILDFLAG(IS_ANDROID)
+    // Android has both posix paths, and Content-URIs. It will use the linux /
+    // posix code for posix paths where a FileInfo() object is constructed and
+    // then `stat_` is populated via fstat() and used for IsDirectory(),
+    // GetSize(), GetLastModifiedTime(). Content-URIs provide all values in this
+    // constructor and writes `is_directory`, `size` and `time` to `stat_`.
+    FileInfo(base::FilePath content_uri,
+             base::FilePath filename,
+             bool is_directory,
+             off_t size,
+             Time time);
+#endif
+    FileInfo(const FileInfo& that);
+    FileInfo& operator=(const FileInfo& that);
+    FileInfo(FileInfo&& that);
+    FileInfo& operator=(FileInfo&& that);
     ~FileInfo();
 
     bool IsDirectory() const;
@@ -52,36 +75,60 @@ class BASE_EXPORT FileEnumerator {
     // includes the |root_path| passed into the FileEnumerator constructor.
     FilePath GetName() const;
 
+#if BUILDFLAG(IS_ANDROID)
+    // Display names of subdirs.
+    const std::vector<std::string>& subdirs() const { return subdirs_; }
+#endif
+
     int64_t GetSize() const;
 
     // On POSIX systems, this is rounded down to the second.
     Time GetLastModifiedTime() const;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
     // Note that the cAlternateFileName (used to hold the "short" 8.3 name)
     // of the WIN32_FIND_DATA will be empty. Since we don't use short file
     // names, we tell Windows to omit it which speeds up the query slightly.
-    const WIN32_FIND_DATA& find_data() const { return find_data_; }
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+    const WIN32_FIND_DATA& find_data() const {
+      return *ChromeToWindowsType(&find_data_);
+    }
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     const stat_wrapper_t& stat() const { return stat_; }
 #endif
 
    private:
     friend class FileEnumerator;
 
-#if defined(OS_WIN)
-    WIN32_FIND_DATA find_data_;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+#if BUILDFLAG(IS_ANDROID)
+    FilePath content_uri_;
+    std::vector<std::string> subdirs_;
+#endif
+#if BUILDFLAG(IS_WIN)
+    CHROME_WIN32_FIND_DATA find_data_ = {};
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
     stat_wrapper_t stat_;
     FilePath filename_;
 #endif
   };
 
+  // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.base
+  // GENERATED_JAVA_IS_FLAG: true
   enum FileType {
     FILES = 1 << 0,
     DIRECTORIES = 1 << 1,
     INCLUDE_DOT_DOT = 1 << 2,
-#if defined(OS_POSIX) || defined(OS_FUCHSIA)
+
+    // Report only the names of entries and not their type, size, or
+    // last-modified time. May only be used for non-recursive enumerations, and
+    // implicitly includes both files and directories (neither of which may be
+    // specified). When used, an enumerator's `GetInfo()` method must not be
+    // called.
+    NAMES_ONLY = 1 << 3,
+
+#if BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+    // Report symlinks in the enumeration. If not set, instead report their
+    // targets. Recursive enumerations traverse symlinks to directories only if
+    // SHOW_SYM_LINKS is not set.
     SHOW_SYM_LINKS = 1 << 4,
 #endif
   };
@@ -128,6 +175,14 @@ class BASE_EXPORT FileEnumerator {
   // since the underlying code uses OS-specific matching routines.  In general,
   // Windows matching is less featureful than others, so test there first.
   // If unspecified, this will match all files.
+  //
+  // |folder_search_policy| optionally specifies a search behavior. Refer to
+  // |FolderSearchPolicy| for a list of folder search policies and the meaning
+  // of them. If |recursive| is false, this parameter has no effect.
+  //
+  // |error_policy| optionally specifies the behavior when an error occurs.
+  // Refer to |ErrorPolicy| for a list of error policies and the meaning of
+  // them.
   FileEnumerator(const FilePath& root_path, bool recursive, int file_type);
   FileEnumerator(const FilePath& root_path,
                  bool recursive,
@@ -148,6 +203,12 @@ class BASE_EXPORT FileEnumerator {
   FileEnumerator& operator=(const FileEnumerator&) = delete;
   ~FileEnumerator();
 
+  // Calls `ref` synchronously for each path found by the `FileEnumerator`. Each
+  // path will incorporate the `root_path` passed in the constructor:
+  // "<root_path>/file_name.txt". If the `root_path` is absolute, then so will
+  // be the paths provided in the `ref` invocations.
+  void ForEach(FunctionRef<void(const FilePath& path)> ref);
+
   // Returns the next file or an empty string if there are no more results.
   //
   // The returned path will incorporate the |root_path| passed in the
@@ -160,6 +221,7 @@ class BASE_EXPORT FileEnumerator {
   // particular, the GetLastModifiedTime() for the .. directory is 1601-01-01
   // on Fuchsia (https://crbug.com/1106172) and is equal to the last modified
   // time of the current directory on Windows (https://crbug.com/1119546).
+  // Must not be used with FileType::NAMES_ONLY.
   FileInfo GetInfo() const;
 
   // Once |Next()| returns an empty path, enumeration has been terminated. If
@@ -176,25 +238,43 @@ class BASE_EXPORT FileEnumerator {
 
   bool IsPatternMatched(const FilePath& src) const;
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
+  const WIN32_FIND_DATA& find_data() const {
+    return *ChromeToWindowsType(&find_data_);
+  }
+
   // True when find_data_ is valid.
   bool has_find_data_ = false;
-  WIN32_FIND_DATA find_data_;
+  CHROME_WIN32_FIND_DATA find_data_ = {};
   HANDLE find_handle_ = INVALID_HANDLE_VALUE;
-#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
+
+#elif BUILDFLAG(IS_POSIX) || BUILDFLAG(IS_FUCHSIA)
+  // Marks the given inode as visited. Returns true if it is the first time that
+  // it got marked as visited.
+  bool MarkVisited(const stat_wrapper_t& st) {
+    return visited_[st.st_dev].insert(st.st_ino).second;
+  }
+
   // The files in the current directory
   std::vector<FileInfo> directory_entries_;
 
-  // Set of visited directories. Used to prevent infinite looping along
-  // circular symlinks.
-  std::unordered_set<ino_t> visited_directories_;
+#if BUILDFLAG(IS_ANDROID)
+  // The Android NDK (r23) does not declare `st_dev` as a `dev_t`, nor `st_ino`
+  // as an `ino_t`, hence the need for these decltypes.
+  using dev_t = decltype(stat_wrapper_t::st_dev);
+  using ino_t = decltype(stat_wrapper_t::st_ino);
+#endif
+
+  // Set of visited directories. Used to prevent infinite looping along circular
+  // symlinks and bind-mounts.
+  std::unordered_map<dev_t, std::unordered_set<ino_t>> visited_;
 
   // The next entry to use from the directory_entries_ vector
   size_t current_directory_entry_;
 #endif
   FilePath root_path_;
   const bool recursive_;
-  const int file_type_;
+  int file_type_;
   FilePath::StringType pattern_;
   const FolderSearchPolicy folder_search_policy_;
   const ErrorPolicy error_policy_;
@@ -203,6 +283,12 @@ class BASE_EXPORT FileEnumerator {
   // A stack that keeps track of which subdirectories we still need to
   // enumerate in the breadth-first search.
   base::stack<FilePath> pending_paths_;
+#if BUILDFLAG(IS_ANDROID)
+  // Matches pending_paths_, but with display names.
+  base::stack<std::vector<std::string>> pending_subdirs_;
+  // Display names of subdirs of the current entry.
+  std::vector<std::string> subdirs_;
+#endif
 };
 
 }  // namespace base

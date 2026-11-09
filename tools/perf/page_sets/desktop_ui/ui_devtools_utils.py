@@ -1,4 +1,4 @@
-# Copyright 2021 The Chromium Authors. All rights reserved.
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
@@ -33,12 +33,13 @@ by searching UI element classes with the exact name.
 import sys
 import time
 
-from telemetry.internal.browser.ui_devtools import \
-    MOUSE_EVENT_TYPE_MOUSE_PRESSED, \
-    MOUSE_EVENT_TYPE_MOUSE_RELEASED, \
-    MOUSE_EVENT_BUTTON_LEFT, \
-    KEY_EVENT_TYPE_KEY_PRESSED, \
-    KEY_EVENT_TYPE_KEY_RELEASED
+from telemetry.internal.browser.ui_devtools import (
+  MOUSE_EVENT_TYPE_MOUSE_PRESSED,
+  MOUSE_EVENT_TYPE_MOUSE_RELEASED,
+  MOUSE_EVENT_BUTTON_LEFT,
+  KEY_EVENT_TYPE_KEY_PRESSED,
+  KEY_EVENT_TYPE_KEY_RELEASED,
+)
 from telemetry.internal.actions.key_event import GetKey
 
 
@@ -54,23 +55,34 @@ COMMAND_DOWN = 1 << 4
 PLATFORM_ACCELERATOR = COMMAND_DOWN if IsMac() else CONTROL_DOWN
 
 
-def ClickOn(ui_devtools,
-            class_name,
-            index=0,
-            x=0,
-            y=0,
-            button=MOUSE_EVENT_BUTTON_LEFT,
-            click_interval=0.2):
+def ClickOn(
+  ui_devtools,
+  class_name=None,
+  element_id=None,
+  index=0,
+  x=0,
+  y=0,
+  button=MOUSE_EVENT_BUTTON_LEFT,
+  click_interval=0.2,
+):
   '''
   Send mouse pressed and release events to an UI element.
   '''
   # "" means exact search for UI Devtools.
-  node_id = ui_devtools.QueryNodes('"%s"' % class_name)[index]
-  ui_devtools.DispatchMouseEvent(node_id, MOUSE_EVENT_TYPE_MOUSE_PRESSED, x, y,
-                                 button)
+  if class_name is not None:
+    node_id = ui_devtools.QueryNodes('"%s"' % class_name)[index]
+  elif element_id is not None:
+    node_id = ui_devtools.QueryNodes('id:%s' % element_id)[index]
+  else:
+    raise ValueError('Invalid class_name or element_id!')
+
+  ui_devtools.DispatchMouseEvent(
+    node_id, MOUSE_EVENT_TYPE_MOUSE_PRESSED, x, y, button
+  )
   time.sleep(click_interval)
-  ui_devtools.DispatchMouseEvent(node_id, MOUSE_EVENT_TYPE_MOUSE_RELEASED, x, y,
-                                 button)
+  ui_devtools.DispatchMouseEvent(
+    node_id, MOUSE_EVENT_TYPE_MOUSE_RELEASED, x, y, button
+  )
   time.sleep(click_interval)
 
 
@@ -80,15 +92,13 @@ def PressKey(ui_devtools, node_id, key_name, flags=0, key_interval=0.1):
   third_party/catapult/telemetry/telemetry/internal/actions/key_event.py
   '''
   key_code, _ = GetKey(key_name)
-  ui_devtools.DispatchKeyEvent(node_id,
-                               KEY_EVENT_TYPE_KEY_PRESSED,
-                               key_code,
-                               flags=flags)
+  ui_devtools.DispatchKeyEvent(
+    node_id, KEY_EVENT_TYPE_KEY_PRESSED, key_code, flags=flags
+  )
   time.sleep(key_interval)
-  ui_devtools.DispatchKeyEvent(node_id,
-                               KEY_EVENT_TYPE_KEY_RELEASED,
-                               key_code,
-                               flags=flags)
+  ui_devtools.DispatchKeyEvent(
+    node_id, KEY_EVENT_TYPE_KEY_RELEASED, key_code, flags=flags
+  )
   time.sleep(key_interval)
 
 
@@ -97,8 +107,7 @@ def InputText(ui_devtools, node_id, text, key_interval=0.1):
   Send text as character events to an UI element.
   '''
   for ch in text:
-    ui_devtools.DispatchKeyEvent(node_id,
-                                 KEY_EVENT_TYPE_KEY_PRESSED,
-                                 key=ord(ch),
-                                 is_char=True)
+    ui_devtools.DispatchKeyEvent(
+      node_id, KEY_EVENT_TYPE_KEY_PRESSED, key=ord(ch), is_char=True
+    )
     time.sleep(key_interval)

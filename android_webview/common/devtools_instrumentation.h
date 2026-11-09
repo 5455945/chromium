@@ -1,11 +1,10 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef ANDROID_WEBVIEW_COMMON_DEVTOOLS_INSTRUMENTATION_H_
 #define ANDROID_WEBVIEW_COMMON_DEVTOOLS_INSTRUMENTATION_H_
 
-#include "base/macros.h"
 #include "base/trace_event/trace_event.h"
 
 namespace android_webview {
@@ -17,22 +16,22 @@ constexpr const char* Category() {
   // known at compile-time.
   return "Java,devtools,disabled-by-default-devtools.timeline";
 }
-const char kEmbedderCallback[] = "EmbedderCallback";
-const char kCallbackNameArgument[] = "callbackName";
+constexpr char kEmbedderCallback[] = "EmbedderCallback";
+constexpr char kCallbackNameArgument[] = "callbackName";
 }  // namespace internal
 
 class ScopedEmbedderCallbackTask {
  public:
   explicit ScopedEmbedderCallbackTask(const char* callback_name) {
-    TRACE_EVENT_BEGIN1(internal::Category(), internal::kEmbedderCallback,
-                       internal::kCallbackNameArgument, callback_name);
-  }
-  ~ScopedEmbedderCallbackTask() {
-    TRACE_EVENT_END0(internal::Category(), internal::kEmbedderCallback);
+    TRACE_EVENT_BEGIN(internal::Category(), internal::kEmbedderCallback,
+                      internal::kCallbackNameArgument, callback_name);
   }
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(ScopedEmbedderCallbackTask);
+  ScopedEmbedderCallbackTask(const ScopedEmbedderCallbackTask&) = delete;
+  ScopedEmbedderCallbackTask& operator=(const ScopedEmbedderCallbackTask&) =
+      delete;
+
+  ~ScopedEmbedderCallbackTask() { TRACE_EVENT_END(internal::Category()); }
 };
 
 }  // namespace devtools_instrumentation

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,20 @@
 #define COMPONENTS_SEND_TAB_TO_SELF_SEND_TAB_TO_SELF_SYNC_SERVICE_H_
 
 #include <memory>
+#include <optional>
 
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "components/sync/model/model_type_store_service.h"
+#include "components/send_tab_to_self/entry_point_display_reason.h"
+#include "components/send_tab_to_self/send_tab_to_self_model_observer.h"
+#include "components/sync/model/data_type_store_service.h"
+#include "components/sync/service/sync_service_observer.h"
 #include "components/version_info/channel.h"
+
+class GURL;
+class PrefService;
 
 namespace history {
 class HistoryService;
@@ -18,38 +27,74 @@ class HistoryService;
 
 namespace syncer {
 class DeviceInfoTracker;
-class ModelTypeControllerDelegate;
+class DataTypeControllerDelegate;
+class SyncService;
 }  // namespace syncer
 
+namespace sync_sessions {
+class SessionSyncService;
+}  // namespace sync_sessions
+
 namespace send_tab_to_self {
-class FakeSendTabToSelfModel;
 class SendTabToSelfBridge;
 class SendTabToSelfModel;
 
 // KeyedService responsible for send tab to self sync.
-class SendTabToSelfSyncService : public KeyedService {
+class SendTabToSelfSyncService : public KeyedService,
+                                 public syncer::SyncServiceObserver,
+                                 public SendTabToSelfModelObserver {
  public:
   SendTabToSelfSyncService(
       version_info::Channel channel,
-      syncer::OnceModelTypeStoreFactory create_store_callback,
+      syncer::OnceDataTypeStoreFactory create_store_callback,
       history::HistoryService* history_service,
-      syncer::DeviceInfoTracker* device_info_tracker);
+      PrefService* pref_service,
+      syncer::DeviceInfoTracker* device_info_tracker,
+      sync_sessions::SessionSyncService* session_sync_service);
+
+  SendTabToSelfSyncService(const SendTabToSelfSyncService&) = delete;
+  SendTabToSelfSyncService& operator=(const SendTabToSelfSyncService&) = delete;
+
   ~SendTabToSelfSyncService() override;
 
+  // KeyedService implementation.
+  void Shutdown() override;
+
+  // Hooks the cyclic dependency.
+  void OnSyncServiceInitialized(syncer::SyncService* sync_service);
+
+  // See EntryPointDisplayReason definition. Virtual for testing.
+  virtual std::optional<EntryPointDisplayReason> GetEntryPointDisplayReason(
+      const GURL& url_to_share);
+
+  // Never returns null.
   virtual SendTabToSelfModel* GetSendTabToSelfModel();
 
-  virtual base::WeakPtr<syncer::ModelTypeControllerDelegate>
+  virtual base::WeakPtr<syncer::DataTypeControllerDelegate>
   GetControllerDelegate();
 
  protected:
-  // Default constructor for unit tests
+  // Default constructor for unit tests.
   SendTabToSelfSyncService();
 
  private:
-  std::unique_ptr<SendTabToSelfBridge> bridge_;
-  std::unique_ptr<FakeSendTabToSelfModel> fake_model_;
+  // SyncServiceObserver implementation.
+  void OnSyncShutdown(syncer::SyncService* sync_service) override;
 
-  DISALLOW_COPY_AND_ASSIGN(SendTabToSelfSyncService);
+  // SendTabToSelfModelObserver implementation.
+  void OnEntryAddedLocally(const SendTabToSelfEntry* entry) override;
+
+  std::unique_ptr<SendTabToSelfBridge> bridge_;
+  raw_ptr<PrefService> const pref_service_;
+
+  // Cyclic dependency, initialized in OnSyncServiceInitialized(), reset in
+  // OnSyncShutdown().
+  raw_ptr<syncer::SyncService> sync_service_ = nullptr;
+
+  base::ScopedObservation<syncer::SyncService, syncer::SyncServiceObserver>
+      sync_service_observation_{this};
+  base::ScopedObservation<SendTabToSelfModel, SendTabToSelfModelObserver>
+      model_observation_{this};
 };
 
 }  // namespace send_tab_to_self

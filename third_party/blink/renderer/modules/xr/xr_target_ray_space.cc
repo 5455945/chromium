@@ -1,9 +1,10 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/xr/xr_target_ray_space.h"
 
+#include <string>
 #include <utility>
 
 #include "third_party/blink/renderer/modules/xr/xr_input_source.h"
@@ -15,7 +16,7 @@ namespace blink {
 XRTargetRaySpace::XRTargetRaySpace(XRSession* session, XRInputSource* source)
     : XRSpace(session), input_source_(source) {}
 
-absl::optional<TransformationMatrix> XRTargetRaySpace::MojoFromNative() {
+std::optional<gfx::Transform> XRTargetRaySpace::MojoFromNative() const {
   auto mojo_from_viewer = session()->GetMojoFrom(
       device::mojom::blink::XRReferenceSpaceType::kViewer);
   switch (input_source_->TargetRayMode()) {
@@ -24,7 +25,7 @@ absl::optional<TransformationMatrix> XRTargetRaySpace::MojoFromNative() {
       // viewer space is the input space.
       // So our result will be mojo_from_viewer * viewer_from_pointer
       if (!(mojo_from_viewer && input_source_->InputFromPointer()))
-        return absl::nullopt;
+        return std::nullopt;
 
       return *mojo_from_viewer * *(input_source_->InputFromPointer());
     }
@@ -38,7 +39,7 @@ absl::optional<TransformationMatrix> XRTargetRaySpace::MojoFromNative() {
       // mojo_from_pointer is just: MojoFromInput*InputFromPointer;
       if (!(input_source_->MojoFromInput() &&
             input_source_->InputFromPointer()))
-        return absl::nullopt;
+        return std::nullopt;
 
       return *(input_source_->MojoFromInput()) *
              *(input_source_->InputFromPointer());
@@ -66,6 +67,10 @@ bool XRTargetRaySpace::IsStationary() const {
   // Target ray space is a space derived off of input source, so it is not
   // considered stationary.
   return false;
+}
+
+bool XRTargetRaySpace::IsInputSpace() const {
+  return true;
 }
 
 void XRTargetRaySpace::Trace(Visitor* visitor) const {

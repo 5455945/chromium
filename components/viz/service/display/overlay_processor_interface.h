@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,117 +6,88 @@
 #define COMPONENTS_VIZ_SERVICE_DISPLAY_OVERLAY_PROCESSOR_INTERFACE_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "base/containers/flat_map.h"
-#include "base/macros.h"
 #include "build/build_config.h"
 #include "components/viz/common/quads/aggregated_render_pass.h"
+#include "components/viz/common/resources/shared_image_format.h"
 #include "components/viz/service/display/aggregated_frame.h"
 #include "components/viz/service/display/output_surface.h"
 #include "components/viz/service/display/overlay_candidate.h"
 #include "components/viz/service/viz_service_export.h"
+#include "gpu/command_buffer/common/mailbox.h"
+#include "gpu/command_buffer/service/gpu_task_scheduler_helper.h"
 #include "gpu/ipc/common/surface_handle.h"
-#include "gpu/ipc/gpu_task_scheduler_helper.h"
+#include "ui/gfx/ca_layer_result.h"
+#include "ui/gfx/color_space.h"
+#include "ui/gfx/geometry/rrect_f.h"
+#include "ui/gfx/geometry/size.h"
+#include "ui/gfx/hdr_metadata.h"
+#include "ui/gfx/overlay_priority_hint.h"
+#include "ui/gfx/swap_result.h"
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 #include "components/viz/service/display/dc_layer_overlay.h"
 #endif
 
-#if defined(OS_APPLE)
+#if BUILDFLAG(IS_APPLE)
 #include "components/viz/service/display/ca_layer_overlay.h"
 #endif
 
-namespace cc {
-class DisplayResourceProvider;
+namespace gpu {
+class SharedImageManager;
+}
+
+namespace gfx {
+class DisplayColorSpaces;
 }
 
 namespace viz {
 struct DebugRendererSettings;
+class DisplayResourceProvider;
 class OutputSurface;
 class RendererSettings;
 
 // This class is called inside the DirectRenderer to separate the contents that
-// should be send into the overlay system and the contents that requires
+// should be sent into the overlay system and the contents that requires
 // compositing from the DirectRenderer. This class has different subclass
 // implemented by different platforms. This class defines the minimal interface
 // for overlay processing that each platform needs to implement.
 class VIZ_SERVICE_EXPORT OverlayProcessorInterface {
  public:
-#if defined(OS_APPLE)
-  using CandidateList = CALayerOverlayList;
-#elif defined(OS_WIN)
-  using CandidateList = DCLayerOverlayList;
-#else
-  // Default.
+  using PlatformOverlayCandidate = OverlayCandidate;
   using CandidateList = OverlayCandidateList;
-#endif
-
   using FilterOperationsMap =
-      base::flat_map<AggregatedRenderPassId, cc::FilterOperations*>;
+      base::flat_map<AggregatedRenderPassId,
+                     raw_ptr<cc::FilterOperations, CtnExperimental>>;
 
   virtual bool DisableSplittingQuads() const;
 
-  // Used by Window's DCLayerOverlay system and OverlayProcessorUsingStrategy.
+  // Used by DCLayerOverlayProcessor and OverlayProcessorUsingStrategy.
   static void RecordOverlayDamageRectHistograms(
       bool is_overlay,
       bool has_occluding_surface_damage,
       bool zero_damage_rect);
-
-  // Data needed to represent |OutputSurface| as an overlay plane. Due to the
-  // default values for the primary plane, this is a partial list of
-  // OverlayCandidate.
-  struct VIZ_SERVICE_EXPORT OutputSurfaceOverlayPlane {
-    // Display's rotation information.
-    gfx::OverlayTransform transform;
-    // Rect on the display to position to. This takes in account of Display's
-    // rotation.
-    gfx::RectF display_rect;
-    // Specifies the region within the buffer to be cropped and (maybe)scaled to
-    // place inside |display_rect|.
-    gfx::RectF uv_rect;
-    // Size of output surface in pixels.
-    gfx::Size resource_size;
-    // Format of the buffer to scanout.
-    gfx::BufferFormat format;
-    // ColorSpace of the buffer for scanout.
-    gfx::ColorSpace color_space;
-    // Enable blending when we have underlay.
-    bool enable_blending;
-    // TODO(weiliangc): Should be replaced by SharedImage mailbox.
-    // Gpu fence to wait for before overlay is ready for display.
-    unsigned gpu_fence_id;
-    // Mailbox corresponding to the buffer backing the primary plane.
-    gpu::Mailbox mailbox;
-  };
-
-  // TODO(weiliangc): Eventually the asymmetry between primary plane and
-  // non-primary places should be internalized and should not have a special
-  // API.
-  static OutputSurfaceOverlayPlane ProcessOutputSurfaceAsOverlay(
-      const gfx::Size& viewport_size,
-      const gfx::Size& resource_size,
-      const gfx::BufferFormat& buffer_format,
-      const gfx::ColorSpace& color_space,
-      bool has_alpha,
-      const gpu::Mailbox& mailbox);
 
   static std::unique_ptr<OverlayProcessorInterface> CreateOverlayProcessor(
       OutputSurface* output_surface,
       gpu::SurfaceHandle surface_handle,
       const OutputSurface::Capabilities& capabilities,
       DisplayCompositorMemoryAndTaskController* display_controller,
-      gpu::SharedImageInterface* shared_image_interface,
+      gpu::SharedImageManager* shared_image_manager,
       const RendererSettings& renderer_settings,
       const DebugRendererSettings* debug_settings);
+
+  OverlayProcessorInterface(const OverlayProcessorInterface&) = delete;
+  OverlayProcessorInterface& operator=(const OverlayProcessorInterface&) =
+      delete;
 
   virtual ~OverlayProcessorInterface() = default;
 
   virtual bool IsOverlaySupported() const = 0;
-  // Returns a bounding rectangle of the last set of overlay planes scheduled.
-  // It's expected to be called after ProcessForOverlays at frame N-1 has been
-  // called and before GetAndResetOverlayDamage at frame N.
-  virtual gfx::Rect GetPreviousFrameOverlaysBoundingRect() const = 0;
+
   virtual gfx::Rect GetAndResetOverlayDamage() = 0;
 
   // Returns true if the platform supports hw overlays and surface occluding
@@ -124,36 +95,49 @@ class VIZ_SERVICE_EXPORT OverlayProcessorInterface {
   // processor.
   virtual bool NeedsSurfaceDamageRectList() const = 0;
 
-  // Attempt to replace quads from the specified root render pass with overlays
+  struct PrimaryPlaneParams {
+    const gfx::Size viewport_size;
+    const gfx::Size resource_size_in_pixels;
+    bool supports_hdr = false;
+    bool is_opaque = false;
+
+    // Used by Ozone to create a dummy buffer to test overlay support.
+    const SharedImageFormat si_format;
+    // Used by Ozone to create a dummy buffer to test overlay support. Used by
+    // Android to determine the output color space, especially for HDR output.
+    const gfx::ColorSpace color_space;
+
+    // HDR metadata describing the contents of the primary plane. See
+    // ComputePrimaryPlaneHDRMetadata().
+    gfx::HDRMetadata hdr_metadata;
+
+#if BUILDFLAG(IS_OZONE)
+    // Ozone requires checking for overlay support with an actual buffer. To
+    // create the primary plane, `OverlayProcessorOzone` will use an existing
+    // `overlay_testing_mailbox` (usually, the last swapped primary plane
+    // buffer) or will make a dummy buffer using `si_format` and `color_space`.
+    const gpu::Mailbox overlay_testing_mailbox;
+#endif
+  };
+
+  // Attempts to replace quads from the specified root render pass with overlays
   // or CALayers. This must be called every frame.
   virtual void ProcessForOverlays(
       DisplayResourceProvider* resource_provider,
       AggregatedRenderPassList* render_passes,
-      const skia::Matrix44& output_color_matrix,
-      const FilterOperationsMap& render_pass_filters,
-      const FilterOperationsMap& render_pass_backdrop_filters,
+      const SkM44& output_color_matrix,
       SurfaceDamageRectList surface_damage_rect_list,
-      OutputSurfaceOverlayPlane* output_surface_plane,
+      const PrimaryPlaneParams& primary_plane_params,
       CandidateList* overlay_candidates,
-      gfx::Rect* damage_rect,
-      std::vector<gfx::Rect>* content_bounds) = 0;
-
-  // For Mac, if we successfully generated a candidate list for CALayerOverlay,
-  // we no longer need the |output_surface_plane|. This function takes a pointer
-  // to the absl::optional instance so the instance can be reset.
-  // TODO(weiliangc): Internalize the |output_surface_plane| inside the overlay
-  // processor.
-  virtual void AdjustOutputSurfaceOverlay(
-      absl::optional<OutputSurfaceOverlayPlane>* output_surface_plane) = 0;
+      gfx::Rect* damage_rect) = 0;
 
   // Before the overlay refactor to use OverlayProcessorOnGpu, overlay
   // candidates are stored inside DirectRenderer. Those overlay candidates are
-  // later sent over to the GPU thread by GLRenderer or SkiaRenderer. This
-  // helper function will be called by DirectRenderer to take these overlay
-  // candidates inside overlay processor to avoid sending over DirectRenderer
-  // implementation. This is overridden by each platform that is ready to send
-  // overlay candidates inside |OverlayProcessor|. Must be called before
-  // ScheduleOverlays().
+  // later sent over to the GPU thread by SkiaRenderer. This helper function
+  // will be called by DirectRenderer to take these overlay candidates inside
+  // overlay processor to avoid sending over DirectRenderer implementation. This
+  // is overridden by each platform that is ready to send overlay candidates
+  // inside |OverlayProcessor|. Must be called before ScheduleOverlays().
   virtual void TakeOverlayCandidates(CandidateList* candidate_list) {}
 
   // TODO(weiliangc): Make it pure virtual after it is implemented by every
@@ -164,8 +148,7 @@ class VIZ_SERVICE_EXPORT OverlayProcessorInterface {
   // approximate signale for when the overlays are presented.
   virtual void OverlayPresentationComplete();
 
-  // These two functions are used by Android SurfaceControl, and SetViewportSize
-  // is also used for Windows DC layers.
+  // These two functions are used by Android SurfaceControl.
   virtual void SetDisplayTransformHint(gfx::OverlayTransform transform) {}
   virtual void SetViewportSize(const gfx::Size& size) {}
 
@@ -173,14 +156,39 @@ class VIZ_SERVICE_EXPORT OverlayProcessorInterface {
   // benefits of individual overlay candidates.
   virtual void SetFrameSequenceNumber(uint64_t frame_sequence_number) {}
 
-  // If true, video capture is enabled for this frame.
-  virtual void SetIsVideoCaptureEnabled(bool enabled) {}
+  // If true, page fullscreen mode is enabled for this frame.
+  virtual void SetIsPageFullscreen(bool enabled) {}
+
+  virtual gfx::CALayerResult GetCALayerErrorCode() const;
+
+  // Supports gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_90 and
+  // gfx::OVERLAY_TRANSFORM_FLIP_VERTICAL_CLOCKWISE_270 transforms.
+  virtual bool SupportsFlipRotateTransform() const;
+
+  // This is used by the overlay processor on platforms that support delegated
+  // ink. It marks the current frame as having delegated ink, and is cleared in
+  // the next ProcessForOverlays call.
+  virtual void SetFrameHasDelegatedInk() {}
+
+  // Notifies the OverlayProcessor about the status of the last swap.
+  virtual void OnSwapBuffersComplete(gfx::SwapResult swap_result) {}
+
+  // Returns HDR metadata that describes the primary plane after the renderer
+  // has composited the root render pass into `output_color_space`. All HDR
+  // content is tone mapped to at most the display's HDR headroom, so the peak
+  // luminance of the plane is the SDR white level scaled by that headroom when
+  // the root render pass has HDR content, and the SDR white level otherwise.
+  // The frame-average light level is reported as the SDR white level.
+  // Returns empty metadata if `output_color_space` is not HDR.
+  static gfx::HDRMetadata ComputePrimaryPlaneHDRMetadata(
+      const gfx::DisplayColorSpaces& display_color_spaces,
+      const gfx::ColorSpace& output_color_space,
+      gfx::ContentColorUsage content_color_usage);
 
  protected:
   OverlayProcessorInterface() = default;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(OverlayProcessorInterface);
+  static OverlayCandidate CreatePrimaryPlane(const PrimaryPlaneParams& params);
 };
 
 }  // namespace viz

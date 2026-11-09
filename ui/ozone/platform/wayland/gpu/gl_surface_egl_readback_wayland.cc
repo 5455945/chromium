@@ -1,8 +1,10 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/ozone/platform/wayland/gpu/gl_surface_egl_readback_wayland.h"
+
+#include <utility>
 
 #include "base/memory/shared_memory_mapping.h"
 #include "base/memory/unsafe_shared_memory_region.h"
@@ -27,9 +29,12 @@ GLSurfaceEglReadbackWayland::PixelBuffer::PixelBuffer(
 GLSurfaceEglReadbackWayland::PixelBuffer::~PixelBuffer() = default;
 
 GLSurfaceEglReadbackWayland::GLSurfaceEglReadbackWayland(
+    gl::GLDisplayEGL* display,
     gfx::AcceleratedWidget widget,
     WaylandBufferManagerGpu* buffer_manager)
-    : widget_(widget), buffer_manager_(buffer_manager) {
+    : GLSurfaceEglReadback(display),
+      widget_(widget),
+      buffer_manager_(buffer_manager) {
   buffer_manager_->RegisterSurface(widget_, this);
 }
 
@@ -45,6 +50,7 @@ bool GLSurfaceEglReadbackWayland::Resize(const gfx::Size& size,
                                          const gfx::ColorSpace& color_space,
                                          bool has_alpha) {
   DestroyBuffers();
+  surface_scale_factor_ = scale_factor;
   pending_frames_ = 0;
 
   if (!PbufferGLSurfaceEGL::Resize(size, scale_factor, color_space, has_alpha))
@@ -82,24 +88,21 @@ bool GLSurfaceEglReadbackWayland::Resize(const gfx::Size& size,
   return true;
 }
 
-bool GLSurfaceEglReadbackWayland::IsOffscreen() {
-  return false;
-}
-
 bool GLSurfaceEglReadbackWayland::SupportsAsyncSwap() {
   return true;
 }
 
 gfx::SwapResult GLSurfaceEglReadbackWayland::SwapBuffers(
-    PresentationCallback callback) {
+    PresentationCallback callback,
+    gfx::FrameData data) {
   NOTREACHED();
-  return gfx::SwapResult::SWAP_FAILED;
 }
 
 void GLSurfaceEglReadbackWayland::SwapBuffersAsync(
     SwapCompletionCallback completion_callback,
-    PresentationCallback presentation_callback) {
-  DCHECK(pending_frames_ < kMaxBuffers);
+    PresentationCallback presentation_callback,
+    gfx::FrameData data) {
+  CHECK(pending_frames_ < kMaxBuffers, base::NotFatalUntil::M163);
 
   // Increase pending frames number.
   ++pending_frames_;
@@ -107,17 +110,20 @@ void GLSurfaceEglReadbackWayland::SwapBuffersAsync(
   completion_callbacks_.push_back(std::move(completion_callback));
   presentation_callbacks_.push_back(std::move(presentation_callback));
 
-  DCHECK(!available_buffers_.empty());
+  CHECK(!available_buffers_.empty(), base::NotFatalUntil::M163);
   in_flight_pixel_buffers_.push_back(std::move(available_buffers_.front()));
   auto* next_buffer = in_flight_pixel_buffers_.back().get();
   available_buffers_.erase(available_buffers_.begin());
 
-  CHECK(next_buffer->shm_mapping_.memory());
-  ReadPixels(next_buffer->shm_mapping_.memory());
+  ReadPixels(next_buffer->shm_mapping_);
 
   const auto bounds = gfx::Rect(GetSize());
-  buffer_manager_->CommitBuffer(widget_, next_buffer->buffer_id_, bounds,
-                                bounds);
+  constexpr bool enable_blend_for_shadow = true;
+  buffer_manager_->CommitBuffer(widget_, next_buffer->buffer_id_,
+                                /*frame_id*/ next_buffer->buffer_id_,
+                                std::move(data), bounds,
+                                enable_blend_for_shadow, gfx::RoundedCornersF(),
+                                surface_scale_factor_, bounds);
 }
 
 gfx::SurfaceOrigin GLSurfaceEglReadbackWayland::GetOrigin() const {
@@ -131,43 +137,44 @@ GLSurfaceEglReadbackWayland::~GLSurfaceEglReadbackWayland() {
 }
 
 void GLSurfaceEglReadbackWayland::OnSubmission(
-    uint32_t buffer_id,
+    uint32_t frame_id,
     const gfx::SwapResult& swap_result,
     gfx::GpuFenceHandle release_fence) {
-  DCHECK(release_fence.is_null());
+  CHECK(release_fence.is_null(), base::NotFatalUntil::M163);
   --pending_frames_;
 
   if (in_flight_pixel_buffers_.front()) {
     if (displayed_buffer_)
       available_buffers_.push_back(std::move(displayed_buffer_));
     displayed_buffer_ = std::move(in_flight_pixel_buffers_.front());
-    DCHECK_EQ(displayed_buffer_->buffer_id_, buffer_id);
+    CHECK_EQ(displayed_buffer_->buffer_id_, frame_id,
+             base::NotFatalUntil::M163);
   }
 
   in_flight_pixel_buffers_.pop_front();
 
-  DCHECK(!completion_callbacks_.empty());
+  CHECK(!completion_callbacks_.empty(), base::NotFatalUntil::M163);
   std::move(completion_callbacks_.front())
       .Run(gfx::SwapCompletionResult(swap_result));
   completion_callbacks_.erase(completion_callbacks_.begin());
 }
 
 void GLSurfaceEglReadbackWayland::OnPresentation(
-    uint32_t buffer_id,
+    uint32_t frame_id,
     const gfx::PresentationFeedback& feedback) {
-  DCHECK(!presentation_callbacks_.empty());
+  CHECK(!presentation_callbacks_.empty(), base::NotFatalUntil::M163);
   std::move(presentation_callbacks_.front()).Run(feedback);
   presentation_callbacks_.erase(presentation_callbacks_.begin());
 }
 
 void GLSurfaceEglReadbackWayland::DestroyBuffers() {
   for (const auto& pixel_buffer : available_buffers_)
-    buffer_manager_->DestroyBuffer(widget_, pixel_buffer->buffer_id_);
+    buffer_manager_->DestroyBuffer(pixel_buffer->buffer_id_);
   for (const auto& pixel_buffer : in_flight_pixel_buffers_)
-    buffer_manager_->DestroyBuffer(widget_, pixel_buffer->buffer_id_);
+    buffer_manager_->DestroyBuffer(pixel_buffer->buffer_id_);
 
   if (displayed_buffer_)
-    buffer_manager_->DestroyBuffer(widget_, displayed_buffer_->buffer_id_);
+    buffer_manager_->DestroyBuffer(displayed_buffer_->buffer_id_);
 
   available_buffers_.clear();
   in_flight_pixel_buffers_.clear();

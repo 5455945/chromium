@@ -26,7 +26,6 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_OFFLINE_AUDIO_COMPLETION_EVENT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_OFFLINE_AUDIO_COMPLETION_EVENT_H_
 
-#include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_offline_audio_completion_event_init.h"
 #include "third_party/blink/renderer/modules/event_modules.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_buffer.h"
@@ -40,13 +39,11 @@ class OfflineAudioCompletionEvent final : public Event {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
-  static OfflineAudioCompletionEvent* Create();
   static OfflineAudioCompletionEvent* Create(AudioBuffer* rendered_buffer);
   static OfflineAudioCompletionEvent* Create(
       const AtomicString& type,
       const OfflineAudioCompletionEventInit*);
 
-  OfflineAudioCompletionEvent();
   explicit OfflineAudioCompletionEvent(AudioBuffer* rendered_buffer);
   explicit OfflineAudioCompletionEvent(const AtomicString& type,
                                        const OfflineAudioCompletionEventInit*);

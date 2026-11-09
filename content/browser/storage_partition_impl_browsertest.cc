@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,15 +6,18 @@
 
 #include <string>
 
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/bind.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/client_certificate_delegate.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/child_process_id.h"
 #include "content/public/common/content_client.h"
 #include "content/public/test/browser_test.h"
 #include "content/public/test/content_browser_test.h"
+#include "content/public/test/content_browser_test_content_browser_client.h"
 #include "content/public/test/simple_url_loader_test_helper.h"
 #include "content/public/test/url_loader_interceptor.h"
 #include "content/shell/browser/shell.h"
@@ -26,6 +29,7 @@
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/simple_url_loader.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_loader_factory.mojom.h"
@@ -52,7 +56,7 @@ class StoragePartitionImplBrowsertest : public ContentBrowserTest {
  private:
 };
 
-class ClientCertBrowserClient : public ContentBrowserClient {
+class ClientCertBrowserClient : public ContentBrowserTestContentBrowserClient {
  public:
   explicit ClientCertBrowserClient(
       base::OnceClosure select_certificate_callback,
@@ -60,12 +64,17 @@ class ClientCertBrowserClient : public ContentBrowserClient {
       : select_certificate_callback_(std::move(select_certificate_callback)),
         delete_delegate_callback_(std::move(delete_delegate_callback)) {}
 
+  ClientCertBrowserClient(const ClientCertBrowserClient&) = delete;
+  ClientCertBrowserClient& operator=(const ClientCertBrowserClient&) = delete;
+
   ~ClientCertBrowserClient() override = default;
 
   // Returns a cancellation callback for the imaginary client certificate
   // dialog. The callback simulates Android's cancellation callback by deleting
   // |delegate|.
   base::OnceClosure SelectClientCertificate(
+      BrowserContext* browser_context,
+      ChildProcessId process_id,
       WebContents* web_contents,
       net::SSLCertRequestInfo* cert_request_info,
       net::ClientCertIdentityList client_certs,
@@ -84,7 +93,6 @@ class ClientCertBrowserClient : public ContentBrowserClient {
   scoped_refptr<base::SequencedTaskRunner> task_runner_;
   base::OnceClosure select_certificate_callback_;
   base::OnceClosure delete_delegate_callback_;
-  DISALLOW_COPY_AND_ASSIGN(ClientCertBrowserClient);
 };
 
 class ClientCertBrowserTest : public ContentBrowserTest {
@@ -100,8 +108,6 @@ class ClientCertBrowserTest : public ContentBrowserTest {
     https_test_server_.ServeFilesFromSourceDirectory(GetTestDataFilePath());
   }
 
-  ~ClientCertBrowserTest() override = default;
-
  protected:
   void SetUpOnMainThread() override {
     ContentBrowserTest::SetUpOnMainThread();
@@ -112,8 +118,6 @@ class ClientCertBrowserTest : public ContentBrowserTest {
     client_ = std::make_unique<ClientCertBrowserClient>(
         select_certificate_run_loop_->QuitClosure(),
         delete_delegate_run_loop_->QuitClosure());
-
-    content::SetBrowserClientForTesting(client_.get());
   }
 
   net::EmbeddedTestServer https_test_server_;
@@ -163,9 +167,9 @@ IN_PROC_BROWSER_TEST_F(StoragePartitionImplBrowsertest, NetworkContext) {
 
   network::mojom::URLLoaderFactoryParamsPtr params =
       network::mojom::URLLoaderFactoryParams::New();
-  params->process_id = network::mojom::kBrowserProcessId;
+  params->process_id = network::OriginatingProcessId::browser();
   params->automatically_assign_isolation_info = true;
-  params->is_corb_enabled = false;
+  params->is_orb_enabled = false;
   mojo::Remote<network::mojom::URLLoaderFactory> loader_factory;
   shell()
       ->web_contents()
@@ -191,10 +195,7 @@ IN_PROC_BROWSER_TEST_F(StoragePartitionImplBrowsertest, NetworkContext) {
   ASSERT_TRUE(client.response_head()->headers);
   EXPECT_EQ(200, client.response_head()->headers->response_code());
 
-  std::string foo_header_value;
-  ASSERT_TRUE(client.response_head()->headers->GetNormalizedHeader(
-      "foo", &foo_header_value));
-  EXPECT_EQ("bar", foo_header_value);
+  EXPECT_EQ(client.response_head()->headers->GetNormalizedHeader("foo"), "bar");
 }
 
 // Make sure the factory info returned from
@@ -244,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(StoragePartitionImplBrowsertest,
 // |StoragePartition::GetURLLoaderFactoryForBrowserProcessIOThread()| doesn't
 // crash if it's called after the StoragePartition is deleted.
 IN_PROC_BROWSER_TEST_F(StoragePartitionImplBrowsertest,
-                       BrowserIOFactoryAfterStoragePartitionGone) {
+                       DISABLED_BrowserIOFactoryAfterStoragePartitionGone) {
   ASSERT_TRUE(embedded_test_server()->Start());
 
   base::ScopedAllowBlockingForTesting allow_blocking;

@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,7 @@
 
 #include <memory>
 
+#include "build/build_config.h"
 #include "chrome/browser/infobars/confirm_infobar_creator.h"
 #include "components/infobars/content/content_infobar_manager.h"
 #include "components/infobars/core/infobar.h"
@@ -13,14 +14,19 @@
 #include "third_party/skia/include/core/SkBitmap.h"
 
 void CreateSimpleAlertInfoBar(
+    base::PassKey<ConfirmInfoBarCreationAllowlist> pass_key,
     infobars::ContentInfoBarManager* infobar_manager,
     infobars::InfoBarDelegate::InfoBarIdentifier infobar_identifier,
     const gfx::VectorIcon* vector_icon,
     const std::u16string& message,
     bool auto_expire,
-    bool should_animate) {
-  infobar_manager->AddInfoBar(
-      CreateConfirmInfoBar(std::make_unique<SimpleAlertInfoBarDelegate>(
-          infobar_identifier, vector_icon, message, auto_expire,
-          should_animate)));
+    bool should_animate,
+    bool closeable,
+    infobars::InfoBarDelegate::InfobarPriority infobar_priority) {
+#if !BUILDFLAG(IS_ANDROID)
+  infobar_manager->AddInfoBar(CreateConfirmInfoBar(
+      pass_key, std::make_unique<SimpleAlertInfoBarDelegate>(
+                    infobar_identifier, vector_icon, message, auto_expire,
+                    should_animate, closeable, infobar_priority)));
+#endif
 }

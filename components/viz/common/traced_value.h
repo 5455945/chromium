@@ -1,9 +1,11 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_VIZ_COMMON_TRACED_VALUE_H_
 #define COMPONENTS_VIZ_COMMON_TRACED_VALUE_H_
+
+#include <cstdint>
 
 #include "components/viz/common/viz_common_export.h"
 
@@ -17,25 +19,34 @@ namespace viz {
 
 class VIZ_COMMON_EXPORT TracedValue {
  public:
-  static void AppendIDRef(const void* id,
-                          base::trace_event::TracedValue* array);
-  static void SetIDRef(const void* id,
-                       base::trace_event::TracedValue* dict,
+  // Helper class to safely convert void* to uintptr_t for tracing IDs
+  class Id {
+   public:
+    explicit Id(const void* ptr) : value_(reinterpret_cast<uintptr_t>(ptr)) {}
+
+   private:
+    friend class TracedValue;
+    const uintptr_t value_;
+  };
+
+  static void AppendIDRef(Id id, base::trace_event::TracedValue* state);
+  static void SetIDRef(Id id,
+                       base::trace_event::TracedValue* state,
                        const char* name);
   static void MakeDictIntoImplicitSnapshot(base::trace_event::TracedValue* dict,
                                            const char* object_name,
-                                           const void* id);
+                                           Id id);
   static void MakeDictIntoImplicitSnapshotWithCategory(
       const char* category,
       base::trace_event::TracedValue* dict,
       const char* object_name,
-      const void* id);
+      Id id);
   static void MakeDictIntoImplicitSnapshotWithCategory(
       const char* category,
       base::trace_event::TracedValue* dict,
       const char* object_base_type_name,
       const char* object_name,
-      const void* id);
+      Id id);
 };
 
 }  // namespace viz

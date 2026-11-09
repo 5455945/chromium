@@ -1,21 +1,23 @@
-#!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """code generator for raster command buffers."""
 
 import filecmp
 import os
-import os.path
 import sys
 from optparse import OptionParser
 
 import build_cmd_buffer_lib
 
+# Additional space required after "type" here and elsewhere because otherwise
+# pylint detects "# type:" as invalid syntax on Python 3.8, see
+# https://github.com/PyCQA/pylint/issues/3556.
 # Named type info object represents a named type that is used in OpenGL call
 # arguments.  Each named type defines a set of valid OpenGL call arguments.  The
 # named types are used in 'raster_cmd_buffer_functions.txt'.
-# type: The actual GL type of the named type.
+# type : The actual GL type of the named type.
 # valid: The list of values that are valid for both the client and the service.
 # invalid: Examples of invalid values for the type. At least these values
 #          should be tested to be invalid.
@@ -47,11 +49,7 @@ _NAMED_TYPE_INFO = {
     'is_complete': True,
     'valid': [
       'GL_COMMANDS_ISSUED_CHROMIUM',
-      'GL_COMMANDS_ISSUED_TIMESTAMP_CHROMIUM',
       'GL_COMMANDS_COMPLETED_CHROMIUM',
-    ],
-    'invalid': [
-      'GL_LATENCY_QUERY_CHROMIUM',
     ],
   },
   'TextureParameter': {
@@ -97,9 +95,9 @@ _NAMED_TYPE_INFO = {
     'type': 'GLenum',
     'is_complete': True,
     'valid': [
-      'GL_GUILTY_CONTEXT_RESET_ARB',
-      'GL_INNOCENT_CONTEXT_RESET_ARB',
-      'GL_UNKNOWN_CONTEXT_RESET_ARB',
+      'GL_GUILTY_CONTEXT_RESET',
+      'GL_INNOCENT_CONTEXT_RESET',
+      'GL_UNKNOWN_CONTEXT_RESET',
     ],
   },
   'gfx::BufferUsage': {
@@ -114,31 +112,13 @@ _NAMED_TYPE_INFO = {
       'gfx::BufferUsage::CAMERA_AND_CPU_READ_WRITE',
     ],
   },
-  'viz::ResourceFormat': {
-    'type': 'viz::ResourceFormat',
+  'gpu::raster::MsaaMode': {
+    'type': 'gpu::raster::MsaaMode',
+    'is_complete': True,
     'valid': [
-      'viz::ResourceFormat::RGBA_8888',
-      'viz::ResourceFormat::RGBA_4444',
-      'viz::ResourceFormat::BGRA_8888',
-      'viz::ResourceFormat::ALPHA_8',
-      'viz::ResourceFormat::LUMINANCE_8',
-      'viz::ResourceFormat::RGB_565',
-      'viz::ResourceFormat::BGR_565',
-      'viz::ResourceFormat::RED_8',
-      'viz::ResourceFormat::RG_88',
-      'viz::ResourceFormat::LUMINANCE_F16',
-      'viz::ResourceFormat::RGBA_F16',
-      'viz::ResourceFormat::R16_EXT',
-      'viz::ResourceFormat::RGBX_8888',
-      'viz::ResourceFormat::BGRX_8888',
-      'viz::ResourceFormat::RGBA_1010102',
-      'viz::ResourceFormat::BGRA_1010102',
-      'viz::ResourceFormat::YVU_420',
-      'viz::ResourceFormat::YUV_420_BIPLANAR',
-      'viz::ResourceFormat::P010',
-    ],
-    'invalid': [
-      'viz::ResourceFormat::ETC1',
+      'gpu::raster::MsaaMode::kNoMSAA',
+      'gpu::raster::MsaaMode::kMSAA',
+      'gpu::raster::MsaaMode::kDMSAA',
     ],
   },
 }
@@ -151,7 +131,7 @@ _NAMED_TYPE_INFO = {
 #
 # Must match function names specified in "raster_cmd_buffer_functions.txt".
 #
-# type:         defines which handler will be used to generate code.
+# type :        defines which handler will be used to generate code.
 # decoder_func: defines which function to call in the decoder to execute the
 #               corresponding GL command. If not specified the GL command will
 #               be called directly.
@@ -181,8 +161,8 @@ _NAMED_TYPE_INFO = {
 # not_shared:   For GENn types, True if objects can't be shared between contexts
 
 _FUNCTION_INFO = {
-  'CopySubTextureINTERNAL': {
-    'decoder_func': 'DoCopySubTextureINTERNAL',
+  'CopySharedImageINTERNAL': {
+    'decoder_func': 'DoCopySharedImageINTERNAL',
     'internal': True,
     'type': 'PUT',
     'count': 32,  # GL_MAILBOX_SIZE_CHROMIUM x2
@@ -191,6 +171,14 @@ _FUNCTION_INFO = {
   },
   'WritePixelsINTERNAL': {
     'decoder_func': 'DoWritePixelsINTERNAL',
+    'internal': True,
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+    'unit_test': False,
+    'trace_level': 2,
+  },
+  'WritePixelsYUVINTERNAL': {
+    'decoder_func': 'DoWritePixelsYUVINTERNAL',
     'internal': True,
     'type': 'PUT',
     'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
@@ -210,17 +198,9 @@ _FUNCTION_INFO = {
     'decoder_func': 'DoReadbackYUVImagePixelsINTERNAL',
     'internal': True,
     'type': 'PUT',
-    'count': 16, # GL_MAILBOX_SIZE_CHROMIUM
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'unit_test': False,
     'result': ['uint32_t'],
-    'trace_level': 2,
-  },
-  'ConvertYUVAMailboxesToRGBINTERNAL': {
-    'decoder_func': 'DoConvertYUVAMailboxesToRGBINTERNAL',
-    'internal': True,
-    'type': 'PUT',
-    'count': 80, #GL_MAILBOX_SIZE_CHROMIUM x5
-    'unit_test': False,
     'trace_level': 2,
   },
   'Finish': {
@@ -276,21 +256,9 @@ _FUNCTION_INFO = {
     'gl_test_func': 'glEndnQuery',
     'client_test': False,
   },
-  'QueryCounterEXT' : {
-    'type': 'Custom',
-    'impl_func': False,
-    'cmd_args': 'GLidQuery id, GLenumQueryTarget target, '
-                'void* sync_data, GLuint submit_count',
-    'data_transfer_methods': ['shm'],
-    'gl_test_func': 'glQueryCounter',
-  },
   'GetQueryObjectuivEXT': {
     'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjectuiv',
-  },
-  'GetQueryObjectui64vEXT': {
-    'type': 'NoCommand',
-    'gl_test_func': 'glGetQueryObjectui64v',
   },
   'OrderingBarrierCHROMIUM': {
     'type': 'NoCommand',
@@ -333,10 +301,10 @@ _FUNCTION_INFO = {
     'internal': True,
     'impl_func': True,
     'cmd_args': 'GLuint raster_shm_id, GLuint raster_shm_offset,'
-                'GLsizeiptr raster_shm_size, GLuint font_shm_id,'
-                'GLuint font_shm_offset, GLsizeiptr font_shm_size',
+    'GLsizeiptr raster_shm_size, GLuint font_shm_id,'
+    'GLuint font_shm_offset, GLsizeiptr font_shm_size',
     'extension': 'CHROMIUM_raster_transport',
-    'extension_flag': 'chromium_raster_transport',
+    'unit_test': False,
   },
   'EndRasterCHROMIUM': {
     'decoder_func': 'DoEndRasterCHROMIUM',
@@ -344,11 +312,16 @@ _FUNCTION_INFO = {
     'unit_test': False,
     'client_test': False,
   },
+  'FlushTileRasterGraphiteCommandsCHROMIUM': {
+    'decoder_func': 'DoFlushTileRasterGraphiteCommandsCHROMIUM',
+    'unit_test': False,
+    'client_test': False,
+  },
   'CreateTransferCacheEntryINTERNAL': {
     'decoder_func': 'DoCreateTransferCacheEntryINTERNAL',
     'cmd_args': 'GLuint entry_type, GLuint entry_id, GLuint handle_shm_id, '
-                'GLuint handle_shm_offset, GLuint data_shm_id, '
-                'GLuint data_shm_offset, GLuint data_size',
+    'GLuint handle_shm_offset, GLuint data_shm_id, '
+    'GLuint data_shm_offset, GLuint data_size',
     'internal': True,
     'impl_func': True,
     'client_test': False,
@@ -362,15 +335,17 @@ _FUNCTION_INFO = {
     'client_test': False,
     'unit_test': False,
   },
-  'DeletePaintCacheTextBlobsINTERNAL': {
-    'type': 'DELn',
-    'internal': True,
-    'unit_test': False,
-  },
   'DeletePaintCachePathsINTERNAL': {
     'type': 'DELn',
     'internal': True,
     'unit_test': False,
+    'data_transfer_methods': ['immediate', 'shm'],
+  },
+  'DeletePaintCacheEffectsINTERNAL': {
+    'type': 'DELn',
+    'internal': True,
+    'unit_test': False,
+    'data_transfer_methods': ['immediate', 'shm'],
   },
   'ClearPaintCacheINTERNAL': {
     'decoder_func': 'DoClearPaintCacheINTERNAL',
@@ -392,21 +367,31 @@ def main(argv):
   """This is the main function."""
   parser = OptionParser()
   parser.add_option(
-      "--output-dir",
-      help="Output directory for generated files. Defaults to chromium root "
-      "directory.")
+    "--output-dir",
+    help="Output directory for generated files. Defaults to chromium root "
+    "directory.",
+  )
   parser.add_option(
-      "-v", "--verbose", action="store_true", help="Verbose logging output.")
+    "-v", "--verbose", action="store_true", help="Verbose logging output."
+  )
   parser.add_option(
-      "-c", "--check", action="store_true",
-      help="Check if output files match generated files in chromium root "
-      "directory.  Use this in PRESUBMIT scripts with --output-dir.")
+    "-c",
+    "--check",
+    action="store_true",
+    help="Check if output files match generated files in chromium root "
+    "directory.  Use this in PRESUBMIT scripts with --output-dir.",
+  )
 
   (options, _) = parser.parse_args(args=argv)
 
   # This script lives under src/gpu/command_buffer.
   script_dir = os.path.dirname(os.path.abspath(__file__))
-  assert script_dir.endswith(os.path.normpath("src/gpu/command_buffer"))
+  assert script_dir.endswith(
+    (
+      os.path.normpath("src/gpu/command_buffer"),
+      os.path.normpath("chromium/gpu/command_buffer"),
+    )
+  )
   # os.path.join doesn't do the right thing with relative paths.
   chromium_root_dir = os.path.abspath(script_dir + "/../..")
 
@@ -419,53 +404,65 @@ def main(argv):
 
   build_cmd_buffer_lib.InitializePrefix("Raster")
   gen = build_cmd_buffer_lib.GLGenerator(
-      options.verbose, "2018", _FUNCTION_INFO, _NAMED_TYPE_INFO,
-      chromium_root_dir)
+    options.verbose, "2018", _FUNCTION_INFO, _NAMED_TYPE_INFO, chromium_root_dir
+  )
   gen.ParseGLH("gpu/command_buffer/raster_cmd_buffer_functions.txt")
 
   gen.WriteCommandIds("gpu/command_buffer/common/raster_cmd_ids_autogen.h")
   gen.WriteFormat("gpu/command_buffer/common/raster_cmd_format_autogen.h")
   gen.WriteFormatTest(
-    "gpu/command_buffer/common/raster_cmd_format_test_autogen.h")
+    "gpu/command_buffer/common/raster_cmd_format_test_autogen.h"
+  )
   gen.WriteGLES2InterfaceHeader(
-    "gpu/command_buffer/client/raster_interface_autogen.h")
+    "gpu/command_buffer/client/raster_interface_autogen.h"
+  )
   gen.WriteGLES2ImplementationHeader(
-    "gpu/command_buffer/client/raster_implementation_autogen.h")
+    "gpu/command_buffer/client/raster_implementation_autogen.h"
+  )
   gen.WriteGLES2Implementation(
-    "gpu/command_buffer/client/raster_implementation_impl_autogen.h")
+    "gpu/command_buffer/client/raster_implementation_impl_autogen.h"
+  )
   gen.WriteGLES2ImplementationUnitTests(
-    "gpu/command_buffer/client/raster_implementation_unittest_autogen.h")
+    "gpu/command_buffer/client/raster_implementation_unittest_autogen.h"
+  )
   gen.WriteCmdHelperHeader(
-     "gpu/command_buffer/client/raster_cmd_helper_autogen.h")
+    "gpu/command_buffer/client/raster_cmd_helper_autogen.h"
+  )
   gen.WriteServiceImplementation(
-    "gpu/command_buffer/service/raster_decoder_autogen.h")
+    "gpu/command_buffer/service/raster_decoder_autogen.h"
+  )
   gen.WriteServiceUnitTests(
-    "gpu/command_buffer/service/raster_decoder_unittest_%d_autogen.h")
+    "gpu/command_buffer/service/raster_decoder_unittest_%d_autogen.h"
+  )
   gen.WriteServiceUtilsHeader(
-    "gpu/command_buffer/service/raster_cmd_validation_autogen.h")
+    "gpu/command_buffer/service/raster_cmd_validation_autogen.h"
+  )
   gen.WriteServiceUtilsImplementation(
-    "gpu/command_buffer/service/"
-    "raster_cmd_validation_implementation_autogen.h")
+    "gpu/command_buffer/service/raster_cmd_validation_implementation_autogen.h"
+  )
 
-  build_cmd_buffer_lib.Format(gen.generated_cpp_filenames, output_dir,
-                              chromium_root_dir)
+  build_cmd_buffer_lib.Format(
+    gen.generated_cpp_filenames, output_dir, chromium_root_dir
+  )
 
   if gen.errors > 0:
-    print "build_raster_cmd_buffer.py: Failed with %d errors" % gen.errors
+    print("build_raster_cmd_buffer.py: Failed with %d errors" % gen.errors)
     return 1
 
   check_failed_filenames = []
   if options.check:
     for filename in gen.generated_cpp_filenames:
-      if not filecmp.cmp(os.path.join(output_dir, filename),
-                         os.path.join(chromium_root_dir, filename)):
+      if not filecmp.cmp(
+        os.path.join(output_dir, filename),
+        os.path.join(chromium_root_dir, filename),
+      ):
         check_failed_filenames.append(filename)
 
   if len(check_failed_filenames) > 0:
-    print 'Please run gpu/command_buffer/build_raster_cmd_buffer.py'
-    print 'Failed check on autogenerated command buffer files:'
+    print('Please run gpu/command_buffer/build_raster_cmd_buffer.py')
+    print('Failed check on autogenerated command buffer files:')
     for filename in check_failed_filenames:
-      print filename
+      print(filename)
     return 1
 
   return 0

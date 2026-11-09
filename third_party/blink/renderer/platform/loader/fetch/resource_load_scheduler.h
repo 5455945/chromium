@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <map>
 #include <set>
 
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
-#include "third_party/blink/public/mojom/optimization_guide/optimization_guide.mojom-blink.h"
+#include "third_party/blink/renderer/platform/allow_discouraged_type.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_hash_map.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource.h"
 #include "third_party/blink/renderer/platform/loader/fetch/resource_loader_options.h"
+#include "third_party/blink/renderer/platform/loader/fetch/resource_response.h"
 #include "third_party/blink/renderer/platform/scheduler/public/frame_scheduler.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
 
@@ -89,8 +91,7 @@ class PLATFORM_EXPORT ResourceLoadSchedulerClient
 //     and the milestones being experimented with are first paint and first
 //     contentful paint so far.
 class PLATFORM_EXPORT ResourceLoadScheduler final
-    : public GarbageCollected<ResourceLoadScheduler>,
-      public FrameOrWorkerScheduler::Observer {
+    : public GarbageCollected<ResourceLoadScheduler> {
  public:
   // An option to use in calling Request(). If kCanNotBeStoppedOrThrottled is
   // specified, the request should be granted and Run() should be called
@@ -178,7 +179,7 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
                         LoadingBehaviorObserver* loading_behavior_observer);
   ResourceLoadScheduler(const ResourceLoadScheduler&) = delete;
   ResourceLoadScheduler& operator=(const ResourceLoadScheduler&) = delete;
-  ~ResourceLoadScheduler() override;
+  ~ResourceLoadScheduler();
 
   void Trace(Visitor*) const;
 
@@ -221,10 +222,12 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
   void SetOutstandingLimitForTesting(size_t limit) {
     SetOutstandingLimitForTesting(limit, limit);
   }
-  void SetOutstandingLimitForTesting(size_t tight_limit, size_t normal_limit);
+  void SetOutstandingLimitForTesting(size_t tight_limit,
+                                     size_t normal_limit,
+                                     size_t tight_medium_limit = 0);
 
-  // FrameOrWorkerScheduler::Observer overrides:
-  void OnLifecycleStateChanged(scheduler::SchedulingLifecycleState) override;
+  // FrameOrWorkerScheduler lifecycle observer callback.
+  void OnLifecycleStateChanged(scheduler::SchedulingLifecycleState);
 
   // The caller is the owner of the |clock|. The |clock| must outlive the
   // ResourceLoadScheduler.
@@ -234,16 +237,6 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
       ThrottleOptionOverride throttle_option_override) {
     throttle_option_override_ = throttle_option_override;
   }
-
-  void SetOptimizationGuideHints(
-      mojom::blink::DelayCompetingLowPriorityRequestsHintsPtr
-          optimization_hints) {
-    optimization_hints_ = std::move(optimization_hints);
-  }
-
-  // Indicates that some loading milestones have been reached.
-  void MarkFirstPaint();
-  void MarkFirstContentfulPaint();
 
  private:
   class ClientIdWithPriority {
@@ -299,9 +292,6 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
   // Gets the highest priority pending request that is allowed to be run.
   bool GetNextPendingRequest(ClientId* id);
 
-  // Determines whether or not a low-priority request should be delayed.
-  bool ShouldDelay(PendingRequestMap::iterator found) const;
-
   // Returns whether we can throttle a request with the given option based
   // on life cycle state.
   bool IsClientDelayable(ThrottleOption option) const;
@@ -322,16 +312,9 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
 
   void ShowConsoleMessageIfNeeded();
 
-  // Returns the threshold for which a request is considered "important" based
-  // on the field trial parameter or the optimization guide hints. This is used
-  // for the experiment on delaying competing low priority requests.
-  // See https://crbug.com/1112515 for details.
-  ResourceLoadPriority PriorityImportanceThreshold();
-
-  // Compute the milestone at which competing low priority requests can be
-  // delayed until. Returns kUnknown when it's not possible to compute it.
-  mojom::blink::DelayCompetingLowPriorityRequestsDelayType
-  ComputeDelayMilestone();
+  bool IsRunningThrottleableRequestsLessThanOutStandingLimit(
+      size_t out_standing_limit,
+      ResourceLoadPriority priority);
 
   const Member<const DetachableResourceFetcherProperties>
       resource_fetcher_properties_;
@@ -347,6 +330,7 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
 
   // Used when |policy_| is |kTight|.
   size_t tight_outstanding_limit_ = kOutstandingUnlimited;
+  size_t tight_medium_limit_ = 0u;
 
   // Used when |policy_| is |kNormal|.
   size_t normal_outstanding_limit_ = kOutstandingUnlimited;
@@ -357,10 +341,11 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
   // The last used ClientId to calculate the next.
   ClientId current_id_ = kInvalidClientId;
 
-  // Holds clients that were granted and are running.
-  HashMap<ClientId, ResourceLoadPriority> running_requests_;
+  // Holds clients that were granted.
+  HashSet<ClientId> running_requests_;
 
   HashSet<ClientId> running_throttleable_requests_;
+  HashSet<ClientId> running_medium_requests_;
 
   // Holds a flag to omit repeating console messages.
   bool is_console_info_shown_ = false;
@@ -375,11 +360,12 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
   // This tracks two sets of requests, throttleable and stoppable.
   std::map<ThrottleOption,
            std::set<ClientIdWithPriority, ClientIdWithPriority::Compare>>
-      pending_requests_;
+      pending_requests_ ALLOW_DISCOURAGED_TYPE("TODO(crbug.com/1404327)");
 
   // Remembers elapsed times in seconds when the top request in each queue is
   // processed.
-  std::map<ThrottleOption, base::Time> pending_queue_update_times_;
+  std::map<ThrottleOption, base::Time> pending_queue_update_times_
+      ALLOW_DISCOURAGED_TYPE("TODO(crbug.com/1404327)");
 
   // Handle to throttling observer.
   std::unique_ptr<FrameOrWorkerScheduler::LifecycleObserverHandle>
@@ -387,20 +373,11 @@ class PLATFORM_EXPORT ResourceLoadScheduler final
 
   const Member<DetachableConsoleLogger> console_logger_;
 
-  const base::Clock* clock_;
-
-  int in_flight_important_requests_ = 0;
-  // When this is true, the scheduler no longer needs to delay low-priority
-  // resources. |ShouldDelay()| will always return false after this point.
-  bool delay_milestone_reached_ = false;
+  raw_ptr<const base::Clock> clock_;
 
   ThrottleOptionOverride throttle_option_override_;
 
   Member<LoadingBehaviorObserver> loading_behavior_observer_;
-
-  // Hints for the DelayCompetingLowPriorityRequests optimization. See
-  // https://crbug.com/1112515 for details.
-  mojom::blink::DelayCompetingLowPriorityRequestsHintsPtr optimization_hints_;
 };
 
 }  // namespace blink

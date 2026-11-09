@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/threading/thread_checker.h"
 #include "chromecast/media/cma/backend/android/media_pipeline_backend_android.h"
 #include "chromecast/public/media/media_pipeline_device_params.h"
@@ -33,11 +32,6 @@ class AudioSinkAndroid {
     kInternalError,
   };
 
-  enum SinkType {
-    kSinkTypeJavaBased,   // Java-based (using AudioTrack)
-    kSinkTypeNativeBased  // Native-based (not implemented yet)
-  };
-
   class Delegate {
    public:
     using SinkError = AudioSinkAndroid::SinkError;
@@ -45,8 +39,7 @@ class AudioSinkAndroid {
     // Called when the last data passed to WritePcm() has been successfully
     // added to the queue.
     virtual void OnWritePcmCompletion(
-        MediaPipelineBackendAndroid::BufferStatus status,
-        const MediaPipelineBackendAndroid::RenderingDelay& delay) = 0;
+        MediaPipelineBackendAndroid::BufferStatus status) = 0;
 
     // Called when a sink error occurs. No further data should be written.
     virtual void OnSinkError(SinkError error) = 0;
@@ -55,16 +48,7 @@ class AudioSinkAndroid {
     virtual ~Delegate() {}
   };
 
-  // Gets the Android audio session ids used for media and communication (TTS)
-  // tracks.
-  // Set a return value pointer to null if that id is not needed.
-  // Returns true if the ids populated are valid.
-  static bool GetSessionIds(SinkType sink_type,
-                            int* media_id,
-                            int* communication_id);
-
-  static int64_t GetMinimumBufferedTime(SinkType sink_type,
-                                        const AudioConfig& config);
+  static int64_t GetMinimumBufferedTime(const AudioConfig& config);
 
   AudioSinkAndroid() {}
   virtual ~AudioSinkAndroid() {}
@@ -94,6 +78,16 @@ class AudioSinkAndroid {
   // stream multiplier and limiter multiplier.
   virtual float EffectiveVolume() const = 0;
 
+  // Returns the current audio rendering delay.
+  virtual MediaPipelineBackendAndroid::RenderingDelay GetRenderingDelay() = 0;
+
+  // Returns the current audio track timestamp.
+  virtual MediaPipelineBackendAndroid::AudioTrackTimestamp
+  GetAudioTrackTimestamp() = 0;
+
+  // Returns the streaming start threshold of the current audio track.
+  virtual int GetStartThresholdInFrames() = 0;
+
   // Getters
   virtual int input_samples_per_second() const = 0;
   virtual bool primary() const = 0;
@@ -106,24 +100,31 @@ class AudioSinkAndroid {
 // destroyed. Inspired by std::unique_ptr<>.
 class ManagedAudioSink {
  public:
-  using SinkType = AudioSinkAndroid::SinkType;
   using Delegate = AudioSinkAndroid::Delegate;
 
-  explicit ManagedAudioSink(SinkType sink_type);
+  ManagedAudioSink();
+
+  ManagedAudioSink(const ManagedAudioSink&) = delete;
+  ManagedAudioSink& operator=(const ManagedAudioSink&) = delete;
+
   ~ManagedAudioSink();
 
   // Resets the sink_ object by removing it from the manager and deleting it.
   void Reset();
 
-  // Resets the sink_ object to a new AudioSinkAndroid* instance and adds it to
+  // Creates a new sink_ object of AudioSinkAndroid* instance and adds it to
   // the manager. If a valid instance existed on entry it is removed from the
   // manager and deleted before creating the new one.
-  void Reset(Delegate* delegate,
-             int num_channels,
-             int samples_per_second,
-             bool primary,
-             const std::string& device_id,
-             AudioContentType content_type);
+  // Returns true on success; false otherwise.
+  [[nodiscard]] bool Create(Delegate* delegate,
+                            int num_channels,
+                            int samples_per_second,
+                            int audio_track_session_id,
+                            bool primary,
+                            bool is_apk_audio,
+                            bool use_hw_av_sync,
+                            const std::string& device_id,
+                            AudioContentType content_type);
 
   AudioSinkAndroid* operator->() const { return sink_; }
   operator AudioSinkAndroid*() const { return sink_; }
@@ -131,10 +132,7 @@ class ManagedAudioSink {
  private:
   void Remove();
 
-  SinkType sink_type_;
   AudioSinkAndroid* sink_;
-
-  DISALLOW_COPY_AND_ASSIGN(ManagedAudioSink);
 };
 
 }  // namespace media

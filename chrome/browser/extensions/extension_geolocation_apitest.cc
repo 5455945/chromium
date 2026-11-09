@@ -1,15 +1,17 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "content/public/test/browser_test.h"
+#include "extensions/buildflags/buildflags.h"
 #include "services/device/public/cpp/test/scoped_geolocation_overrider.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class GeolocationApiTest : public extensions::ExtensionApiTest {
  public:
-  GeolocationApiTest() {
-  }
+  GeolocationApiTest() = default;
 
   // InProcessBrowserTest
   void SetUpOnMainThread() override {

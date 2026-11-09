@@ -93,15 +93,16 @@ the system** and instrument the [system WebView shell app](webview-shell.md)
 `//android_webview/tools/system_webview_shell/`.
 
 *** note
-**Important:** because these tests run against the WebView installed on the
-system, both these test targets automatically compile and install
-`system_webview_apk` and switch the WebView provider. This means you need to
-configure this target to be compatible with your system by following the
-[full build instructions](build-instructions.md).
+**Important:** these tests compile and install both `system_webview_apk` and
+`system_webview_shell_apk`.
 
-**Note:** we do not currently support running these tests on the emulator due to
-signing key mismatches with the preinstalled WebView shell
-(https://crbug.com/1205665 tracks supporting this).
+You will need to configure GN args to make sure `system_webview_apk` is a valid
+WebView provider for your system. Please see the [full build
+instructions](build-instructions.md).
+
+If you are using an **emulator**, you will also need to configure the
+`system_webview_shell_package_name` GN arg. See [WebView shell
+docs](webview-shell.md#setting-up-the-build) for details.
 ***
 
 ```sh
@@ -149,9 +150,23 @@ $ adb logcat
 ```sh
 $ out/Default/bin/run_webview_instrumentation_test_apk \ # Any test runner
     --num_retries=0 \ # Tests normally retry-on-failure; disable for easier repo
-    --repeat=1000 \ # Repeat up to 1000 times for a failure
+    --repeat=100 \ # Repeat up to 100 times for a failure
     --break-on-failure \ # Stop repeating once we see the first failure
     -f=AwContentsTest#testClearCacheInQuickSuccession
+```
+
+A bash for loop can be used instead if the flake seems to happen during
+specific conditions that need to be configured before each test run:
+
+```sh
+$ for (( c=1; c<100; c++ ))
+$ do
+$   echo "\n\n\nTest $c/100 \n\n\n"
+$   <Any setup command you need to do - eg: adb reboot>
+$   out/Default/bin/run_webview_instrumentation_test_apk \ # Any test runner
+        --num_retries=0 \ # Tests normally retry-on-failure; disable for easier repo
+        -f=
+$ done
 ```
 
 #### Enable a Feature for a local run
@@ -198,6 +213,17 @@ $ (shell) adb pull /data/anr/trace_01 /tmp/t1
 $ (shell) third_party/android_platform/development/scripts/stack --output-directory=out/Release /tmp/t1
 ```
 
+#### Instrumentation test process modes
+
+You may use `--webview-process-mode` argument to run tests only in the
+specified process mode. The valid switch values are `multiple` and `single`.
+When the argument is not set (default), both process modes execute. Note that
+the argument acts as an additional filter on top of the
+[`OnlyRunIn` test annotation](https://source.chromium.org/chromium/chromium/src/+/main:android_webview/test/shell/src/org/chromium/android_webview/test/OnlyRunIn.java;drc=02c4c92d88aecbc14e715fd7fcac842d5dd814fe;l=25).
+
+Also note that in chromium CQ builders and all builders running tests on
+Android R and plus, `--webview-process-mode=multiple` is appended to the test
+command so that the instrumentation tests only run in multiple processes mode.
 
 ## External tests
 
@@ -251,5 +277,5 @@ WebView also has an AndroidX module, which has its own tests (similar to CTS
 tests). These tests live under the AOSP source tree, under
 `//platform/frameworks/support/`.
 
-TODO(ntfschr): document the solution for http://crbug.com/891102, when that's
+TODO(ntfschr): document the solution for https://crbug.com/891102, when that's
 fixed.

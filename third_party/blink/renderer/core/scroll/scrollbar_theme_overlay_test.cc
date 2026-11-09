@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,22 @@
 
 #include "third_party/blink/renderer/core/scroll/scroll_types.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_test_suite.h"
-#include "third_party/blink/renderer/platform/testing/testing_platform_support_with_mock_scheduler.h"
+#include "third_party/blink/renderer/platform/heap/thread_state.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
+#include "third_party/blink/renderer/platform/testing/testing_platform_support.h"
 
 namespace blink {
 
 using testing::NiceMock;
 using testing::Return;
 
-class ScrollbarThemeOverlayTest : public testing::Test {};
+class ScrollbarThemeOverlayTest : public testing::Test {
+ protected:
+  test::TaskEnvironment task_environment_;
+};
 
 TEST_F(ScrollbarThemeOverlayTest, PaintInvalidation) {
-  ScopedTestingPlatformSupport<TestingPlatformSupportWithMockScheduler>
-      platform;
+  ScopedTestingPlatformSupport<TestingPlatformSupport> platform;
 
   NiceMock<MockScrollableArea>* mock_scrollable_area =
       MakeGarbageCollected<NiceMock<MockScrollableArea>>(
@@ -33,54 +37,56 @@ TEST_F(ScrollbarThemeOverlayTest, PaintInvalidation) {
   ON_CALL(*mock_scrollable_area, HorizontalScrollbar())
       .WillByDefault(Return(horizontal_scrollbar));
 
-  IntRect vertical_rect(1010, 0, 14, 768);
-  IntRect horizontal_rect(0, 754, 1024, 14);
+  gfx::Rect vertical_rect(1010, 0, 14, 768);
+  gfx::Rect horizontal_rect(0, 754, 1024, 14);
   vertical_scrollbar->SetFrameRect(vertical_rect);
   horizontal_scrollbar->SetFrameRect(horizontal_rect);
 
   ASSERT_EQ(vertical_scrollbar, mock_scrollable_area->VerticalScrollbar());
   ASSERT_EQ(horizontal_scrollbar, mock_scrollable_area->HorizontalScrollbar());
 
-  vertical_scrollbar->ClearTrackNeedsRepaint();
+  vertical_scrollbar->ClearTrackAndButtonsNeedRepaint();
   vertical_scrollbar->ClearThumbNeedsRepaint();
-  horizontal_scrollbar->ClearTrackNeedsRepaint();
+  horizontal_scrollbar->ClearTrackAndButtonsNeedRepaint();
   horizontal_scrollbar->ClearThumbNeedsRepaint();
   mock_scrollable_area->ClearNeedsPaintInvalidationForScrollControls();
 
   ASSERT_FALSE(vertical_scrollbar->ThumbNeedsRepaint());
-  ASSERT_FALSE(vertical_scrollbar->TrackNeedsRepaint());
+  ASSERT_FALSE(vertical_scrollbar->TrackAndButtonsNeedRepaint());
   ASSERT_FALSE(mock_scrollable_area->VerticalScrollbarNeedsPaintInvalidation());
   ASSERT_FALSE(horizontal_scrollbar->ThumbNeedsRepaint());
-  ASSERT_FALSE(horizontal_scrollbar->TrackNeedsRepaint());
+  ASSERT_FALSE(horizontal_scrollbar->TrackAndButtonsNeedRepaint());
   ASSERT_FALSE(
       mock_scrollable_area->HorizontalScrollbarNeedsPaintInvalidation());
 
-  // Changing the scroll offset shouldn't invalid the thumb nor track, but it
-  // should cause a "general" invalidation for non-composited scrollbars.
+  // Changing the scroll offset shouldn't invalid the thumb nor background, but
+  // it should cause a "general" invalidation for non-composited scrollbars.
   // Ensure the horizontal scrollbar is unaffected.
   mock_scrollable_area->UpdateScrollOffset(ScrollOffset(0, 5),
-                                           mojom::blink::ScrollType::kUser);
+                                           mojom::blink::ScrollType::kUser,
+                                           cc::ScrollSourceType::kNone);
   vertical_scrollbar->OffsetDidChange(mojom::blink::ScrollType::kUser);
   horizontal_scrollbar->OffsetDidChange(mojom::blink::ScrollType::kUser);
   EXPECT_FALSE(vertical_scrollbar->ThumbNeedsRepaint());
-  EXPECT_FALSE(vertical_scrollbar->TrackNeedsRepaint());
+  EXPECT_FALSE(vertical_scrollbar->TrackAndButtonsNeedRepaint());
   EXPECT_TRUE(mock_scrollable_area->VerticalScrollbarNeedsPaintInvalidation());
   EXPECT_FALSE(horizontal_scrollbar->ThumbNeedsRepaint());
-  EXPECT_FALSE(horizontal_scrollbar->TrackNeedsRepaint());
+  EXPECT_FALSE(horizontal_scrollbar->TrackAndButtonsNeedRepaint());
   EXPECT_FALSE(
       mock_scrollable_area->HorizontalScrollbarNeedsPaintInvalidation());
 
   // Try the horizontal scrollbar.
   mock_scrollable_area->ClearNeedsPaintInvalidationForScrollControls();
   mock_scrollable_area->UpdateScrollOffset(ScrollOffset(5, 5),
-                                           mojom::blink::ScrollType::kUser);
+                                           mojom::blink::ScrollType::kUser,
+                                           cc::ScrollSourceType::kNone);
   horizontal_scrollbar->OffsetDidChange(mojom::blink::ScrollType::kUser);
   vertical_scrollbar->OffsetDidChange(mojom::blink::ScrollType::kUser);
   EXPECT_FALSE(vertical_scrollbar->ThumbNeedsRepaint());
-  EXPECT_FALSE(vertical_scrollbar->TrackNeedsRepaint());
+  EXPECT_FALSE(vertical_scrollbar->TrackAndButtonsNeedRepaint());
   EXPECT_FALSE(mock_scrollable_area->VerticalScrollbarNeedsPaintInvalidation());
   EXPECT_FALSE(horizontal_scrollbar->ThumbNeedsRepaint());
-  EXPECT_FALSE(horizontal_scrollbar->TrackNeedsRepaint());
+  EXPECT_FALSE(horizontal_scrollbar->TrackAndButtonsNeedRepaint());
   EXPECT_TRUE(
       mock_scrollable_area->HorizontalScrollbarNeedsPaintInvalidation());
 

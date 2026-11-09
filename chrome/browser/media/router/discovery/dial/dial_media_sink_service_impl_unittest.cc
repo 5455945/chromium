@@ -1,15 +1,16 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/media/router/discovery/dial/dial_media_sink_service_impl.h"
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/test/mock_callback.h"
 #include "base/timer/mock_timer.h"
 #include "chrome/browser/media/router/discovery/dial/dial_device_data.h"
-#include "chrome/browser/media/router/discovery/dial/dial_registry.h"
 #include "chrome/browser/media/router/test/provider_test_helpers.h"
 #include "content/public/test/browser_task_environment.h"
 #include "services/data_decoder/public/cpp/test_support/in_process_data_decoder.h"
@@ -22,24 +23,12 @@ using ::testing::Return;
 
 namespace media_router {
 
-class TestDialRegistry : public DialRegistry {
- public:
-  TestDialRegistry() {}
-  ~TestDialRegistry() override {}
-
-  MOCK_METHOD1(RegisterObserver, void(DialRegistry::Observer* observer));
-  MOCK_METHOD1(UnregisterObserver, void(DialRegistry::Observer* observer));
-
-  MOCK_METHOD0(OnListenerAdded, void());
-  MOCK_METHOD0(OnListenerRemoved, void());
-};
-
 class MockDeviceDescriptionService : public DeviceDescriptionService {
  public:
   MockDeviceDescriptionService(DeviceDescriptionParseSuccessCallback success_cb,
                                DeviceDescriptionParseErrorCallback error_cb)
       : DeviceDescriptionService(success_cb, error_cb) {}
-  ~MockDeviceDescriptionService() override {}
+  ~MockDeviceDescriptionService() override = default;
 
   MOCK_METHOD1(GetDeviceDescriptions,
                void(const std::vector<DialDeviceData>& devices));
@@ -51,11 +40,9 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
       : task_environment_(content::BrowserTaskEnvironment::IO_MAINLOOP),
         media_sink_service_(new DialMediaSinkServiceImpl(
             mock_sink_discovered_cb_.Get(),
-            base::SequencedTaskRunnerHandle::Get())) {}
+            base::SequencedTaskRunner::GetCurrentDefault())) {}
 
   void SetUp() override {
-    media_sink_service_->SetDialRegistryForTest(&test_dial_registry_);
-
     auto mock_description_service =
         std::make_unique<MockDeviceDescriptionService>(mock_success_cb_.Get(),
                                                        mock_error_cb_.Get());
@@ -64,7 +51,7 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
         std::move(mock_description_service));
 
     mock_timer_ = new base::MockOneShotTimer();
-    media_sink_service_->SetTimerForTest(base::WrapUnique(mock_timer_));
+    media_sink_service_->SetTimerForTest(base::WrapUnique(mock_timer_.get()));
 
     auto mock_app_discovery_service =
         std::make_unique<MockDialAppDiscoveryService>();
@@ -97,6 +84,10 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
         DialAppInfoResultCode::kOk);
   }
 
+  bool dial_discovery_started() {
+    return media_sink_service_->dial_registry_ != nullptr;
+  }
+
  protected:
   const content::BrowserTaskEnvironment task_environment_;
   data_decoder::test::InProcessDataDecoder in_process_data_decoder_;
@@ -109,17 +100,16 @@ class DialMediaSinkServiceImplTest : public ::testing::Test {
       MockDeviceDescriptionService::DeviceDescriptionParseErrorCallback>
       mock_error_cb_;
 
-  TestDialRegistry test_dial_registry_;
-  MockDeviceDescriptionService* mock_description_service_;
-  MockDialAppDiscoveryService* mock_app_discovery_service_;
-  base::MockOneShotTimer* mock_timer_;
+  raw_ptr<MockDeviceDescriptionService, DanglingUntriaged>
+      mock_description_service_;
+  raw_ptr<MockDialAppDiscoveryService, DanglingUntriaged>
+      mock_app_discovery_service_;
+  raw_ptr<base::MockOneShotTimer, DanglingUntriaged> mock_timer_;
 
   std::unique_ptr<DialMediaSinkServiceImpl> media_sink_service_;
 
   MediaSinkInternal dial_sink_1_ = CreateDialSink(1);
   MediaSinkInternal dial_sink_2_ = CreateDialSink(2);
-
-  DISALLOW_COPY_AND_ASSIGN(DialMediaSinkServiceImplTest);
 };
 
 TEST_F(DialMediaSinkServiceImplTest, OnDeviceDescriptionAvailable) {
@@ -138,7 +128,7 @@ TEST_F(DialMediaSinkServiceImplTest, OnDeviceDescriptionAvailable) {
   std::vector<DialDeviceData> device_list = {device_data};
   EXPECT_CALL(*mock_description_service_, GetDeviceDescriptions(device_list));
 
-  media_sink_service_->OnDialDeviceEvent(device_list);
+  media_sink_service_->OnDialDeviceList(device_list);
   media_sink_service_->OnDeviceDescriptionAvailable(device_data,
                                                     device_description);
   EXPECT_TRUE(mock_timer_->IsRunning());
@@ -159,7 +149,7 @@ TEST_F(DialMediaSinkServiceImplTest,
 
   std::vector<DialDeviceData> device_list = {device_data};
   EXPECT_CALL(*mock_description_service_, GetDeviceDescriptions(device_list));
-  media_sink_service_->OnDialDeviceEvent(device_list);
+  media_sink_service_->OnDialDeviceList(device_list);
 
   media_sink_service_->OnDeviceDescriptionAvailable(device_data,
                                                     device_description);
@@ -197,7 +187,7 @@ TEST_F(DialMediaSinkServiceImplTest, OnDeviceDescriptionRestartsTimer) {
   EXPECT_CALL(*mock_description_service_, GetDeviceDescriptions(device_list));
 
   EXPECT_FALSE(mock_timer_->IsRunning());
-  media_sink_service_->OnDialDeviceEvent(device_list);
+  media_sink_service_->OnDialDeviceList(device_list);
   media_sink_service_->OnDeviceDescriptionAvailable(device_data,
                                                     device_description);
   EXPECT_TRUE(mock_timer_->IsRunning());
@@ -212,16 +202,16 @@ TEST_F(DialMediaSinkServiceImplTest, OnDeviceDescriptionRestartsTimer) {
   EXPECT_TRUE(mock_timer_->IsRunning());
 }
 
-TEST_F(DialMediaSinkServiceImplTest, OnDialDeviceEventRestartsTimer) {
+TEST_F(DialMediaSinkServiceImplTest, OnDialDeviceListRestartsTimer) {
   EXPECT_CALL(*mock_description_service_, GetDeviceDescriptions(IsEmpty()));
-  media_sink_service_->OnDialDeviceEvent(std::vector<DialDeviceData>());
+  media_sink_service_->OnDialDeviceList(std::vector<DialDeviceData>());
   EXPECT_TRUE(mock_timer_->IsRunning());
 
   EXPECT_CALL(mock_sink_discovered_cb_, Run(_)).Times(0);
   mock_timer_->Fire();
 
   EXPECT_CALL(*mock_description_service_, GetDeviceDescriptions(IsEmpty()));
-  media_sink_service_->OnDialDeviceEvent(std::vector<DialDeviceData>());
+  media_sink_service_->OnDialDeviceList(std::vector<DialDeviceData>());
   EXPECT_TRUE(mock_timer_->IsRunning());
 
   EXPECT_CALL(mock_sink_discovered_cb_, Run(_)).Times(0);
@@ -385,4 +375,25 @@ TEST_F(DialMediaSinkServiceImplTest, FetchDialAppInfoWithDiscoveryOnlySink) {
       StartMonitoringAvailableSinksForApp("YouTube");
 }
 
+class DialMediaSinkServiceImplStartDiscoveryTest
+    : public DialMediaSinkServiceImplTest {
+  // Override this function so that `media_sink_service_` isn't initialized for
+  // tests yet.
+  void SetUp() override {}
+};
+
+TEST_F(DialMediaSinkServiceImplStartDiscoveryTest, DiscoveryOnUserGesture) {
+  media_sink_service_->Initialize();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(dial_discovery_started());
+
+  // Calling `DiscoverSinksNow()` won't start a new cycle of discovery.
+  media_sink_service_->DiscoverSinksNow();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(dial_discovery_started());
+
+  media_sink_service_->StartDiscovery();
+  base::RunLoop().RunUntilIdle();
+  EXPECT_TRUE(dial_discovery_started());
+}
 }  // namespace media_router

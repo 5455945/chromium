@@ -1,17 +1,16 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef URL_ORIGIN_ABSTRACT_TESTS_H_
 #define URL_ORIGIN_ABSTRACT_TESTS_H_
 
+#include <initializer_list>
 #include <string>
+#include <string_view>
 #include <type_traits>
 
-#include "base/containers/contains.h"
-#include "base/strings/string_piece.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 #include "url/scheme_host_port.h"
@@ -29,10 +28,10 @@ class UrlOriginTestTraits {
   using OriginType = Origin;
 
   // Constructing an origin.
-  static OriginType CreateOriginFromString(base::StringPiece s);
+  static OriginType CreateOriginFromString(std::string_view s);
   static OriginType CreateUniqueOpaqueOrigin();
   static OriginType CreateWithReferenceOrigin(
-      base::StringPiece url,
+      std::string_view url,
       const OriginType& reference_origin);
   static OriginType DeriveNewOpaqueOrigin(const OriginType& reference_origin);
 
@@ -52,7 +51,7 @@ class UrlOriginTestTraits {
   //
   // TODO(lukasza): Consider merging together OriginTraitsBase here and
   // UrlTraitsBase in //url/gurl_abstract_tests.h.
-  static bool IsValidUrl(base::StringPiece str);
+  static bool IsValidUrl(std::string_view str);
 
   // Only static members = no constructors are needed.
   UrlOriginTestTraits() = delete;
@@ -78,13 +77,13 @@ class AbstractOriginTest : public testing::Test {
     };
     for (const char* kScheme : kSchemesToRegister) {
       std::string scheme(kScheme);
-      if (base::Contains(scheme, "noaccess"))
+      if (scheme.contains("noaccess"))
         AddNoAccessScheme(kScheme);
-      if (base::Contains(scheme, "std-with-host"))
+      if (scheme.contains("std-with-host"))
         AddStandardScheme(kScheme, SchemeType::SCHEME_WITH_HOST);
-      if (base::Contains(scheme, "local"))
+      if (scheme.contains("local"))
         AddLocalScheme(kScheme);
-      if (base::Contains(scheme, "sec"))
+      if (scheme.contains("sec"))
         AddSecureScheme(kScheme);
     }
   }
@@ -96,13 +95,13 @@ class AbstractOriginTest : public testing::Test {
   // avoid hitting: explicit qualification required to use member 'IsOpaque'
   // from dependent base class.
   using OriginType = typename TOriginTraits::OriginType;
-  OriginType CreateOriginFromString(base::StringPiece s) {
+  OriginType CreateOriginFromString(std::string_view s) {
     return TOriginTraits::CreateOriginFromString(s);
   }
   OriginType CreateUniqueOpaqueOrigin() {
     return TOriginTraits::CreateUniqueOpaqueOrigin();
   }
-  OriginType CreateWithReferenceOrigin(base::StringPiece url,
+  OriginType CreateWithReferenceOrigin(std::string_view url,
                                        const OriginType& reference_origin) {
     return TOriginTraits::CreateWithReferenceOrigin(url, reference_origin);
   }
@@ -133,7 +132,7 @@ class AbstractOriginTest : public testing::Test {
   std::string Serialize(const OriginType& origin) {
     return TOriginTraits::Serialize(origin);
   }
-  bool IsValidUrl(base::StringPiece str) {
+  bool IsValidUrl(std::string_view str) {
     return TOriginTraits::IsValidUrl(str);
   }
 
@@ -214,7 +213,7 @@ class AbstractOriginTest : public testing::Test {
     VerifyOriginInvariants(origin);
   }
 
-  void TestUniqueOpaqueOrigin(base::StringPiece test_input) {
+  void TestUniqueOpaqueOrigin(std::string_view test_input) {
     auto origin = this->CreateOriginFromString(test_input);
     this->VerifyUniqueOpaqueOriginInvariants(origin);
 
@@ -276,6 +275,46 @@ TYPED_TEST_P(AbstractOriginTest, NonStandardSchemeWithAndroidWebViewHack) {
   // EnableNonStandardSchemesForAndroidWebView.
   origin = this->CreateOriginFromString("about:blank");
   EXPECT_TRUE(this->IsOpaque(origin));
+}
+
+TYPED_TEST_P(
+    AbstractOriginTest,
+    AndroidWebViewHackWithStandardCompliantNonSpecialSchemeURLParsing) {
+  EnableNonStandardSchemesForAndroidWebView();
+
+  // Non-Standard scheme cases.
+  {
+    auto origin_a = this->CreateOriginFromString("non-standard://a.com:80");
+    // Ensure that a host and a port are discarded.
+    EXPECT_EQ(this->GetHost(origin_a), "");
+    EXPECT_EQ(this->GetPort(origin_a), 0);
+    EXPECT_EQ(this->Serialize(origin_a), "non-standard://");
+    EXPECT_FALSE(this->IsOpaque(origin_a));
+
+    // URLs are considered same-origin if their schemes match, even if
+    // their host and port are different.
+    auto origin_b = this->CreateOriginFromString("non-standard://b.com:90");
+    EXPECT_TRUE(this->IsSameOrigin(origin_a, origin_b));
+
+    // URLs are not considered same-origin if their schemes don't match,
+    // even if their host and port are same.
+    auto another_origin_a =
+        this->CreateOriginFromString("another-non-standard://a.com:80");
+    EXPECT_FALSE(this->IsSameOrigin(origin_a, another_origin_a));
+  }
+
+  // Standard scheme cases.
+  {
+    // Ensure that the behavior of a standard URL is preserved.
+    auto origin_a = this->CreateOriginFromString("https://a.com:80");
+    EXPECT_EQ(this->GetHost(origin_a), "a.com");
+    EXPECT_EQ(this->GetPort(origin_a), 80);
+    EXPECT_EQ(this->Serialize(origin_a), "https://a.com:80");
+    EXPECT_FALSE(this->IsOpaque(origin_a));
+
+    auto origin_b = this->CreateOriginFromString("https://b.com:80");
+    EXPECT_FALSE(this->IsSameOrigin(origin_a, origin_b));
+  }
 }
 
 TYPED_TEST_P(AbstractOriginTest, OpaqueOriginsFromValidUrls) {
@@ -371,15 +410,7 @@ TYPED_TEST_P(AbstractOriginTest, TupleOrigins) {
       {"file:///etc/passwd", {"file", "", 0}},
       {"file://example.com/etc/passwd", {"file", "example.com", 0}},
       {"file:///", {"file", "", 0}},
-
-#ifdef WIN32
-      // TODO(https://crbug.com/1214098): Consider unifying URL parsing behavior
-      // on all platforms (or at least make sure that serialization always
-      // round-trips - see https://crbug.com/1214098).
-      {"file://hostname/C:/dir/file.txt", {"file", "", 0}},
-#else
       {"file://hostname/C:/dir/file.txt", {"file", "hostname", 0}},
-#endif
 
       // HTTP URLs
       {"http://example.com/", {"http", "example.com", 80}},
@@ -504,11 +535,8 @@ TYPED_TEST_P(AbstractOriginTest, CustomSchemes_TupleOrigins) {
       // always have empty hostnames, but are allowed to be url::Origins.
       {"local:", {"local", "", 0}},
       {"local:foo", {"local", "", 0}},
-      {"local://bar", {"local", "", 0}},
-      {"also-local://bar", {"also-local", "", 0}},
 
       {"std-with-host://host", {"std-with-host", "host", 0}},
-      {"local://host", {"local", "", 0}},
       {"local-std-with-host://host", {"local-std-with-host", "host", 0}},
   };
 
@@ -523,13 +551,33 @@ TYPED_TEST_P(AbstractOriginTest, CustomSchemes_TupleOrigins) {
   }
 }
 
-REGISTER_TYPED_TEST_SUITE_P(AbstractOriginTest,
-                            NonStandardSchemeWithAndroidWebViewHack,
-                            OpaqueOriginsFromValidUrls,
-                            OpaqueOriginsFromInvalidUrls,
-                            TupleOrigins,
-                            CustomSchemes_OpaqueOrigins,
-                            CustomSchemes_TupleOrigins);
+TYPED_TEST_P(AbstractOriginTest,
+             CustomSchemes_TupleOrigins_StandardCompliantNonSpecialSchemeFlag) {
+  struct TestCase {
+    std::string_view input;
+    SchemeHostPort expected_tuple;
+  } test_cases[] = {
+      {"local://bar", {"local", "bar", 0}},
+      {"also-local://bar", {"also-local", "bar", 0}},
+  };
+  for (const TestCase& test : test_cases) {
+    SCOPED_TRACE(testing::Message() << "Test input: " << test.input);
+    EXPECT_TRUE(this->IsValidUrl(test.input));
+    auto origin = this->CreateOriginFromString(test.input);
+    this->VerifyTupleOriginInvariants(origin, test.expected_tuple);
+  }
+}
+
+REGISTER_TYPED_TEST_SUITE_P(
+    AbstractOriginTest,
+    NonStandardSchemeWithAndroidWebViewHack,
+    AndroidWebViewHackWithStandardCompliantNonSpecialSchemeURLParsing,
+    OpaqueOriginsFromValidUrls,
+    OpaqueOriginsFromInvalidUrls,
+    TupleOrigins,
+    CustomSchemes_OpaqueOrigins,
+    CustomSchemes_TupleOrigins,
+    CustomSchemes_TupleOrigins_StandardCompliantNonSpecialSchemeFlag);
 
 }  // namespace url
 

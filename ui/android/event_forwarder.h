@@ -1,143 +1,176 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef UI_ANDROID_EVENT_FORWARDER_H_
 #define UI_ANDROID_EVENT_FORWARDER_H_
 
+#include "base/android/jni_weak_ref.h"
 #include "base/android/scoped_java_ref.h"
+#include "base/memory/raw_ptr.h"
+#include "base/observer_list.h"
+#include "ui/android/ui_android_export.h"
+#include "ui/gfx/geometry/point_f.h"
 
 namespace ui {
 
+class KeyEventAndroid;
+class MotionEventAndroid;
 class ViewAndroid;
 
-class EventForwarder {
+class UI_ANDROID_EXPORT EventForwarder {
  public:
+  // Interface for observing events on the `EventForwarder`.
+  class Observer : public base::CheckedObserver {
+   public:
+    ~Observer() override = default;
+
+    virtual void OnMouseEvent(const ui::MotionEventAndroid&) {}
+
+    virtual void OnGenericMotionEvent(const ui::MotionEventAndroid&) {}
+  };
+
+  EventForwarder(const EventForwarder&) = delete;
+  EventForwarder& operator=(const EventForwarder&) = delete;
+
   ~EventForwarder();
 
-  base::android::ScopedJavaLocalRef<jobject> GetJavaWindowAndroid(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj);
+  base::android::ScopedJavaLocalRef<jobject> GetJavaWindowAndroid(JNIEnv* env);
 
-  jboolean OnTouchEvent(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& motion_event,
-      jlong time_ms,
-      jint android_action,
-      jint pointer_count,
-      jint history_size,
-      jint action_index,
-      jfloat pos_x_0,
-      jfloat pos_y_0,
-      jfloat pos_x_1,
-      jfloat pos_y_1,
-      jint pointer_id_0,
-      jint pointer_id_1,
-      jfloat touch_major_0,
-      jfloat touch_major_1,
-      jfloat touch_minor_0,
-      jfloat touch_minor_1,
-      jfloat orientation_0,
-      jfloat orientation_1,
-      jfloat tilt_0,
-      jfloat tilt_1,
-      jfloat raw_pos_x,
-      jfloat raw_pos_y,
-      jint android_tool_type_0,
-      jint android_tool_type_1,
-      jint android_gesture_classification,
-      jint android_button_state,
-      jint android_meta_state,
-      jboolean is_touch_handle_event);
+  // |oldest_event_time| and |latest_event_time| would be same for a MotionEvent
+  // without any historical events attached to it. For cases when there are
+  // historical events |oldest_event_time| will be the event time of earliest
+  // input i.e. MotionEvent.getHistoricalEventTimeNanos(0) and
+  // |latest_event_time| will be the event time of most recent event i.e.
+  // MotionEvent.getEventTimeNanos().
+  bool OnTouchEvent(JNIEnv* env,
+                    const base::android::JavaRef<jobject>& motion_event,
+                    int64_t oldest_event_time_ns,
+                    int64_t latest_event_time_ns,
+                    int32_t android_action,
+                    float touch_major_0,
+                    float touch_major_1,
+                    float touch_minor_0,
+                    float touch_minor_1,
+                    int32_t android_gesture_classification,
+                    bool is_touch_handle_event,
+                    bool is_latest_event_time_resampled);
 
   void OnMouseEvent(JNIEnv* env,
-                    const base::android::JavaParamRef<jobject>& obj,
-                    jlong time_ms,
-                    jint android_action,
-                    jfloat x,
-                    jfloat y,
-                    jint pointer_id,
-                    jfloat pressure,
-                    jfloat orientation,
-                    jfloat tilt,
-                    jint android_changed_button,
-                    jint android_button_state,
-                    jint android_meta_state,
-                    jint tool_type);
+                    const base::android::JavaRef<jobject>& motion_event,
+                    int64_t time_ns,
+                    int32_t android_action,
+                    int32_t android_changed_button,
+                    int32_t tool_type,
+                    bool skip_dip_scale);
 
   void OnDragEvent(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   jint action,
-                   jint x,
-                   jint y,
-                   jint screen_x,
-                   jint screen_y,
-                   const base::android::JavaParamRef<jobjectArray>& j_mimeTypes,
-                   const base::android::JavaParamRef<jstring>& j_content);
+                   int32_t action,
+                   float x,
+                   float y,
+                   float screen_x,
+                   float screen_y,
+                   const base::android::JavaRef<jobjectArray>& j_mimeTypes,
+                   bool has_files,
+                   const base::android::JavaRef<jobjectArray>& j_filenames,
+                   const base::android::JavaRef<jstring>& j_text,
+                   const base::android::JavaRef<jstring>& j_html,
+                   const base::android::JavaRef<jstring>& j_url,
+                   const base::android::JavaRef<jstring>& j_customData,
+                   const base::android::JavaRef<jstring>& j_effectAllowed,
+                   const base::android::JavaRef<jstring>& j_dragId,
+                   const base::android::JavaRef<jbyteArray>& j_imageBytes,
+                   const base::android::JavaRef<jstring>& j_imageExtension,
+                   const base::android::JavaRef<jstring>& j_imageFilename);
 
-  jboolean OnGestureEvent(JNIEnv* env,
-                          const base::android::JavaParamRef<jobject>& jobj,
-                          jint type,
-                          jlong time_ms,
-                          jfloat scale);
+  // Dispatches a drag event carrying `clip_data` (an
+  // `android.content.ClipData`) through the Java `EventForwarder`, as if it had
+  // been delivered by `View#onDragEvent`, so that its `ClipData` parsing and
+  // content URI filtering run. Coordinates are in physical pixels relative to
+  // this forwarder's view. Used by browser tests to replay drags captured from
+  // a `DragAndDropDelegate`.
+  void DispatchDragEventForTesting(
+      int32_t action,
+      float x,
+      float y,
+      float screen_x,
+      float screen_y,
+      const base::android::JavaRef<jobject>& clip_data);
 
-  jboolean OnGenericMotionEvent(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& motion_event,
-      jlong time_ms);
+  bool OnGestureEvent(int32_t type, int64_t time_ms, float scale);
 
-  jboolean OnKeyUp(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& obj,
-                   const base::android::JavaParamRef<jobject>& key_event,
-                   jint key_code);
+  bool OnGenericMotionEvent(JNIEnv* env,
+                            const base::android::JavaRef<jobject>& motion_event,
+                            int64_t event_time_ns,
+                            int64_t down_time_ms);
 
-  jboolean DispatchKeyEvent(
-      JNIEnv* env,
-      const base::android::JavaParamRef<jobject>& obj,
-      const base::android::JavaParamRef<jobject>& motion_event);
+  void OnMouseWheelEvent(JNIEnv* env,
+                         const base::android::JavaRef<jobject>& motion_event,
+                         int64_t time_ns,
+                         int32_t action,
+                         float x,
+                         float y,
+                         float raw_x,
+                         float raw_y,
+                         float delta_x,
+                         float delta_y);
 
-  void ScrollBy(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& jobj,
-                jfloat delta_x,
-                jfloat delta_y);
+  bool OnKeyUp(const ui::KeyEventAndroid& key_event);
 
-  void ScrollTo(JNIEnv* env,
-                const base::android::JavaParamRef<jobject>& jobj,
-                jfloat x,
-                jfloat y);
+  bool DispatchKeyEvent(const ui::KeyEventAndroid& key_event);
 
-  void DoubleTap(JNIEnv* env,
-                 const base::android::JavaParamRef<jobject>& jobj,
-                 jlong time_ms,
-                 jint x,
-                 jint y);
+  void ScrollBy(float delta_x, float delta_y);
 
-  void StartFling(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& jobj,
-                  jlong time_ms,
-                  jfloat velocity_x,
-                  jfloat velocity_y,
-                  jboolean synthetic_scroll,
-                  jboolean prevent_boosting);
+  void ScrollTo(float x, float y);
 
-  void CancelFling(JNIEnv* env,
-                   const base::android::JavaParamRef<jobject>& jobj,
-                   jlong time_ms,
-                   jboolean prevent_boosting);
+  void DoubleTap(int64_t time_ms, int32_t x, int32_t y);
+
+  void StartFling(int64_t time_ms,
+                  float x,
+                  float y,
+                  float raw_x,
+                  float raw_y,
+                  float velocity_x,
+                  float velocity_y,
+                  bool synthetic_scroll,
+                  bool prevent_boosting,
+                  bool is_touchpad_event,
+                  bool target_viewport);
+
+  void CancelFling(int64_t time_ms,
+                   bool prevent_boosting,
+                   bool is_touchpad_event);
+
+  void AddObserver(Observer* observer);
+
+  void RemoveObserver(Observer* observer);
+
+  gfx::PointF GetCurrentTouchSequenceOffset();
+
+  // Delivers images dragged out of this browser's own web contents to this
+  // view as DropData::file_contents, as desktop platforms do for every drop
+  // target. Off by default so that ordinary tabs continue receiving intra-app
+  // image drags as DropData::filenames.
+  void SetAllowIntraAppImageDrops(bool allow);
+
+  base::ObserverList<Observer>& GetObserversForTesting() { return observers_; }
 
  private:
   friend class ViewAndroid;
 
   explicit EventForwarder(ViewAndroid* view);
 
-  base::android::ScopedJavaLocalRef<jobject> GetJavaObject();
+  base::android::ScopedJavaLocalRef<jobject> GetJavaObject(JNIEnv* env);
+  base::android::ScopedJavaLocalRef<jobject> GetOrCreateJavaObject(JNIEnv* env);
 
-  ViewAndroid* const view_;
-  base::android::ScopedJavaGlobalRef<jobject> java_obj_;
+  // last_x_pos_ & last_y_pos_ are only used for trace events (see b/315762684
+  // for a relevant investigation). They are useful in debugging but could be
+  // removed easily if needed.
+  float last_x_pos_{-1.0};
+  float last_y_pos_{-1.0};
+  const raw_ptr<ViewAndroid> view_;
 
-  DISALLOW_COPY_AND_ASSIGN(EventForwarder);
+  base::ObserverList<Observer> observers_;
 };
 
 }  // namespace ui

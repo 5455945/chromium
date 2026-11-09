@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,11 +7,13 @@
 #include <string>
 
 #include "base/check.h"
+#include "base/check_deref.h"
 #include "base/metrics/histogram_functions.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chromeos/settings/cros_settings_names.h"
-#include "chromeos/settings/cros_settings_provider.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+#include "chromeos/ash/components/settings/cros_settings_names.h"
+#include "chromeos/ash/components/settings/cros_settings_provider.h"
 #include "components/account_id/account_id.h"
+#include "components/session_manager/core/session.h"
 #include "components/session_manager/core/session_manager.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -31,7 +33,7 @@ constexpr char kGaiaUsersCountHistogramName[] = "FamilyUser.GaiaUsersCount";
 
 FamilyUserDeviceMetrics::FamilyUserDeviceMetrics()
     : user_manager_(user_manager::UserManager::Get()) {
-  DCHECK(user_manager_);
+  CHECK(user_manager_, base::NotFatalUntil::M160);
   session_manager::SessionManager::Get()->AddObserver(this);
   DeviceSettingsService::Get()->AddObserver(this);
 }
@@ -60,7 +62,7 @@ const char* FamilyUserDeviceMetrics::GetGaiaUsersCountHistogramNameForTest() {
 }
 
 void FamilyUserDeviceMetrics::OnNewDay() {
-  const user_manager::UserList& users = user_manager_->GetUsers();
+  const user_manager::UserList& users = user_manager_->GetPersistedUsers();
   int family_link_users_count = 0;
   int gaia_users_count = 0;
 
@@ -91,13 +93,16 @@ void FamilyUserDeviceMetrics::OnUserSessionStarted(bool is_primary_user) {
   if (!user_manager_->IsCurrentUserNew())
     return;
 
+  const AccountId& primary_account_id =
+      CHECK_DEREF(session_manager::SessionManager::Get()->GetPrimarySession())
+          .account_id();
   const user_manager::UserType type =
-      user_manager_->GetPrimaryUser()->GetType();
+      CHECK_DEREF(user_manager_->FindUser(primary_account_id)).GetType();
 
   NewUserAdded new_user_type = NewUserAdded::kOtherUserAdded;
-  if (type == user_manager::USER_TYPE_CHILD) {
+  if (type == user_manager::UserType::kChild) {
     new_user_type = NewUserAdded::kFamilyLinkUserAdded;
-  } else if (type == user_manager::USER_TYPE_REGULAR) {
+  } else if (type == user_manager::UserType::kRegular) {
     new_user_type = NewUserAdded::kRegularUserAdded;
   }
 
@@ -109,9 +114,11 @@ void FamilyUserDeviceMetrics::OwnershipStatusChanged() {
 }
 
 void FamilyUserDeviceMetrics::ReportDeviceOwnership() {
-  const user_manager::User* active_user = user_manager_->GetActiveUser();
-  if (!active_user)
+  const session_manager::Session* active_session =
+      session_manager::SessionManager::Get()->GetActiveSession();
+  if (!active_session) {
     return;
+  }
 
   const CrosSettings* cros_settings = CrosSettings::Get();
   // Schedule a callback if device policy has not yet been verified.
@@ -130,7 +137,7 @@ void FamilyUserDeviceMetrics::ReportDeviceOwnership() {
 
   base::UmaHistogramBoolean(
       kDeviceOwnerHistogramName,
-      owner_email == active_user->GetAccountId().GetUserEmail());
+      owner_email == active_session->account_id().GetUserEmail());
 }
 
 }  // namespace ash

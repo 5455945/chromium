@@ -24,7 +24,8 @@
 #include "third_party/blink/renderer/core/loader/resource/image_resource_observer.h"
 #include "third_party/blink/renderer/core/svg/svg_filter_primitive_standard_attributes.h"
 #include "third_party/blink/renderer/core/svg/svg_uri_reference.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/prefinalizer.h"
 
 namespace blink {
 
@@ -39,14 +40,18 @@ class SVGFEImageElement final : public SVGFilterPrimitiveStandardAttributes,
   USING_PRE_FINALIZER(SVGFEImageElement, Dispose);
 
  public:
-  bool CurrentFrameHasSingleSecurityOrigin() const;
+  bool HasSingleSecurityOrigin() const;
 
   explicit SVGFEImageElement(Document&);
   ~SVGFEImageElement() override;
+
+  ElementType GetElementType() const final {
+    return ElementType::kSVGFEImageElement;
+  }
+
   SVGAnimatedPreserveAspectRatio* preserveAspectRatio() {
     return preserve_aspect_ratio_.Get();
   }
-
   const SVGElement* TargetElement() const;
 
   void Dispose();
@@ -68,6 +73,10 @@ class SVGFEImageElement final : public SVGFilterPrimitiveStandardAttributes,
   InsertionNotificationRequest InsertedInto(ContainerNode&) override;
   void RemovedFrom(ContainerNode&) override;
   bool TaintsOrigin() const override;
+
+  SVGAnimatedPropertyBase* PropertyFromAttribute(
+      const QualifiedName& attribute_name) const override;
+  void SynchronizeAllSVGAttributes() const override;
 
   Member<SVGAnimatedPreserveAspectRatio> preserve_aspect_ratio_;
 

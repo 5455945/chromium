@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,9 @@
 
 #include <vector>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "content/public/browser/download_manager_delegate.h"
 #include "content/public/browser/save_page_type.h"
 #include "ui/shell_dialogs/select_file_dialog.h"
@@ -24,6 +25,10 @@ class SavePackageFilePicker : public ui::SelectFileDialog::Listener {
                         bool can_save_as_complete,
                         DownloadPrefs* download_prefs,
                         content::SavePackagePathPickedCallback callback);
+
+  SavePackageFilePicker(const SavePackageFilePicker&) = delete;
+  SavePackageFilePicker& operator=(const SavePackageFilePicker&) = delete;
+
   ~SavePackageFilePicker() override;
 
   // Used to disable prompting the user for a directory/filename of the saved
@@ -32,30 +37,34 @@ class SavePackageFilePicker : public ui::SelectFileDialog::Listener {
 
  private:
   // SelectFileDialog::Listener implementation.
-  void FileSelected(const base::FilePath& path,
-                    int index,
-                    void* unused_params) override;
-  void FileSelectionCanceled(void* unused_params) override;
+  void FileSelected(const ui::SelectedFileInfo& file, int index) override;
+  void FileSelectionCanceled() override;
 
   bool ShouldSaveAsOnlyHTML(content::WebContents* web_contents) const;
-  bool ShouldSaveAsMHTML() const;
+  bool ShouldSaveAsMHTMLByDefault() const;
 
   // Used to look up the renderer process for this request to get the context.
-  int render_process_id_;
+  const int render_process_id_;
 
   // Whether the web page can be saved as a complete HTML file.
-  bool can_save_as_complete_;
+  const bool can_save_as_complete_;
 
-  DownloadPrefs* download_prefs_;
+  // TODO(crbug.com/40280922): `download_prefs_` points to
+  // `ChromeDownloadManagerDelegate::download_prefs_`.
+  // `ChromeDownloadManagerDelegate` is destroyed on shutdown but dialogs are
+  // not, causing this to dangle.
+  raw_ptr<DownloadPrefs, DanglingUntriaged> download_prefs_;
 
   content::SavePackagePathPickedCallback callback_;
 
   std::vector<content::SavePageType> save_types_;
 
+  // Prohibits the associated WebContents from entering fullscreen while the
+  // native save file dialog is open.
+  base::ScopedClosureRunner fullscreen_block_;
+
   // For managing select file dialogs.
   scoped_refptr<ui::SelectFileDialog> select_file_dialog_;
-
-  DISALLOW_COPY_AND_ASSIGN(SavePackageFilePicker);
 };
 
 #endif  // CHROME_BROWSER_DOWNLOAD_SAVE_PACKAGE_FILE_PICKER_H_

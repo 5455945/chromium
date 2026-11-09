@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,26 +8,36 @@
 #include <utility>
 #include <vector>
 
-#include "android_webview/browser/aw_print_manager.h"
-#include "android_webview/browser_jni_headers/AwPdfExporter_jni.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
-#include "base/bind.h"
+#include "base/files/scoped_file.h"
+#include "base/functional/bind.h"
+#include "base/logging.h"
 #include "content/public/browser/browser_thread.h"
+#include "printing/buildflags/buildflags.h"
+#include "third_party/jni_zero/jni_zero.h"
+
+#if BUILDFLAG(ENABLE_PRINTING)
+#include "android_webview/browser/aw_print_manager.h"
 #include "printing/print_settings.h"
 #include "printing/units.h"
+#endif
 
-using base::android::JavaParamRef;
+// Must come after all headers that specialize FromJniType() / ToJniType().
+#include "android_webview/browser_jni_headers/AwPdfExporter_jni.h"
+
 using base::android::JavaRef;
 using base::android::ScopedJavaLocalRef;
 
 namespace android_webview {
 
+#if BUILDFLAG(ENABLE_PRINTING)
 namespace {
 
-void JNI_AwPdfExporter_GetPageRanges(JNIEnv* env,
-                                     const JavaRef<jintArray>& int_arr,
-                                     printing::PageRanges* range_vector) {
+static void JNI_AwPdfExporter_GetPageRanges(
+    JNIEnv* env,
+    const JavaRef<jintArray>& int_arr,
+    printing::PageRanges* range_vector) {
   std::vector<int> pages;
   base::android::JavaIntArrayToIntVector(env, int_arr, &pages);
   for (int page : pages) {
@@ -39,14 +49,14 @@ void JNI_AwPdfExporter_GetPageRanges(JNIEnv* env,
 }
 
 }  // namespace
+#endif  // BUILDFLAG(ENABLE_PRINTING)
 
 AwPdfExporter::AwPdfExporter(JNIEnv* env,
                              const JavaRef<jobject>& obj,
                              content::WebContents* web_contents)
     : java_ref_(env, obj), web_contents_(web_contents) {
   DCHECK(obj);
-  Java_AwPdfExporter_setNativeAwPdfExporter(env, obj,
-                                            reinterpret_cast<intptr_t>(this));
+  Java_AwPdfExporter_setNativeAwPdfExporter(env, obj, jni_zero::MakeRaw(this));
 }
 
 AwPdfExporter::~AwPdfExporter() {
@@ -55,39 +65,64 @@ AwPdfExporter::~AwPdfExporter() {
   if (!obj)
     return;
   // Clear the Java peer's weak pointer to |this| object.
-  Java_AwPdfExporter_setNativeAwPdfExporter(env, obj, 0);
+  Java_AwPdfExporter_setNativeAwPdfExporter(env, obj, nullptr);
 }
 
 void AwPdfExporter::ExportToPdf(JNIEnv* env,
-                                const JavaParamRef<jobject>& obj,
+                                const JavaRef<jobject>& obj,
                                 int fd,
-                                const JavaParamRef<jintArray>& pages,
-                                const JavaParamRef<jobject>& cancel_signal) {
+                                const JavaRef<jintArray>& pages,
+                                const JavaRef<jobject>& cancel_signal) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
+  // Wrap the file descriptor in a ScopedFD to take ownership, since
+  // AwPdfExporter and AwPrintManager are responsible for closing it when done
+  // (after Java detached it).
+  base::ScopedFD scoped_fd(fd);
+  // Also verify Java sent over a valid file descriptor, since the rest of the
+  // code assumes it did.
+  CHECK(scoped_fd.is_valid());
+
+#if BUILDFLAG(ENABLE_PRINTING)
   printing::PageRanges page_ranges;
   JNI_AwPdfExporter_GetPageRanges(env, pages, &page_ranges);
 
   // Create an AwPrintManager for the provided WebContents if the
   // AwPrintManager doesn't exist.
-  if (!AwPrintManager::FromWebContents(web_contents_))
+  if (!AwPrintManager::FromWebContents(web_contents_)) {
     AwPrintManager::CreateForWebContents(web_contents_);
+  }
 
   // Update the parameters of the current print manager.
   AwPrintManager* print_manager =
       AwPrintManager::FromWebContents(web_contents_);
-  print_manager->UpdateParam(CreatePdfSettings(env, obj, page_ranges), fd,
+  print_manager->UpdateParam(CreatePdfSettings(env, obj, page_ranges),
+                             std::move(scoped_fd),
                              base::BindRepeating(&AwPdfExporter::DidExportPdf,
                                                  base::Unretained(this)));
 
-  if (!print_manager->PrintNow())
+  if (!print_manager->PrintNow()) {
     DidExportPdf(0);
+  }
+#else
+  DidExportPdf(0);
+#endif  // BUILDFLAG(ENABLE_PRINTING)
 }
 
+#if BUILDFLAG(ENABLE_PRINTING)
 namespace {
+
 // Converts from 1/1000 of inches to device units using DPI.
 int MilsToDots(int val, int dpi) {
-  return static_cast<int>(printing::ConvertUnitDouble(val, 1000.0, dpi));
+  return static_cast<int>(
+      printing::ConvertUnitFloat(val, printing::kMilsPerInch, dpi));
 }
+
+int MilsToDeviceMicrons(int val, int dpi) {
+  return printing::ConvertUnit(MilsToDots(val, dpi), printing::kPointsPerInch,
+                               printing::kMicronsPerInch);
+}
+
 }  // namespace
 
 std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
@@ -96,6 +131,17 @@ std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
     const printing::PageRanges& page_ranges) {
   auto settings = std::make_unique<printing::PrintSettings>();
   int dpi = Java_AwPdfExporter_getDpi(env, obj);
+  printing::PageMargins margins;
+  margins.left =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getLeftMargin(env, obj), dpi);
+  margins.right =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getRightMargin(env, obj), dpi);
+  margins.top =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getTopMargin(env, obj), dpi);
+  margins.bottom =
+      MilsToDeviceMicrons(Java_AwPdfExporter_getBottomMargin(env, obj), dpi);
+  settings->SetCustomMargins(margins);
+
   int width = Java_AwPdfExporter_getPageWidth(env, obj);
   int height = Java_AwPdfExporter_getPageHeight(env, obj);
   gfx::Size physical_size_device_units;
@@ -116,16 +162,10 @@ std::unique_ptr<printing::PrintSettings> AwPdfExporter::CreatePdfSettings(
   settings->SetPrinterPrintableArea(physical_size_device_units,
                                     printable_area_device_units, true);
 
-  printing::PageMargins margins;
-  margins.left = MilsToDots(Java_AwPdfExporter_getLeftMargin(env, obj), dpi);
-  margins.right = MilsToDots(Java_AwPdfExporter_getRightMargin(env, obj), dpi);
-  margins.top = MilsToDots(Java_AwPdfExporter_getTopMargin(env, obj), dpi);
-  margins.bottom =
-      MilsToDots(Java_AwPdfExporter_getBottomMargin(env, obj), dpi);
-  settings->SetCustomMargins(margins);
   settings->set_should_print_backgrounds(true);
   return settings;
 }
+#endif  // BUILDFLAG(ENABLE_PRINTING)
 
 void AwPdfExporter::DidExportPdf(int page_count) {
   JNIEnv* env = base::android::AttachCurrentThread();
@@ -136,3 +176,5 @@ void AwPdfExporter::DidExportPdf(int page_count) {
 }
 
 }  // namespace android_webview
+
+DEFINE_JNI(AwPdfExporter)

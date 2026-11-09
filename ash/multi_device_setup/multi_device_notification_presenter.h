@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,10 +10,10 @@
 
 #include "ash/ash_export.h"
 #include "ash/public/cpp/session/session_observer.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/auto_reset.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "chromeos/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
+#include "chromeos/ash/services/multidevice_setup/public/mojom/multidevice_setup.mojom.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "ui/message_center/message_center_observer.h"
@@ -41,17 +41,34 @@ namespace ash {
 // Note that if one notification is showing and another one is triggered, the
 // old text is replaced (if it's different) and the notification pops up again.
 class ASH_EXPORT MultiDeviceNotificationPresenter
-    : public chromeos::multidevice_setup::mojom::AccountStatusChangeDelegate,
+    : public multidevice_setup::mojom::AccountStatusChangeDelegate,
       public SessionObserver,
       public message_center::MessageCenterObserver {
  public:
   explicit MultiDeviceNotificationPresenter(
       message_center::MessageCenter* message_center);
+
+  MultiDeviceNotificationPresenter(const MultiDeviceNotificationPresenter&) =
+      delete;
+  MultiDeviceNotificationPresenter& operator=(
+      const MultiDeviceNotificationPresenter&) = delete;
+
   ~MultiDeviceNotificationPresenter() override;
+
+  // Disables notifications for tests.
+  static std::unique_ptr<base::AutoReset<bool>>
+  DisableNotificationsForTesting();
 
   // Removes the notification created by NotifyPotentialHostExists() or does
   // nothing if that notification is not currently displayed.
   void RemoveMultiDeviceSetupNotification();
+
+  void UpdateIsSetupNotificationInteracted(
+      bool is_setup_notificaton_interacted);
+
+  // MultiDevice setup notification ID. Public so it can be accessed from
+  // phone_hub_tray.cc
+  static const char kSetupNotificationId[];
 
  protected:
   // multidevice_setup::mojom::AccountStatusChangeDelegate:
@@ -73,14 +90,13 @@ class ASH_EXPORT MultiDeviceNotificationPresenter
 
   void OnNotificationClicked(
       const std::string& notification_id,
-      const absl::optional<int>& button_index,
-      const absl::optional<std::u16string>& reply) override;
+      const std::optional<int>& button_index,
+      const std::optional<std::u16string>& reply) override;
 
  private:
   friend class MultiDeviceNotificationPresenterTest;
 
   // MultiDevice setup notification ID.
-  static const char kSetupNotificationId[];
   static const char kWifiSyncNotificationId[];
 
   // Represents each possible MultiDevice setup notification that the setup flow
@@ -122,22 +138,24 @@ class ASH_EXPORT MultiDeviceNotificationPresenter
 
   void FlushForTesting();
 
-  message_center::MessageCenter* message_center_;
+  // Indicates if Phone Hub icon is clicked when the setup notification is
+  // visible. If the value is true, we do not log event to
+  // MultiDevice.Setup.NotificationInteracted histogram.
+  bool is_setup_notification_interacted_ = false;
+
+  raw_ptr<message_center::MessageCenter> message_center_;
 
   // Notification currently showing or
   // Status::kNoNotificationVisible if there isn't one.
   Status notification_status_ = Status::kNoNotificationVisible;
 
-  mojo::Remote<chromeos::multidevice_setup::mojom::MultiDeviceSetup>
+  mojo::Remote<multidevice_setup::mojom::MultiDeviceSetup>
       multidevice_setup_remote_;
-  mojo::Receiver<
-      chromeos::multidevice_setup::mojom::AccountStatusChangeDelegate>
+  mojo::Receiver<multidevice_setup::mojom::AccountStatusChangeDelegate>
       receiver_{this};
 
   base::WeakPtrFactory<MultiDeviceNotificationPresenter> weak_ptr_factory_{
       this};
-
-  DISALLOW_COPY_AND_ASSIGN(MultiDeviceNotificationPresenter);
 };
 
 }  // namespace ash

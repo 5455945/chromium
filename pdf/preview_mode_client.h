@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,13 +10,17 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
-#include "pdf/pdf_engine.h"
+#include "base/containers/span.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/raw_ptr.h"
+#include "pdf/buildflags.h"
+#include "pdf/pdfium/pdfium_engine_client.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 
 namespace chrome_pdf {
 
 // The interface that's provided to the print preview rendering engine.
-class PreviewModeClient : public PDFEngine::Client {
+class PreviewModeClient : public PDFiumEngineClient {
  public:
   class Client {
    public:
@@ -27,12 +31,13 @@ class PreviewModeClient : public PDFEngine::Client {
   explicit PreviewModeClient(Client* client);
   ~PreviewModeClient() override;
 
-  // PDFEngine::Client implementation.
+  // PDFiumEngineClient:
   void ProposeDocumentLayout(const DocumentLayout& layout) override;
+  bool UseSkiaPremultipliedAlpha() override;
   void Invalidate(const gfx::Rect& rect) override;
   void DidScroll(const gfx::Vector2d& offset) override;
-  void ScrollToX(int x_in_screen_coords) override;
-  void ScrollToY(int y_in_screen_coords) override;
+  void ScrollToX(int x_in_screen_coords, bool force_smooth_scroll) override;
+  void ScrollToY(int y_in_screen_coords, bool force_smooth_scroll) override;
   void ScrollBy(const gfx::Vector2d& scroll_delta) override;
   void ScrollToPage(int page) override;
   void NavigateTo(const std::string& url,
@@ -40,7 +45,8 @@ class PreviewModeClient : public PDFEngine::Client {
   void UpdateCursor(ui::mojom::CursorType cursor_type) override;
   void UpdateTickMarks(const std::vector<gfx::Rect>& tickmarks) override;
   void NotifyNumberOfFindResultsChanged(int total, bool final_result) override;
-  void NotifySelectedFindResultChanged(int current_find_index) override;
+  void NotifySelectedFindResultChanged(int current_find_index,
+                                       bool final_result) override;
   void GetDocumentPassword(
       base::OnceCallback<void(const std::string&)> callback) override;
   void Alert(const std::string& message) override;
@@ -55,28 +61,33 @@ class PreviewModeClient : public PDFEngine::Client {
              const std::string& body) override;
   void Print() override;
   void SubmitForm(const std::string& url,
-                  const void* data,
-                  int length) override;
+                  base::span<const uint8_t> data) override;
   std::unique_ptr<UrlLoader> CreateUrlLoader() override;
-  std::vector<SearchStringResult> SearchString(const char16_t* string,
-                                               const char16_t* term,
+  v8::Isolate* GetIsolate() override;
+  std::vector<SearchStringResult> SearchString(const std::u16string& needle,
+                                               const std::u16string& haystack,
                                                bool case_sensitive) override;
   void DocumentLoadComplete() override;
   void DocumentLoadFailed() override;
   void DocumentHasUnsupportedFeature(const std::string& feature) override;
-  void FormTextFieldFocusChange(bool in_focus) override;
-  bool IsPrintPreview() override;
-  SkColor GetBackgroundColor() override;
+  void FormFieldFocusChange(FocusFieldType type) override;
+  bool IsPrintPreview() const override;
+  SkColor GetBackgroundColor() const override;
   void SetSelectedText(const std::string& selected_text) override;
   void SetLinkUnderCursor(const std::string& link_under_cursor) override;
   bool IsValidLink(const std::string& url) override;
-  void ScheduleTaskOnMainThread(const base::Location& from_here,
-                                ResultCallback callback,
-                                int32_t result,
-                                base::TimeDelta delay) override;
+  void OnNewTextFragmentsSearchStarted() override;
+#if BUILDFLAG(ENABLE_PDF_INK2)
+  bool IsInAnnotationMode() const override;
+#endif  // BUILDFLAG(ENABLE_PDF_INK2)
+#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+  void OnSearchifyStateChange(bool busy) override;
+  void OnHasSearchifyText() override;
+  void MaybeShowSearchifyInProgress() override;
+#endif
 
  private:
-  Client* const client_;
+  const raw_ptr<Client> client_;
 };
 
 }  // namespace chrome_pdf

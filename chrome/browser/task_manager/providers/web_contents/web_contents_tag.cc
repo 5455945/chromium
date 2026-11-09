@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -12,13 +12,13 @@ namespace task_manager {
 // static
 const WebContentsTag* WebContentsTag::FromWebContents(
     const content::WebContents* contents) {
-  DCHECK(contents);
+  CHECK(contents, base::NotFatalUntil::M162);
   return static_cast<const WebContentsTag*>(contents->GetUserData(kTagKey));
 }
 
 WebContentsTag::WebContentsTag(content::WebContents* contents)
     : web_contents_(contents) {
-  DCHECK(contents);
+  CHECK(contents, base::NotFatalUntil::M162);
   // You can't tag the |contents| here. The object creation is not complete yet.
   // This will be done in the factory methods inside
   // |task_manager::WebContentsTags|.
@@ -29,6 +29,6 @@ WebContentsTag::~WebContentsTag() {
 }
 
 // static
-void* WebContentsTag::kTagKey = &WebContentsTag::kTagKey;
+const void* WebContentsTag::kTagKey = &WebContentsTag::kTagKey;
 
 }  // namespace task_manager

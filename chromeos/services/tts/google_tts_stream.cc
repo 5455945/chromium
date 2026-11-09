@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,7 +7,11 @@
 #include <dlfcn.h>
 #include <sys/resource.h>
 
+#include "base/debug/crash_logging.h"
+#include "base/debug/dump_without_crashing.h"
 #include "base/files/file_util.h"
+#include "base/strings/stringprintf.h"
+#include "base/task/single_thread_task_runner.h"
 #include "chromeos/services/tts/constants.h"
 #include "chromeos/services/tts/tts_service.h"
 
@@ -17,14 +21,14 @@ namespace tts {
 // Simple helper to bridge logging in the shared library to Chrome's logging.
 void HandleLibraryLogging(int severity, const char* message) {
   switch (severity) {
-    case logging::LOG_INFO:
+    case logging::LOGGING_INFO:
       // Suppressed.
       break;
-    case logging::LOG_WARNING:
+    case logging::LOGGING_WARNING:
       LOG(WARNING) << message;
       break;
-    case logging::LOG_FATAL:
-    case logging::LOG_ERROR:
+    case logging::LOGGING_ERROR:
+    case logging::LOGGING_FATAL:
       LOG(ERROR) << message;
       break;
     default:
@@ -48,7 +52,7 @@ GoogleTtsStream::GoogleTtsStream(
       tts_player_(
           std::move(factory),
           media::AudioParameters(media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
-                                 media::CHANNEL_LAYOUT_MONO,
+                                 media::ChannelLayoutConfig::Mono(),
                                  kDefaultSampleRate,
                                  kDefaultBufferSize)) {
   bool loaded = libchrometts_.Load(kLibchromettsPath);
@@ -69,7 +73,10 @@ GoogleTtsStream::GoogleTtsStream(
       owner, &stream_receiver_));
 }
 
-GoogleTtsStream::~GoogleTtsStream() = default;
+GoogleTtsStream::~GoogleTtsStream() {
+  if (!is_in_process_teardown_)
+    libchrometts_.GoogleTtsShutdown();
+}
 
 bool GoogleTtsStream::IsBound() const {
   return stream_receiver_.is_bound();
@@ -100,6 +107,21 @@ void GoogleTtsStream::SelectVoice(const std::string& voice_name,
   base::FilePath path_prefix =
       base::FilePath(kTempDataDirectory).Append(voice_name);
   base::FilePath pipeline_path = path_prefix.Append("pipeline.pb");
+  if (!base::PathExists(pipeline_path)) {
+    // TODO (b:538255326): Investigate why pipeline.pb is occasionally missing.
+    std::string error_message = base::StringPrintf(
+        "Pipeline file does not exist: %s, voice_name: %s, directory exists: "
+        "%d, parent directory exists: %d",
+        pipeline_path.value().c_str(), voice_name.c_str(),
+        base::DirectoryExists(path_prefix),
+        base::DirectoryExists(base::FilePath(kTempDataDirectory)));
+    LOG(ERROR) << error_message;
+    SCOPED_CRASH_KEY_STRING1024("Tts", "missing_pipeline_voice", error_message);
+    base::debug::DumpWithoutCrashing();
+    std::move(callback).Run(false);
+    return;
+  }
+
   std::move(callback).Run(libchrometts_.GoogleTtsInit(
       pipeline_path.value().c_str(), path_prefix.value().c_str()));
 }
@@ -119,7 +141,7 @@ void GoogleTtsStream::Speak(const std::vector<uint8_t>& text_jspb,
   tts_player_.Play(std::move(callback));
   is_buffering_ = true;
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&GoogleTtsStream::ReadMoreFrames,
                      weak_factory_.GetWeakPtr(), true /* is_first_buffer */));
@@ -165,9 +187,8 @@ void GoogleTtsStream::ReadMoreFrames(bool is_first_buffer) {
        timepoint_index++) {
     tts_player_.AddExplicitTimepoint(
         libchrometts_.GoogleTtsGetTimepointsCharIndexAtIndex(timepoint_index),
-        base::TimeDelta::FromSecondsD(
-            libchrometts_.GoogleTtsGetTimepointsTimeInSecsAtIndex(
-                timepoint_index)));
+        base::Seconds(libchrometts_.GoogleTtsGetTimepointsTimeInSecsAtIndex(
+            timepoint_index)));
   }
 
   // Ensure we always clean up given status 0 (done) or -1 (error).
@@ -176,7 +197,7 @@ void GoogleTtsStream::ReadMoreFrames(bool is_first_buffer) {
     return;
   }
 
-  base::ThreadTaskRunnerHandle::Get()->PostTask(
+  base::SingleThreadTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE,
       base::BindOnce(&GoogleTtsStream::ReadMoreFrames,
                      weak_factory_.GetWeakPtr(), false /* is_first_buffer */));

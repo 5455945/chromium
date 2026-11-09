@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -22,11 +22,11 @@ function handle(message, e, priorStackTrace) {
 }
 
 // Runs a user-supplied callback safely.
-function safeCallbackApply(name, request, callback, args) {
+function safeCallbackApply(name, callback, args, priorStackTrace) {
   try {
-    $Function.apply(callback, request, args);
+    $Function.apply(callback, null, args);
   } catch (e) {
-    handle('Error in response to ' + name, e, request.stack);
+    handle('Error in response to ' + name, e, priorStackTrace);
   }
 }
 
@@ -43,8 +43,9 @@ function safeCallbackApply(name, request, callback, args) {
  * @return {string} The formatted error message.
  */
 function formatErrorMessage(message, e, priorStackTrace) {
-  if (e)
+  if (e) {
     message += ': ' + safeErrorToString(e, false);
+  }
 
   var stack;
   try {
@@ -55,23 +56,27 @@ function formatErrorMessage(message, e, priorStackTrace) {
   } catch (e) {}
 
   // If a stack is not provided, capture a stack trace.
-  if (!priorStackTrace && !stack)
+  if (!priorStackTrace && !stack) {
     stack = getStackTrace();
+  }
 
   stack = filterExtensionStackTrace(stack);
-  if (stack)
+  if (stack) {
     message += '\n' + stack;
+  }
 
-  // If an asynchronouse stack trace was set, append it.
-  if (priorStackTrace)
+  // If an asynchronous stack trace was set, append it.
+  if (priorStackTrace) {
     message += '\n' + priorStackTrace;
+  }
 
   return message;
 }
 
 function filterExtensionStackTrace(stack) {
-  if (!stack)
+  if (!stack) {
     return '';
+  }
   // Remove stack frames in the stack trace that weren't associated with the
   // extension, to not confuse extension developers with internal details.
   stack = $String.split(stack, '\n');

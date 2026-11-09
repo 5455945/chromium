@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,12 +13,23 @@ import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 
-import org.chromium.base.annotations.CalledByNative;
-import org.chromium.base.annotations.JNINamespace;
-import org.chromium.base.annotations.NativeMethods;
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JNINamespace;
+import org.jni_zero.JniPtr;
+import org.jni_zero.JniType;
+import org.jni_zero.JniTypeToken;
+import org.jni_zero.JniUniquePtr;
+import org.jni_zero.NativeMethods;
+
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.components.thinwebview.CompositorView;
 import org.chromium.components.thinwebview.ThinWebViewConstraints;
 import org.chromium.ui.base.WindowAndroid;
+import org.chromium.ui.xr.scenecore.XrSceneCoreSessionManager;
+import org.chromium.ui.xr.scenecore.XrSurfaceEntityHolder;
+import org.chromium.ui.xr.scenecore.XrSurfaceEntityShape;
+import org.chromium.ui.xr.scenecore.XrSurfaceEntityView;
 
 /**
  * An android view backed by a {@link Surface} that is able to display a cc::Layer. Either, a {@link
@@ -26,27 +37,48 @@ import org.chromium.ui.base.WindowAndroid;
  * provided in the native.
  */
 @JNINamespace("thin_webview::android")
+@NullMarked
 public class CompositorViewImpl implements CompositorView {
+    @JniType("::thin_webview::android::CompositorViewImpl")
+    interface NativeCompositorViewImpl extends JniTypeToken {}
+
     private final Context mContext;
     private final View mView;
+    private final WindowAndroid mWindowAndroid;
     private final ThinWebViewConstraints mViewConstraints;
-    private long mNativeCompositorViewImpl;
+    private @Nullable JniUniquePtr<NativeCompositorViewImpl> mNativeCompositorViewImpl;
 
     /**
      * Creates a {@link CompositorView} backed by a {@link Surface}. The surface is provided by
-     * a either a {@link TextureView} or {@link SurfaceView}.
+     * either a {@link TextureView} or a {@link SurfaceView}.
+     *
      * @param context The context to create this view.
      * @param windowAndroid The associated {@code WindowAndroid} on which the view is to be
-     *         displayed.
+     *     displayed.
      * @param constraints A set of constraints associated with this view.
      */
     public CompositorViewImpl(
             Context context, WindowAndroid windowAndroid, ThinWebViewConstraints constraints) {
         mContext = context;
         mViewConstraints = constraints.clone();
+        mNativeCompositorViewImpl =
+                CompositorViewImplJni.get().init(this, windowAndroid, constraints.backgroundColor);
         mView = useSurfaceView() ? createSurfaceView() : createTextureView();
-        mNativeCompositorViewImpl = CompositorViewImplJni.get().init(
-                CompositorViewImpl.this, windowAndroid, constraints.backgroundColor);
+        mWindowAndroid = windowAndroid;
+    }
+
+    public CompositorViewImpl(
+            Context context,
+            WindowAndroid windowAndroid,
+            ThinWebViewConstraints constraints,
+            XrSceneCoreSessionManager xrSceneCoreSessionManager,
+            @XrSurfaceEntityShape int surfaceEntityShape) {
+        mContext = context;
+        mViewConstraints = constraints.clone();
+        mNativeCompositorViewImpl =
+                CompositorViewImplJni.get().init(this, windowAndroid, constraints.backgroundColor);
+        mView = createSpatialSurfaceView(xrSceneCoreSessionManager, surfaceEntityShape);
+        mWindowAndroid = windowAndroid;
     }
 
     @Override
@@ -56,98 +88,190 @@ public class CompositorViewImpl implements CompositorView {
 
     @Override
     public void destroy() {
-        if (mNativeCompositorViewImpl != 0) {
-            CompositorViewImplJni.get().destroy(mNativeCompositorViewImpl, CompositorViewImpl.this);
-            mNativeCompositorViewImpl = 0;
+        RuntimeException windowAndroidDestroy = mWindowAndroid.getDestroyStack();
+        if (windowAndroidDestroy != null) {
+            throw new IllegalStateException(
+                    "WindowAndroid destroyed before CompositorViewImpl", windowAndroidDestroy);
+        }
+        if (mNativeCompositorViewImpl != null) {
+            mNativeCompositorViewImpl.destroy();
+            mNativeCompositorViewImpl = null;
+            if (mView instanceof XrSurfaceEntityView entityView) {
+                entityView.getHolder().dispose();
+            }
         }
     }
 
     @Override
     public void requestRender() {
-        if (mNativeCompositorViewImpl != 0) {
-            CompositorViewImplJni.get().setNeedsComposite(
-                    mNativeCompositorViewImpl, CompositorViewImpl.this);
+        if (mNativeCompositorViewImpl != null) {
+            CompositorViewImplJni.get().setNeedsComposite(mNativeCompositorViewImpl);
         }
+    }
+
+    @Override
+    public void runOnNextFrame(Runnable runnable) {
+        if (mNativeCompositorViewImpl == null) return;
+        CompositorViewImplJni.get().runOnNextFrame(mNativeCompositorViewImpl, runnable);
     }
 
     @Override
     public void setAlpha(float alpha) {
         assert mViewConstraints.supportsOpacity;
-        if (mNativeCompositorViewImpl == 0) return;
+        if (mNativeCompositorViewImpl == null) return;
         mView.setAlpha(alpha);
     }
 
     private SurfaceView createSurfaceView() {
         SurfaceView surfaceView = new SurfaceView(mContext);
         surfaceView.setZOrderMediaOverlay(true);
-        surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceCreated(SurfaceHolder surfaceHolder) {
-                if (mNativeCompositorViewImpl == 0) return;
-                CompositorViewImplJni.get().surfaceCreated(
-                        mNativeCompositorViewImpl, CompositorViewImpl.this);
-            }
+        surfaceView
+                .getHolder()
+                .addCallback(
+                        new SurfaceHolder.Callback() {
+                            @Override
+                            public void surfaceCreated(SurfaceHolder surfaceHolder) {
+                                if (mNativeCompositorViewImpl == null) return;
+                                CompositorViewImplJni.get()
+                                        .surfaceCreated(mNativeCompositorViewImpl);
+                            }
 
-            @Override
-            public void surfaceChanged(
-                    SurfaceHolder surfaceHolder, int format, int width, int height) {
-                if (mNativeCompositorViewImpl == 0) return;
-                CompositorViewImplJni.get().surfaceChanged(mNativeCompositorViewImpl,
-                        CompositorViewImpl.this, format, width, height, true,
-                        surfaceHolder.getSurface());
-            }
+                            @Override
+                            public void surfaceChanged(
+                                    SurfaceHolder surfaceHolder,
+                                    int format,
+                                    int width,
+                                    int height) {
+                                if (mNativeCompositorViewImpl == null) return;
+                                CompositorViewImplJni.get()
+                                        .surfaceChanged(
+                                                mNativeCompositorViewImpl,
+                                                format,
+                                                width,
+                                                height,
+                                                true,
+                                                surfaceHolder.getSurface());
+                            }
 
-            @Override
-            public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
-                if (mNativeCompositorViewImpl == 0) return;
-                CompositorViewImplJni.get().surfaceDestroyed(
-                        mNativeCompositorViewImpl, CompositorViewImpl.this);
-            }
-        });
+                            @Override
+                            public void surfaceDestroyed(SurfaceHolder surfaceHolder) {
+                                if (mNativeCompositorViewImpl == null) return;
+                                CompositorViewImplJni.get()
+                                        .surfaceDestroyed(mNativeCompositorViewImpl);
+                            }
+                        });
 
         return surfaceView;
     }
 
     private TextureView createTextureView() {
         TextureView textureView = new TextureView(mContext);
-        textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
-            @Override
-            public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {}
+        textureView.setSurfaceTextureListener(
+                new TextureView.SurfaceTextureListener() {
+                    private @Nullable Surface mSurface;
 
-            @Override
-            public void onSurfaceTextureSizeChanged(
-                    SurfaceTexture surfaceTexture, int width, int height) {
-                if (mNativeCompositorViewImpl == 0) return;
-                CompositorViewImplJni.get().surfaceChanged(mNativeCompositorViewImpl,
-                        CompositorViewImpl.this, PixelFormat.OPAQUE, width, height, false,
-                        new Surface(surfaceTexture));
-            }
+                    @Override
+                    public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {}
 
-            @Override
-            public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
-                if (mNativeCompositorViewImpl == 0) return false;
-                CompositorViewImplJni.get().surfaceDestroyed(
-                        mNativeCompositorViewImpl, CompositorViewImpl.this);
-                return false;
-            }
+                    @Override
+                    public void onSurfaceTextureSizeChanged(
+                            SurfaceTexture surfaceTexture, int width, int height) {
+                        if (mNativeCompositorViewImpl == null) return;
+                        assert textureView.getSurfaceTexture() == surfaceTexture;
+                        CompositorViewImplJni.get()
+                                .surfaceChanged(
+                                        mNativeCompositorViewImpl,
+                                        PixelFormat.OPAQUE,
+                                        width,
+                                        height,
+                                        false,
+                                        getSurface());
+                    }
 
-            @Override
-            public void onSurfaceTextureAvailable(
-                    SurfaceTexture surfaceTexture, int width, int height) {
-                if (mNativeCompositorViewImpl == 0) return;
-                CompositorViewImplJni.get().surfaceCreated(
-                        mNativeCompositorViewImpl, CompositorViewImpl.this);
-                CompositorViewImplJni.get().surfaceChanged(mNativeCompositorViewImpl,
-                        CompositorViewImpl.this, PixelFormat.OPAQUE, width, height, false,
-                        new Surface(surfaceTexture));
-            }
-        });
+                    @Override
+                    public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
+                        assert textureView.getSurfaceTexture() == surfaceTexture;
+                        if (mNativeCompositorViewImpl != null) {
+                            CompositorViewImplJni.get().surfaceDestroyed(mNativeCompositorViewImpl);
+                        }
+
+                        // Only release the surface after the native side has been notified.
+                        if (mSurface != null) {
+                            mSurface.release();
+                            mSurface = null;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public void onSurfaceTextureAvailable(
+                            SurfaceTexture surfaceTexture, int width, int height) {
+                        if (mNativeCompositorViewImpl == null) return;
+                        assert textureView.getSurfaceTexture() == surfaceTexture;
+                        CompositorViewImplJni.get().surfaceCreated(mNativeCompositorViewImpl);
+                        CompositorViewImplJni.get()
+                                .surfaceChanged(
+                                        mNativeCompositorViewImpl,
+                                        PixelFormat.OPAQUE,
+                                        width,
+                                        height,
+                                        false,
+                                        getSurface());
+                    }
+
+                    private Surface getSurface() {
+                        if (mSurface == null) {
+                            mSurface = new Surface(textureView.getSurfaceTexture());
+                        }
+                        return mSurface;
+                    }
+                });
         return textureView;
     }
 
+    private XrSurfaceEntityView createSpatialSurfaceView(
+            XrSceneCoreSessionManager xrSceneCoreSessionManager,
+            @XrSurfaceEntityShape int surfaceEntityShape) {
+        XrSurfaceEntityHolder xrSurfaceEntityHolder =
+                xrSceneCoreSessionManager.createSurfaceEntity(surfaceEntityShape);
+        xrSurfaceEntityHolder.addCallback(
+                new XrSurfaceEntityHolder.Callback() {
+                    @Override
+                    public void surfaceCreated(Surface surface) {
+                        if (mNativeCompositorViewImpl == null) return;
+                        CompositorViewImplJni.get().surfaceCreated(mNativeCompositorViewImpl);
+                    }
+
+                    @Override
+                    public void surfaceChanged(Surface surface, int width, int height) {
+                        if (mNativeCompositorViewImpl == null) return;
+                        CompositorViewImplJni.get()
+                                .surfaceChanged(
+                                        mNativeCompositorViewImpl,
+                                        PixelFormat.OPAQUE,
+                                        width,
+                                        height,
+                                        false,
+                                        surface);
+                    }
+
+                    @Override
+                    public void surfaceDestroyed() {
+                        if (mNativeCompositorViewImpl == null) return;
+                        CompositorViewImplJni.get().surfaceDestroyed(mNativeCompositorViewImpl);
+                    }
+                });
+
+        return new XrSurfaceEntityView(mContext) {
+            @Override
+            public XrSurfaceEntityHolder getHolder() {
+                return xrSurfaceEntityHolder;
+            }
+        };
+    }
+
     @CalledByNative
-    private long getNativePtr() {
-        assert mNativeCompositorViewImpl != 0;
+    @Nullable JniPtr<NativeCompositorViewImpl> getNativePtr() {
         return mNativeCompositorViewImpl;
     }
 
@@ -161,19 +285,35 @@ public class CompositorViewImpl implements CompositorView {
 
     private boolean useSurfaceView() {
         if (mViewConstraints.supportsOpacity) return false;
-        // TODO(shaktisahu): Use TextureView for M81. Revert back in M82 when surface control is
-        // fully enabled in Q (crbug/1031636).
-        return false;
+
+        // TODO(crbug.com/40110537): Temporary check during feature rollout. Once verified,
+        // SurfaceView should be used by default.
+        return CompositorViewImplJni.get().shouldUseSurfaceView();
     }
 
     @NativeMethods
     interface Natives {
-        long init(CompositorViewImpl caller, WindowAndroid windowAndroid, int backgroundColor);
-        void destroy(long nativeCompositorViewImpl, CompositorViewImpl caller);
-        void surfaceCreated(long nativeCompositorViewImpl, CompositorViewImpl caller);
-        void surfaceDestroyed(long nativeCompositorViewImpl, CompositorViewImpl caller);
-        void surfaceChanged(long nativeCompositorViewImpl, CompositorViewImpl caller, int format,
-                int width, int height, boolean canBeUsedWithSurfaceControl, Surface surface);
-        void setNeedsComposite(long nativeCompositorViewImpl, CompositorViewImpl caller);
+        JniUniquePtr<NativeCompositorViewImpl> init(
+                CompositorViewImpl caller, WindowAndroid windowAndroid, int backgroundColor);
+
+        void surfaceCreated(JniPtr<NativeCompositorViewImpl> self);
+
+        void surfaceDestroyed(JniPtr<NativeCompositorViewImpl> self);
+
+        void surfaceChanged(
+                JniPtr<NativeCompositorViewImpl> self,
+                int format,
+                int width,
+                int height,
+                boolean canBeUsedWithSurfaceControl,
+                Surface surface);
+
+        void setNeedsComposite(JniPtr<NativeCompositorViewImpl> self);
+
+        boolean shouldUseSurfaceView();
+
+        void runOnNextFrame(
+                JniPtr<NativeCompositorViewImpl> self,
+                @JniType("base::OnceClosure") Runnable runnable);
     }
 }

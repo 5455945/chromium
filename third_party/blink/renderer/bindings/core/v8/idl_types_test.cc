@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,7 +11,8 @@
 #include "third_party/blink/renderer/bindings/core/v8/v8_internal_dictionary.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_string_stringsequence.h"
 #include "third_party/blink/renderer/core/dom/element.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 
 // No gtest tests; only static_assert checks.
 
@@ -23,6 +24,11 @@ static_assert(std::is_base_of<IDLBase, IDLBoolean>::value,
               "IDLBoolean inherits from IDLBase");
 static_assert(std::is_same<IDLBoolean::ImplType, bool>::value,
               "IDLBoolean's ImplType is bool");
+
+static_assert(std::is_base_of<IDLBase, IDLBigint>::value,
+              "IDLBigint inherits from IDLBase");
+static_assert(std::is_same<IDLBigint::ImplType, BigInt>::value,
+              "IDLBigint's ImplType is BigInt");
 
 static_assert(std::is_base_of<IDLBase, IDLByte>::value,
               "IDLByte inherits from IDLBase");
@@ -99,10 +105,11 @@ static_assert(std::is_base_of<IDLBase, IDLUnrestrictedFloat>::value,
 static_assert(std::is_same<IDLUnrestrictedFloat::ImplType, float>::value,
               "IDLUnrestrictedFloat's ImplType is float");
 
-static_assert(std::is_base_of<IDLBase, IDLPromise>::value,
+static_assert(std::is_base_of<IDLBase, IDLPromise<IDLAny>>::value,
               "IDLPromise inherits from IDLBase");
-static_assert(std::is_same<IDLPromise::ImplType, ScriptPromise>::value,
-              "IDLPromise's ImplType is ScriptPromise");
+static_assert(
+    std::is_same<IDLPromise<IDLAny>::ImplType, ScriptPromise<IDLAny>>::value,
+    "IDLPromise<T>'s ImplType is ScriptPromiseTyped<T>");
 
 static_assert(std::is_base_of<IDLBase, IDLSequence<IDLByte>>::value,
               "IDLSequence inherits from IDLBase");
@@ -147,15 +154,15 @@ static_assert(
 static_assert(std::is_base_of<IDLBase, IDLNullable<IDLDouble>>::value,
               "IDLNullable should have IDLBase as a base class");
 static_assert(std::is_same<IDLNullable<IDLDouble>::ImplType,
-                           absl::optional<double>>::value,
-              "double? corresponds to absl::optional<double>");
+                           std::optional<double>>::value,
+              "double? corresponds to std::optional<double>");
 static_assert(std::is_same<IDLNullable<Element>::ImplType, Element*>::value,
-              "Element? doesn't require a absl::optional<> wrapper");
+              "Element? doesn't require a std::optional<> wrapper");
 static_assert(std::is_same<IDLNullable<IDLString>::ImplType, String>::value,
-              "DOMString? doesn't require a absl::optional<> wrapper");
+              "DOMString? doesn't require a std::optional<> wrapper");
 static_assert(std::is_same<IDLNullable<V8UnionStringOrStringSequence>::ImplType,
                            V8UnionStringOrStringSequence*>::value,
-              "(union type)? doesn't require a absl::optional<> wrapper");
+              "(union type)? doesn't require a std::optional<> wrapper");
 
 }  // namespace
 

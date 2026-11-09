@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,31 +7,30 @@
 
 #include <map>
 #include <memory>
-#include <queue>
 #include <set>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/read_only_shared_memory_region.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
-#include "components/page_load_metrics/browser/page_load_metrics_event.h"
-#include "components/page_load_metrics/browser/page_load_metrics_observer.h"
+#include "components/page_load_metrics/common/page_end_reason.h"
 #include "components/page_load_metrics/common/page_load_metrics.mojom.h"
 #include "components/page_load_metrics/common/page_load_timing.h"
+#include "content/public/browser/auction_result.h"
+#include "content/public/browser/render_frame_host_receiver_set.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
-#include "content/public/browser/web_contents_receiver_set.h"
 #include "content/public/browser/web_contents_user_data.h"
 #include "net/cookies/canonical_cookie.h"
 #include "services/network/public/mojom/fetch_api.mojom-forward.h"
 #include "third_party/blink/public/common/input/web_input_event.h"
-#include "third_party/blink/public/mojom/loader/resource_load_info.mojom.h"
-
-namespace blink {
-struct MobileFriendliness;
-}  // namespace blink
+#include "third_party/blink/public/mojom/loader/resource_load_info.mojom-forward.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/web_feature.mojom-forward.h"
+#include "third_party/blink/public/mojom/use_counter/metrics/webdx_feature.mojom.h"
 
 namespace content {
 class NavigationHandle;
@@ -40,10 +39,14 @@ class RenderFrameHost;
 
 namespace page_load_metrics {
 
-struct MemoryUpdate;
+class MetricsLifecycleObserver;
 class PageLoadMetricsEmbedderInterface;
 class PageLoadMetricsMemoryTracker;
+class PageLoadMetricsObserverDelegate;
+class PageLoadMetricsObserverInterface;
 class PageLoadTracker;
+enum class StorageType;
+struct UserInitiatedInfo;
 
 // MetricsWebContentsObserver tracks page loads and loading metrics
 // related data based on IPC messages received from a
@@ -52,75 +55,64 @@ class MetricsWebContentsObserver
     : public content::WebContentsObserver,
       public content::WebContentsUserData<MetricsWebContentsObserver>,
       public content::RenderWidgetHost::InputEventObserver,
-      public base::SupportsWeakPtr<MetricsWebContentsObserver>,
       public mojom::PageLoadMetrics {
  public:
-  // TestingObserver allows tests to observe MetricsWebContentsObserver state
-  // changes. Tests may use TestingObserver to wait until certain state changes,
-  // such as the arrivial of PageLoadTiming messages from the render process,
-  // have been observed.
-  class TestingObserver {
-   public:
-    explicit TestingObserver(content::WebContents* web_contents);
-    virtual ~TestingObserver();
-
-    void OnGoingAway();
-
-    // Some PageLoadTiming messages will race with the navigation
-    // commit. OnTrackerCreated() allows tests to manipulate the tracker very
-    // early (eg, to add observers) to handle those cases.
-    virtual void OnTrackerCreated(PageLoadTracker* tracker) {}
-
-    // In cases where LoadTimingInfo is not needed, waiting until commit is
-    // fine.
-    virtual void OnCommit(PageLoadTracker* tracker) {}
-
-    virtual void OnRestoredFromBackForwardCache(PageLoadTracker* tracker) {}
-
-    // Returns the observer delegate for the committed load associated with
-    // the MetricsWebContentsObserver, or null if the observer has gone away
-    // (via MetricsWebContentsObserver::WebContentsDestroyed).
-    const PageLoadMetricsObserverDelegate* GetDelegateForCommittedLoad();
-
-   private:
-    page_load_metrics::MetricsWebContentsObserver* observer_;
-
-    DISALLOW_COPY_AND_ASSIGN(TestingObserver);
-  };
-
-  // Record a set of WebFeatures directly from the browser process. This
-  // should only be used for features that were detected browser-side; features
-  // sources from the renderer should go via MetricsRenderFrameObserver.
+  // Record a set of WebFeatures or WebDXFeatures directly from the browser
+  // process. This should only be used for features that were detected
+  // browser-side; features sources from the renderer should go via
+  // MetricsRenderFrameObserver.
   static void RecordFeatureUsage(
       content::RenderFrameHost* render_frame_host,
       const std::vector<blink::mojom::WebFeature>& features);
   static void RecordFeatureUsage(content::RenderFrameHost* render_frame_host,
                                  blink::mojom::WebFeature feature);
+  static void RecordFeatureUsage(
+      content::RenderFrameHost* render_frame_host,
+      const std::vector<blink::mojom::WebDXFeature>& features);
+  static void RecordFeatureUsage(content::RenderFrameHost* render_frame_host,
+                                 blink::mojom::WebDXFeature feature);
 
   // Note that the returned metrics is owned by the web contents.
   static MetricsWebContentsObserver* CreateForWebContents(
       content::WebContents* web_contents,
       std::unique_ptr<PageLoadMetricsEmbedderInterface> embedder_interface);
+
+  MetricsWebContentsObserver(const MetricsWebContentsObserver&) = delete;
+  MetricsWebContentsObserver& operator=(const MetricsWebContentsObserver&) =
+      delete;
+
   ~MetricsWebContentsObserver() override;
+
+  // Binds a Mojo receiver to the instance associated with the RenderFrameHost.
+  static void BindPageLoadMetrics(
+      mojo::PendingAssociatedReceiver<mojom::PageLoadMetrics> receiver,
+      content::RenderFrameHost* rfh);
 
   // Any visibility changes that occur after this method should be ignored since
   // they are just clean up prior to destroying the WebContents instance.
   void WebContentsWillSoonBeDestroyed();
 
   // content::WebContentsObserver implementation:
+  void DidStartNavigation(
+      content::NavigationHandle* navigation_handle) override;
   void ReadyToCommitNavigation(
       content::NavigationHandle* navigation_handle) override;
   void DidFinishNavigation(
       content::NavigationHandle* navigation_handle) override;
   void DidRedirectNavigation(
       content::NavigationHandle* navigation_handle) override;
+  void DidUpdateNavigationHandleTiming(
+      content::NavigationHandle* navigation_handle) override;
   void NavigationStopped() override;
-  void OnInputEvent(const blink::WebInputEvent& event) override;
+  void OnInputEvent(const content::RenderWidgetHost& widget,
+                    const blink::WebInputEvent& event,
+                    input::InputEventSource source) override;
   void OnVisibilityChanged(content::Visibility visibility) override;
-  void RenderProcessGone(base::TerminationStatus status) override;
-  void RenderViewHostChanged(content::RenderViewHost* old_host,
-                             content::RenderViewHost* new_host) override;
-  void FrameDeleted(int frame_tree_node_id) override;
+  void PrimaryMainFrameRenderProcessGone(
+      base::TerminationStatus status) override;
+  void RenderFrameHostChanged(content::RenderFrameHost* old_host,
+                              content::RenderFrameHost* new_host) override;
+  void FrameDeleted(content::FrameTreeNodeId frame_tree_node_id) override;
   void RenderFrameDeleted(content::RenderFrameHost* render_frame_host) override;
   void MediaStartedPlaying(
       const content::WebContentsObserver::MediaPlayerInfo& video_type,
@@ -129,7 +121,13 @@ class MetricsWebContentsObserver
   void ResourceLoadComplete(
       content::RenderFrameHost* render_frame_host,
       const content::GlobalRequestID& request_id,
+      const GURL& original_url,
       const blink::mojom::ResourceLoadInfo& resource_load_info) override;
+  void DidLoadResourceFromMemoryCache(
+      content::RenderFrameHost* render_frame_host,
+      const GURL& url,
+      const std::string& mime_type,
+      network::mojom::RequestDestination request_destination) override;
   void FrameReceivedUserActivation(
       content::RenderFrameHost* render_frame_host) override;
   void FrameDisplayStateChanged(content::RenderFrameHost* render_frame_host,
@@ -140,15 +138,14 @@ class MetricsWebContentsObserver
                          const content::CookieAccessDetails& details) override;
   void OnCookiesAccessed(content::RenderFrameHost* rfh,
                          const content::CookieAccessDetails& details) override;
-  void OnStorageAccessed(const GURL& url,
+
+  void OnStorageAccessed(content::RenderFrameHost* rfh,
+                         const GURL& url,
                          const GURL& first_party_url,
                          bool blocked_by_policy,
                          StorageType storage_type);
-  void DidActivatePortal(content::WebContents* predecessor_web_contents,
-                         base::TimeTicks activation_time) override;
 
   // These methods are forwarded from the MetricsNavigationThrottle.
-  void WillStartNavigationRequest(content::NavigationHandle* navigation_handle);
   void WillProcessNavigationResponse(
       content::NavigationHandle* navigation_handle);
 
@@ -158,12 +155,30 @@ class MetricsWebContentsObserver
   // notification.
   void FlushMetricsOnAppEnterBackground();
 
-  // Returns the delegate for the current committed load, required for testing.
+  // Returns the delegate for the current committed primary page load, required
+  // for `MetricsLifecycleObserver`s.
   const PageLoadMetricsObserverDelegate& GetDelegateForCommittedLoad();
 
-  // Register / unregister TestingObservers. Should only be called from tests.
-  void AddTestingObserver(TestingObserver* observer);
-  void RemoveTestingObserver(TestingObserver* observer);
+  // Returns the delegate for the committed load if one is being tracked. This
+  // method is a safer alternative to
+  // `GetDelegateForCommittedLoad()` for callers that may be operating on a
+  // WebContents where page load metrics are not being actively tracked.
+  //
+  // Unlike `GetDelegateForCommittedLoad()`, which will CHECK-fail if called at
+  // an invalid time (e.g., before a primary navigation has committed or on a
+  // page type that is not tracked), this method will return a nullptr.
+  //
+  // Callers must check the returned pointer for null before using it.
+  const PageLoadMetricsObserverDelegate* GetDelegateForCommittedLoadOrNull();
+
+  // Returns the embedder interface. Public for testing.
+  PageLoadMetricsEmbedderInterface* GetEmbedderInterfaceForTesting() const {
+    return embedder_interface_.get();
+  }
+
+  // Register / unregister `MetricsLifecycleObserver`s.
+  void AddLifecycleObserver(MetricsLifecycleObserver* observer);
+  void RemoveLifecycleObserver(MetricsLifecycleObserver* observer);
 
   // public only for testing
   void OnTimingUpdated(
@@ -174,19 +189,30 @@ class MetricsWebContentsObserver
       const std::vector<mojom::ResourceDataUpdatePtr>& resources,
       mojom::FrameRenderDataUpdatePtr render_data,
       mojom::CpuTimingPtr cpu_timing,
-      mojom::DeferredResourceCountsPtr new_deferred_resource_data,
-      mojom::InputTimingPtr input_timing_delta,
-      const blink::MobileFriendliness& mobile_friendliness);
+      std::vector<mojom::EventTimingPtr> event_timings,
+      const std::optional<blink::SubresourceLoadMetrics>&
+          subresource_load_metrics,
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      std::vector<mojom::CustomUserTimingMarkPtr> user_timings,
+      mojom::FontLoadingMetricsPtr font_loading_metrics);
 
-  // Informs the observers of the currently committed load that |event| has
-  // occurred. This should not be called within
-  // WebContentsObserver::DidFinishNavigation methods.
-  void BroadcastEventToObservers(PageLoadMetricsEvent event);
+  void OnCustomUserTimingUpdated(content::RenderFrameHost* rfh,
+                                 mojom::CustomUserTimingMarkPtr custom_timing);
 
-  // Called when V8 per-frame memory usage updates are available. Virtual for
-  // test classes to override.
-  virtual void OnV8MemoryChanged(
-      const std::vector<MemoryUpdate>& memory_updates);
+  // Returns the time this MetricsWebContentsObserver was created.
+  base::TimeTicks GetCreated();
+
+  // Retrieves the PageLoadMetricsObserverInterface matching `name` for the
+  // specified `render_frame_host`. Returns null if the observer is not found.
+  base::WeakPtr<PageLoadMetricsObserverInterface> GetMetricsObserver(
+      content::RenderFrameHost* render_frame_host,
+      const char* name);
+
+  base::WeakPtr<MetricsWebContentsObserver> AsWeakPtr() {
+    return weak_ptr_factory_.GetWeakPtr();
+  }
 
  protected:
   // Protected rather than private so that derived test classes can call
@@ -197,13 +223,36 @@ class MetricsWebContentsObserver
 
  private:
   friend class content::WebContentsUserData<MetricsWebContentsObserver>;
+  friend class MetricsLifeCycleObserver;
+
+  // Gets the PageLoadTracker associated with `rfh` if it exists, or nullptr
+  // otherwise.
+  //
+  // Don't use GetPageLoadTrackerLegacy in new code. See also the comment around
+  // implementation.
+  // TODO(crbug.com/40216775): Remove this.
+  PageLoadTracker* GetPageLoadTrackerLegacy(content::RenderFrameHost* rfh);
+  PageLoadTracker* GetPageLoadTracker(content::RenderFrameHost* rfh);
+  // Gets the alive PageLoadTracker corresponding to the nearest ancestral page
+  // if it exists, or nullptr otherwise.
+  //
+  // Consider to use this instead of GetPageLoadTracker if
+  //
+  // - There is a race and the target PageLoadTracker can be deleted before
+  //   receiving a event; and
+  // - PageLoadTracker forwards the event unconditionally with respect to
+  //   ObservePolicy.
+  PageLoadTracker* GetAncestralAlivePageLoadTracker(
+      content::RenderFrameHost* rfh);
+
+  PageLoadTracker* GetPageLoadTrackerIfValid(
+      content::RenderFrameHost* render_frame_host);
 
   // Gets the memory tracker for the BrowserContext if it exists, or nullptr
   // otherwise. The tracker measures per-frame memory usage by V8.
   PageLoadMetricsMemoryTracker* GetMemoryTracker() const;
 
-  void WillStartNavigationRequestImpl(
-      content::NavigationHandle* navigation_handle);
+  void DidStartNavigationImpl(content::NavigationHandle* navigation_handle);
 
   // page_load_metrics::mojom::PageLoadMetrics implementation.
   void UpdateTiming(
@@ -213,15 +262,19 @@ class MetricsWebContentsObserver
       std::vector<mojom::ResourceDataUpdatePtr> resources,
       mojom::FrameRenderDataUpdatePtr render_data,
       mojom::CpuTimingPtr cpu_timing,
-      mojom::DeferredResourceCountsPtr new_deferred_resource_data,
-      mojom::InputTimingPtr input_timing,
-      const blink::MobileFriendliness& mobile_friendliness) override;
-
-  void SetUpSharedMemoryForSmoothness(
-      base::ReadOnlySharedMemoryRegion shared_memory) override;
+      std::vector<mojom::EventTimingPtr> event_timings,
+      const std::optional<blink::SubresourceLoadMetrics>&
+          subresource_load_metrics,
+      std::vector<mojom::SoftNavigationMetricsPtr> soft_navigation_metrics,
+      std::vector<mojom::LargestContentfulPaintTimingPtr>
+          soft_largest_contentful_paint,
+      std::vector<mojom::CustomUserTimingMarkPtr> user_timings,
+      mojom::FontLoadingMetricsPtr font_loading_metrics) override;
+  void AddCustomUserTiming(
+      mojom::CustomUserTimingMarkPtr custom_timing) override;
 
   // Common part for UpdateThroughput and OnTimingUpdated.
-  bool DoesTimingUpdateHaveError();
+  bool DoesTimingUpdateHaveError(PageLoadTracker* tracker);
 
   void HandleFailedNavigationForTrackedLoad(
       content::NavigationHandle* navigation_handle,
@@ -257,9 +310,9 @@ class MetricsWebContentsObserver
                                           base::TimeTicks timestamp,
                                           bool is_certainly_browser_timestamp);
 
-  // Register / Unregister input event callback to given RenderViewHost
-  void RegisterInputEventObserver(content::RenderViewHost* host);
-  void UnregisterInputEventObserver(content::RenderViewHost* host);
+  // Register / Unregister input event callback to given RenderFrameHost
+  void RegisterInputEventObserver(content::RenderFrameHost* host);
+  void UnregisterInputEventObserver(content::RenderFrameHost* host);
 
   // Notify aborted provisional loads that a new navigation occurred. This is
   // used for more consistent attribution tracking for aborted provisional
@@ -274,6 +327,15 @@ class MetricsWebContentsObserver
   bool ShouldTrackMainFrameNavigation(
       content::NavigationHandle* navigation_handle) const;
 
+  // Determines if metrics should be collected for a given URL scheme.
+  // This is used for both navigation and resource timing updates.
+  // If this returns false, the navigation to the URL will not be tracked, and
+  // timing updates for resources loaded from the URL will not be propagated to
+  // metrics observers.
+  bool ShouldTrackScheme(std::string_view scheme) const;
+
+  bool ShouldTrackSchemeForNonWebUI(std::string_view scheme) const;
+
   void OnBrowserFeatureUsage(
       content::RenderFrameHost* render_frame_host,
       const std::vector<blink::UseCounterFeature>& new_features);
@@ -287,27 +349,31 @@ class MetricsWebContentsObserver
       content::NavigationHandle* next_navigation_handle,
       std::unique_ptr<PageLoadTracker> page_load_tracker);
 
-  // Tries to move a PageLoadTracker from |inactive_pages_| to
-  // |committed_load_|, when a navigation activates a back/forward-cached or
-  // prerendered page. Returns true if |committed_load_| is updated.
+  // Tries to move a PageLoadTracker from `inactive_pages_` to
+  // `primary_page_`, when a navigation activates a back/forward-cached or
+  // prerendered page. Returns true if `primary_page_` is updated.
+  // Note that FencedFrames is not supported by back/forward-cache and
+  // prerendering and this method doesn't support handling both containing
+  // FencedFrames.
   bool MaybeActivatePageLoadTracker(
       content::NavigationHandle* navigation_handle);
 
-  // Notify PageLoadTrackers about cookie read or write.
-  void OnCookiesAccessedImpl(const content::CookieAccessDetails& details);
+  // Notifies `tracker` about cookie read or write.
+  void OnCookiesAccessedImpl(PageLoadTracker& tracker,
+                             const content::CookieAccessDetails& details);
 
   // True if the web contents is currently in the foreground.
   bool in_foreground_;
 
-  // The PageLoadTrackers must be deleted before the |embedder_interface_|,
-  // because they hold a pointer to the |embedder_interface_|.
+  // The PageLoadTrackers must be deleted before the `embedder_interface_`,
+  // because they hold a pointer to the `embedder_interface_`.
   std::unique_ptr<PageLoadMetricsEmbedderInterface> embedder_interface_;
 
   // This map tracks all of the navigations ongoing that are not committed
   // yet. Once a navigation is committed, it moves from the map to
-  // |committed_load_| or |inactive_pages_|. Note that a PageLoadTrackers
-  // NavigationHandle is only valid until commit time, when we remove it from
-  // the map.
+  // `primary_page_`, `active_pages_, or `inactive_pages_`. Note that a
+  // PageLoadTracker's NavigationHandle is only valid until commit time, when we
+  // remove it from the map.
   std::map<content::NavigationHandle*, std::unique_ptr<PageLoadTracker>>
       provisional_loads_;
 
@@ -318,34 +384,38 @@ class MetricsWebContentsObserver
   // navigation, stop button, etc.).
   std::vector<std::unique_ptr<PageLoadTracker>> aborted_provisional_loads_;
 
-  std::unique_ptr<PageLoadTracker> committed_load_;
+  // This stores the PageLoadTracker for the primary page. GetPageLoadTracker()
+  // is available to find a PageLoadTracker for non-primary pages.
+  std::unique_ptr<PageLoadTracker> primary_page_;
 
-  // Memory updates that are accumulated while there is no `committed_load_`.
-  // Will be sent in HandleCommittedNavigationForTrackedLoad, unless the
-  // render process is gone and/or web contents is destroyed.
-  std::queue<std::vector<MemoryUpdate>> queued_memory_updates_;
-
-  // This is currently set only for the main frame.
-  base::ReadOnlySharedMemoryRegion ukm_smoothness_data_;
+  // This stores the PageLoadTracker for non-primary pages, such as
+  // FencedFrames, or MPArch based Portals in the future.
+  base::flat_map<content::RenderFrameHost*, std::unique_ptr<PageLoadTracker>>
+      active_pages_;
 
   // This stores the PageLoadTracker for each main frame of inactive pages,
   // including pages in the back/forward cache and prerendered pages. (The main
-  // frame of the active page is in |committed_load_|.)
+  // frame of the active page is in `primary_page_`.)
   base::flat_map<content::RenderFrameHost*, std::unique_ptr<PageLoadTracker>>
       inactive_pages_;
 
   // Has the MWCO observed at least one navigation?
   bool has_navigated_;
 
-  base::ObserverList<TestingObserver>::Unchecked testing_observers_;
-  content::WebContentsFrameReceiverSet<mojom::PageLoadMetrics>
-      page_load_metrics_receiver_;
+  // Is the main frame a WebUI page?
+  bool main_frame_is_webui_ = false;
+
+  base::ObserverList<MetricsLifecycleObserver> lifecycle_observers_;
+  content::RenderFrameHostReceiverSet<mojom::PageLoadMetrics>
+      page_load_metrics_receivers_;
 
   bool web_contents_will_soon_be_destroyed_ = false;
 
-  WEB_CONTENTS_USER_DATA_KEY_DECL();
+  base::TimeTicks created_;
 
-  DISALLOW_COPY_AND_ASSIGN(MetricsWebContentsObserver);
+  base::WeakPtrFactory<MetricsWebContentsObserver> weak_ptr_factory_{this};
+
+  WEB_CONTENTS_USER_DATA_KEY_DECL();
 };
 
 }  // namespace page_load_metrics

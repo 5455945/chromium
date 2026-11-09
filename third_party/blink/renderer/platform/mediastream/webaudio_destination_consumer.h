@@ -25,21 +25,25 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIASTREAM_WEBAUDIO_DESTINATION_CONSUMER_H_
 #define THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIASTREAM_WEBAUDIO_DESTINATION_CONSUMER_H_
 
+#include "base/containers/span.h"
+#include "third_party/blink/renderer/platform/wtf/thread_safe_ref_counted.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
-class WebAudioDestinationConsumer {
+class WebAudioDestinationConsumer
+    : public ThreadSafeRefCounted<WebAudioDestinationConsumer> {
  public:
   virtual ~WebAudioDestinationConsumer() = default;
 
-  virtual void SetFormat(size_t number_of_channels, float sample_rate) = 0;
+  virtual void SetFormat(int number_of_channels, float sample_rate) = 0;
 
   // The size of the vector is the number of audio channels, and
   // |number_of_frames| is the number of audio frames in the (possibly
-  // multi-channel) buffer in a planar format.
-  virtual void ConsumeAudio(const Vector<const float*>&,
-                            size_t number_of_frames) = 0;
+  // multi-channel) buffer in a planar format. Each channel span must contain
+  // at least |number_of_frames| samples.
+  virtual void ConsumeAudio(const Vector<base::span<const float>>&,
+                            int number_of_frames) = 0;
 };
 
 }  // namespace blink

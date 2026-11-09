@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,8 @@
 #include <string>
 #include <utility>
 
-#include "base/macros.h"
-#include "base/sequenced_task_runner.h"
+#include "base/memory/raw_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/policy/core/common/cloud/cloud_external_data_manager.h"
 #include "components/policy/core/common/cloud/dm_token.h"
 #include "components/policy/core/common/cloud/machine_level_user_cloud_policy_store.h"
@@ -23,44 +23,75 @@ class MockMachineLevelUserCloudPolicyStore
  public:
   MockMachineLevelUserCloudPolicyStore()
       : MachineLevelUserCloudPolicyStore(
-            DMToken::CreateEmptyTokenForTesting(),
+            DMToken::CreateEmptyToken(),
             std::string(),
             base::FilePath(),
             base::FilePath(),
             base::FilePath(),
             base::FilePath(),
-            /* cloud_policy_has_priority= */ false,
+            policy::dm_protocol::kChromeMachineLevelUserCloudPolicyType,
             scoped_refptr<base::SequencedTaskRunner>()) {}
 
   MOCK_METHOD0(LoadImmediately, void(void));
+  MOCK_METHOD0(Clear, void());
 };
 
 class MachineLevelUserCloudPolicyManagerTest : public ::testing::Test {
  public:
-  MachineLevelUserCloudPolicyManagerTest() {}
+  MachineLevelUserCloudPolicyManagerTest() = default;
+  MachineLevelUserCloudPolicyManagerTest(
+      const MachineLevelUserCloudPolicyManagerTest&) = delete;
+  MachineLevelUserCloudPolicyManagerTest& operator=(
+      const MachineLevelUserCloudPolicyManagerTest&) = delete;
   ~MachineLevelUserCloudPolicyManagerTest() override { manager_->Shutdown(); }
 
   void SetUp() override {
     auto store = std::make_unique<MockMachineLevelUserCloudPolicyStore>();
     store_ = store.get();
+    std::unique_ptr<MockMachineLevelUserCloudPolicyStore>
+        extension_install_store;
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+    extension_install_store =
+        std::make_unique<MockMachineLevelUserCloudPolicyStore>();
+#endif
+    extension_install_store_ = extension_install_store.get();
     manager_ = std::make_unique<MachineLevelUserCloudPolicyManager>(
-        std::move(store), std::unique_ptr<CloudExternalDataManager>(),
-        base::FilePath(), scoped_refptr<base::SequencedTaskRunner>(),
+        std::move(store), std::move(extension_install_store),
+        std::unique_ptr<CloudExternalDataManager>(), base::FilePath(),
+        scoped_refptr<base::SequencedTaskRunner>(),
         network::TestNetworkConnectionTracker::CreateGetter());
   }
 
   SchemaRegistry schema_registry_;
-  MockMachineLevelUserCloudPolicyStore* store_ = nullptr;
+  raw_ptr<MockMachineLevelUserCloudPolicyStore, DanglingUntriaged> store_ =
+      nullptr;
+  raw_ptr<MockMachineLevelUserCloudPolicyStore, DanglingUntriaged>
+      extension_install_store_ = nullptr;
   std::unique_ptr<MachineLevelUserCloudPolicyManager> manager_;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MachineLevelUserCloudPolicyManagerTest);
 };
 
 TEST_F(MachineLevelUserCloudPolicyManagerTest, InitManager) {
   EXPECT_CALL(*store_, LoadImmediately());
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  EXPECT_CALL(*extension_install_store_, LoadImmediately());
+#endif
   manager_->Init(&schema_registry_);
   ::testing::Mock::VerifyAndClearExpectations(store_);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  ::testing::Mock::VerifyAndClearExpectations(extension_install_store_);
+#endif
+}
+
+TEST_F(MachineLevelUserCloudPolicyManagerTest, DisconnectAndRemovePolicy) {
+  EXPECT_CALL(*store_, Clear());
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  EXPECT_CALL(*extension_install_store_, Clear());
+#endif
+  manager_->DisconnectAndRemovePolicy();
+  ::testing::Mock::VerifyAndClearExpectations(store_);
+#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+  ::testing::Mock::VerifyAndClearExpectations(extension_install_store_);
+#endif
 }
 
 }  // namespace policy

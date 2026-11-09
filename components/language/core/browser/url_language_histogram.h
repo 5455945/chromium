@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,10 @@
 #define COMPONENTS_LANGUAGE_CORE_BROWSER_URL_LANGUAGE_HISTOGRAM_H_
 
 #include <string>
+#include <string_view>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/time/time.h"
 #include "components/keyed_service/core/keyed_service.h"
 
@@ -32,7 +33,7 @@ class UrlLanguageHistogram : public KeyedService {
  public:
   struct LanguageInfo {
     LanguageInfo() = default;
-    LanguageInfo(const std::string& language_code, float frequency)
+    LanguageInfo(std::string_view language_code, float frequency)
         : language_code(language_code), frequency(frequency) {}
 
     // The ISO 639 language code.
@@ -46,6 +47,10 @@ class UrlLanguageHistogram : public KeyedService {
   };
 
   explicit UrlLanguageHistogram(PrefService* pref_service);
+
+  UrlLanguageHistogram(const UrlLanguageHistogram&) = delete;
+  UrlLanguageHistogram& operator=(const UrlLanguageHistogram&) = delete;
+
   ~UrlLanguageHistogram() override;
 
   // Registers profile prefs for the histogram.
@@ -58,18 +63,16 @@ class UrlLanguageHistogram : public KeyedService {
 
   // Returns the estimated frequency for the given language or 0 if the language
   // is not among the top languages kept in the histogram.
-  float GetLanguageFrequency(const std::string& language_code) const;
+  float GetLanguageFrequency(std::string_view language_code) const;
 
   // Informs the histogram that a page with the given language has been visited.
-  void OnPageVisited(const std::string& language_code);
+  void OnPageVisited(std::string_view language_code);
 
   // Reflect in the histogram that history from |begin| to |end| gets cleared.
   void ClearHistory(base::Time begin, base::Time end);
 
  private:
-  PrefService* pref_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(UrlLanguageHistogram);
+  raw_ptr<PrefService> pref_service_;
 };
 
 }  // namespace language

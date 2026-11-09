@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,14 +10,14 @@ namespace blink {
 
 const UErrorCode kTestErrorCode = U_INVALID_FORMAT_ERROR;
 
-void CauseICUError(UErrorCode& err) {
+void CauseIcuError(UErrorCode& err) {
   err = kTestErrorCode;
 }
 
-TEST(ICUErrorTest, assignToAutomaticReference) {
-  ICUError icu_error;
+TEST(IcuErrorTest, assignToAutomaticReference) {
+  IcuError icu_error;
   EXPECT_EQ(icu_error, U_ZERO_ERROR);
-  CauseICUError(icu_error);
+  CauseIcuError(icu_error);
   EXPECT_EQ(icu_error, kTestErrorCode);
 }
 

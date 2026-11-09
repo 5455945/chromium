@@ -1,48 +1,45 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/renderer/app_categorizer.h"
 
-#include "base/cxx17_backports.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
 namespace {
 
-const char* kChatAppURLs[] = {
-  "https://hangouts.google.com/hangouts/foo",
-  "https://hAnGoUtS.gOoGlE.com/HaNgOuTs/foo",
-  "https://meet.google.com/hangouts/foo",
-  "https://talkgadget.google.com/hangouts/foo",
-  "https://staging.talkgadget.google.com/hangouts/foo",
-  "https://plus.google.com/hangouts/foo",
-  "https://plus.sandbox.google.com/hangouts/foo"
-};
+constexpr const char* kChatAppURLs[] = {
+    "https://hangouts.google.com/hangouts/foo",
+    "https://hAnGoUtS.gOoGlE.com/HaNgOuTs/foo",
+    "https://meet.google.com/hangouts/foo",
+    "https://talkgadget.google.com/hangouts/foo",
+    "https://staging.talkgadget.google.com/hangouts/foo",
+    "https://plus.google.com/hangouts/foo",
+    "https://plus.sandbox.google.com/hangouts/foo"};
 
-const char* kChatManifestFSs[] = {
-  "filesystem:https://hangouts.google.com/foo",
-  "filesystem:https://hAnGoUtS.gOoGlE.com/foo",
-  "filesystem:https://meet.google.com/foo",
-  "filesystem:https://talkgadget.google.com/foo",
-  "filesystem:https://staging.talkgadget.google.com/foo",
-  "filesystem:https://plus.google.com/foo",
-  "filesystem:https://plus.sandbox.google.com/foo"
-};
+constexpr const char* kChatManifestFSs[] = {
+    "filesystem:https://hangouts.google.com/foo",
+    "filesystem:https://hAnGoUtS.gOoGlE.com/foo",
+    "filesystem:https://meet.google.com/foo",
+    "filesystem:https://talkgadget.google.com/foo",
+    "filesystem:https://staging.talkgadget.google.com/foo",
+    "filesystem:https://plus.google.com/foo",
+    "filesystem:https://plus.sandbox.google.com/foo"};
 
-const char* kBadChatAppURLs[] = {
-  "http://talkgadget.google.com/hangouts/foo",  // not https
-  "https://talkgadget.evil.com/hangouts/foo"    // domain not whitelisted
+constexpr const char* kBadChatAppURLs[] = {
+    "http://talkgadget.google.com/hangouts/foo",  // not https
+    "https://talkgadget.evil.com/hangouts/foo"    // domain not whitelisted
 };
 
 }  // namespace
 
 TEST(AppCategorizerTest, IsHangoutsUrl) {
-  for (size_t i = 0; i < base::size(kChatAppURLs); ++i) {
+  for (size_t i = 0; i < std::size(kChatAppURLs); ++i) {
     EXPECT_TRUE(AppCategorizer::IsHangoutsUrl(GURL(kChatAppURLs[i])));
   }
 
-  for (size_t i = 0; i < base::size(kBadChatAppURLs); ++i) {
+  for (size_t i = 0; i < std::size(kBadChatAppURLs); ++i) {
     EXPECT_FALSE(AppCategorizer::IsHangoutsUrl(GURL(kBadChatAppURLs[i])));
   }
 }
@@ -50,12 +47,12 @@ TEST(AppCategorizerTest, IsHangoutsUrl) {
 TEST(AppCategorizerTest, IsWhitelistedApp) {
   // Hangouts app
   {
-    EXPECT_EQ(base::size(kChatAppURLs), base::size(kChatManifestFSs));
-    for (size_t i = 0; i < base::size(kChatAppURLs); ++i) {
+    EXPECT_EQ(std::size(kChatAppURLs), std::size(kChatManifestFSs));
+    for (size_t i = 0; i < std::size(kChatAppURLs); ++i) {
       EXPECT_TRUE(AppCategorizer::IsWhitelistedApp(
           GURL(kChatManifestFSs[i]), GURL(kChatAppURLs[i])));
     }
-    for (size_t i = 0; i < base::size(kBadChatAppURLs); ++i) {
+    for (size_t i = 0; i < std::size(kBadChatAppURLs); ++i) {
       EXPECT_FALSE(AppCategorizer::IsWhitelistedApp(
           GURL("filesystem:https://irrelevant.com/"),
           GURL(kBadChatAppURLs[i])));

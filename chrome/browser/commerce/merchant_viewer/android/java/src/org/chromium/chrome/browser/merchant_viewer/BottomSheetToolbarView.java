@@ -1,10 +1,11 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.merchant_viewer;
 
 import android.content.Context;
+import android.graphics.drawable.Drawable;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.ImageView;
@@ -13,17 +14,16 @@ import android.widget.TextView;
 
 import androidx.annotation.DrawableRes;
 
-import org.chromium.base.ApiCompatibilityUtils;
-import org.chromium.chrome.tab_ui.R;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.components.browser_ui.widget.FadingShadow;
 import org.chromium.components.browser_ui.widget.FadingShadowView;
 import org.chromium.components.url_formatter.SchemeDisplay;
 import org.chromium.components.url_formatter.UrlFormatter;
-import org.chromium.url.GURL;
+import org.chromium.url.Origin;
 
 /** BottomSheetToolbar UI. */
+@NullMarked
 public class BottomSheetToolbarView {
-    private final int mToolbarHeightPx;
     private final View mToolbarView;
 
     /**
@@ -32,14 +32,10 @@ public class BottomSheetToolbarView {
      * @param context The context where the bottom-sheet should be shown.
      */
     public BottomSheetToolbarView(Context context) {
-        mToolbarHeightPx =
-                context.getResources().getDimensionPixelSize(R.dimen.sheet_tab_toolbar_height);
         mToolbarView = LayoutInflater.from(context).inflate(R.layout.sheet_tab_toolbar, null);
 
         FadingShadowView shadow = mToolbarView.findViewById(R.id.shadow);
-        shadow.init(ApiCompatibilityUtils.getColor(
-                            context.getResources(), R.color.toolbar_shadow_color),
-                FadingShadow.POSITION_TOP);
+        shadow.init(context.getColor(R.color.toolbar_shadow_color), FadingShadow.POSITION_TOP);
     }
 
     /** Sets the title of the bottom sheet. */
@@ -48,11 +44,12 @@ public class BottomSheetToolbarView {
         toolbarText.setText(title);
     }
 
-    /** Sets the second line in the toolbar to the the provided URL. */
-    public void setUrl(GURL url) {
+    /** Sets the second line in the toolbar to the provided origin. */
+    public void setOrigin(Origin origin) {
         TextView originView = mToolbarView.findViewById(R.id.origin);
         originView.setText(
-                UrlFormatter.formatUrlForSecurityDisplay(url, SchemeDisplay.OMIT_HTTP_AND_HTTPS));
+                UrlFormatter.formatOriginForSecurityDisplay(
+                        origin, SchemeDisplay.OMIT_HTTP_AND_HTTPS));
     }
 
     /** Sets the security icon. */
@@ -70,17 +67,19 @@ public class BottomSheetToolbarView {
     /** Sets the security icon click callback. */
     public void setSecurityIconClickCallback(Runnable callback) {
         ImageView securityIcon = mToolbarView.findViewById(R.id.security_icon);
-        securityIcon.setOnClickListener(v -> {
-            if (callback != null) callback.run();
-        });
+        securityIcon.setOnClickListener(
+                v -> {
+                    if (callback != null) callback.run();
+                });
     }
 
     /** Sets the close button click callback. */
     public void setCloseButtonClickCallback(Runnable callback) {
         ImageView closeButton = mToolbarView.findViewById(R.id.close);
-        closeButton.setOnClickListener(v -> {
-            if (callback != null) callback.run();
-        });
+        closeButton.setOnClickListener(
+                v -> {
+                    if (callback != null) callback.run();
+                });
     }
 
     /** Sets the progress on the progress bar. */
@@ -101,6 +100,12 @@ public class BottomSheetToolbarView {
         faviconIcon.setImageResource(resId);
     }
 
+    /** Sets the favicon icon drawable. */
+    public void setFaviconIconDrawable(Drawable iconDrawable) {
+        ImageView faviconIcon = mToolbarView.findViewById(R.id.favicon);
+        faviconIcon.setImageDrawable(iconDrawable);
+    }
+
     /** Sets the visibility of favicon icon. */
     public void setFaviconIconVisible(boolean visible) {
         ImageView faviconIcon = mToolbarView.findViewById(R.id.favicon);
@@ -115,7 +120,7 @@ public class BottomSheetToolbarView {
 
     /** @return The height of the toolbar in pixels. */
     public int getToolbarHeightPx() {
-        return mToolbarHeightPx;
+        return mToolbarView.getHeight();
     }
 
     /** @return The android {@link View} representing this BottomSheetToolbar. */

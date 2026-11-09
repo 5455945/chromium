@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -67,6 +67,35 @@ TEST(RoundedCornersFTest, Equality) {
   rc.set_lower_right(2.0f);
   EXPECT_FALSE(rc == kCorners);
   EXPECT_TRUE(rc != kCorners);
+}
+
+TEST(RoundedCornersFTest, Compare) {
+  constexpr RoundedCornersF kCorners(1.0f, 2.0f, 3.0f, 4.0f);
+  EXPECT_FALSE(RoundedCornersF::Compare(kCorners, kCorners));
+
+  // Test upper_left.
+  EXPECT_TRUE(RoundedCornersF::Compare(RoundedCornersF(0.0f, 2.0f, 3.0f, 4.0f),
+                                       kCorners));
+  EXPECT_FALSE(RoundedCornersF::Compare(RoundedCornersF(2.0f, 2.0f, 3.0f, 4.0f),
+                                        kCorners));
+
+  // Test upper_right.
+  EXPECT_TRUE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 1.0f, 3.0f, 4.0f),
+                                       kCorners));
+  EXPECT_FALSE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 3.0f, 3.0f, 4.0f),
+                                        kCorners));
+
+  // Test lower_right.
+  EXPECT_TRUE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 2.0f, 2.0f, 4.0f),
+                                       kCorners));
+  EXPECT_FALSE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 2.0f, 4.0f, 4.0f),
+                                        kCorners));
+
+  // Test lower_left.
+  EXPECT_TRUE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 2.0f, 3.0f, 3.0f),
+                                       kCorners));
+  EXPECT_FALSE(RoundedCornersF::Compare(RoundedCornersF(1.0f, 2.0f, 3.0f, 5.0f),
+                                        kCorners));
 }
 
 TEST(RoundedCornersFTest, Set) {
@@ -152,6 +181,25 @@ TEST(RoundedCornersFTest, Negative) {
   VerifyEmptyAndZero(rc);
 
   rc.Set(kNegative, kNegative, kNegative, kNegative);
+  VerifyEmptyAndZero(rc);
+}
+
+TEST(RoundedCornersFTest, Scale) {
+  RoundedCornersF rc(1.33f, 2.66f, 3.99f, 5.32f);
+  rc.Scale(2.0f);
+  EXPECT_EQ(2.66f, rc.upper_left());
+  EXPECT_EQ(5.32f, rc.upper_right());
+  EXPECT_EQ(7.98f, rc.lower_right());
+  EXPECT_EQ(10.64f, rc.lower_left());
+
+  RoundedCornersF scaled = ScaleRoundedCorners(rc, 2.0f);
+  EXPECT_EQ(5.32f, scaled.upper_left());
+  EXPECT_EQ(10.64f, scaled.upper_right());
+  EXPECT_EQ(15.96f, scaled.lower_right());
+  EXPECT_EQ(21.28f, scaled.lower_left());
+
+  // Negative scale should clamp to zero.
+  rc.Scale(-1.0f);
   VerifyEmptyAndZero(rc);
 }
 

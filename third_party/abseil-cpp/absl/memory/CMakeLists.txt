@@ -35,21 +35,7 @@ absl_cc_test(
   COPTS
     ${ABSL_TEST_COPTS}
   DEPS
-    absl::memory
     absl::core_headers
-    GTest::gmock_main
-)
-
-absl_cc_test(
-  NAME
-    memory_exception_safety_test
-  SRCS
-    "memory_exception_safety_test.cc"
-  COPTS
-    ${ABSL_TEST_COPTS}
-  DEPS
     absl::memory
-    absl::config
-    absl::exception_safety_testing
     GTest::gmock_main
 )

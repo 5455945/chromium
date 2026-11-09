@@ -1,9 +1,14 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CONTENT_PUBLIC_COMMON_RESULT_CODES_H_
 #define CONTENT_PUBLIC_COMMON_RESULT_CODES_H_
+
+#include <string>
+
+#include "base/process/process.h"
+#include "content/common/content_export.h"
 
 namespace content {
 
@@ -21,7 +26,8 @@ namespace content {
 // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.content_public.common
 //
 // IMPORTANT: This needs to stay in sync with <enum name="CrashExitCodes"> and
-// <enum name="WindowsExitCode"> in tools/metrics/histograms/enums.xml. Due to
+// <enum name="WindowsExitCode"> in
+// tools/metrics/histograms/metadata/stability/enums.xml. Due to
 // chrome::ResultCode's dependency on the enum values, do not add any new values
 // here, and mark obsolete values are unused instead of removing them. See
 // https://crrev.com/c/885090 for context.
@@ -46,8 +52,17 @@ enum ResultCode {
   RESULT_CODE_LAST_CODE
 };
 
+static_assert(RESULT_CODE_KILLED_BAD_MESSAGE == 3 &&
+                  RESULT_CODE_KILLED_BAD_MESSAGE ==
+                      base::Process::kResultCodeKilledBadMessage,
+              "This enum is frozen - process.h may spy on this value.");
+
 static_assert(RESULT_CODE_LAST_CODE == 5,
               "This enum is frozen - see the IMPORTANT note above.");
+
+// Return a string describing the error code. Keep in sync with the
+// CrashExitCodes in /tools/metrics/histograms/enums.xml.
+CONTENT_EXPORT std::string CrashExitCodeToString(int exit_code);
 
 }  // namespace content
 

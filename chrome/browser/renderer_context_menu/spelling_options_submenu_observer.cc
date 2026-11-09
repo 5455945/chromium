@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -24,6 +24,10 @@
 
 using content::BrowserThread;
 
+constexpr int kMaxLanguages = 100;
+constexpr int IDC_SPELLCHECK_LANGUAGES_LAST =
+    IDC_SPELLCHECK_LANGUAGES_FIRST + kMaxLanguages - 1;
+
 SpellingOptionsSubMenuObserver::SpellingOptionsSubMenuObserver(
     RenderViewContextMenuProxy* proxy,
     ui::SimpleMenuModel::Delegate* delegate,
@@ -37,21 +41,20 @@ SpellingOptionsSubMenuObserver::SpellingOptionsSubMenuObserver(
     use_spelling_service_.Init(spellcheck::prefs::kSpellCheckUseSpellingService,
                                profile->GetPrefs());
   }
-  DCHECK(proxy_);
+  CHECK(proxy_, base::NotFatalUntil::M163);
 }
 
-SpellingOptionsSubMenuObserver::~SpellingOptionsSubMenuObserver() {}
+SpellingOptionsSubMenuObserver::~SpellingOptionsSubMenuObserver() = default;
 
 void SpellingOptionsSubMenuObserver::InitMenu(
     const content::ContextMenuParams& params) {
-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  CHECK_CURRENTLY_ON(BrowserThread::UI, base::NotFatalUntil::M163);
 
   // Add available spell-checker languages to the sub menu.
   content::BrowserContext* browser_context = proxy_->GetBrowserContext();
-  DCHECK(browser_context);
+  CHECK(browser_context, base::NotFatalUntil::M163);
   SpellcheckService::GetDictionaries(browser_context, &dictionaries_);
-  DCHECK(dictionaries_.size() <
-         IDC_SPELLCHECK_LANGUAGES_LAST - IDC_SPELLCHECK_LANGUAGES_FIRST);
+  CHECK(dictionaries_.size() < kMaxLanguages, base::NotFatalUntil::M163);
   const std::string app_locale = g_browser_process->GetApplicationLocale();
 
   if (dictionaries_.size() > 1) {
@@ -60,9 +63,9 @@ void SpellingOptionsSubMenuObserver::InitMenu(
         IDS_CONTENT_CONTEXT_SPELLCHECK_MULTI_LINGUAL, language_group_id_);
   }
 
-  const size_t kMaxLanguages = static_cast<size_t>(
-      IDC_SPELLCHECK_LANGUAGES_FIRST - IDC_SPELLCHECK_LANGUAGES_LAST);
-  for (size_t i = 0; i < dictionaries_.size() && i < kMaxLanguages; ++i) {
+  for (size_t i = 0;
+       i < dictionaries_.size() && i < static_cast<size_t>(kMaxLanguages);
+       ++i) {
     submenu_model_.AddRadioItem(
         IDC_SPELLCHECK_LANGUAGES_FIRST + i,
         l10n_util::GetDisplayNameForLocale(dictionaries_[i].language,
@@ -95,7 +98,7 @@ void SpellingOptionsSubMenuObserver::InitMenu(
   }
 
   proxy_->AddSubMenu(
-      IDC_SPELLCHECK_MENU,
+      kSubMenuPlaceholder,
       l10n_util::GetStringUTF16(IDS_CONTENT_CONTEXT_SPELLCHECK_MENU),
       &submenu_model_);
 }
@@ -103,15 +106,15 @@ void SpellingOptionsSubMenuObserver::InitMenu(
 bool SpellingOptionsSubMenuObserver::IsCommandIdSupported(int command_id) {
   // Allow Spell Check language items on sub menu for text area context menu.
   if (command_id >= IDC_SPELLCHECK_LANGUAGES_FIRST &&
-      command_id < IDC_SPELLCHECK_LANGUAGES_LAST) {
-    DCHECK_GT(IDC_SPELLCHECK_LANGUAGES_FIRST + dictionaries_.size(),
-              static_cast<size_t>(command_id));
+      command_id <= IDC_SPELLCHECK_LANGUAGES_LAST) {
+    CHECK_GT(IDC_SPELLCHECK_LANGUAGES_FIRST + dictionaries_.size(),
+             static_cast<size_t>(command_id), base::NotFatalUntil::M163);
     return true;
   }
 
   switch (command_id) {
     case IDC_CHECK_SPELLING_WHILE_TYPING:
-    case IDC_SPELLCHECK_MENU:
+    case kSubMenuPlaceholder:
     case IDC_SPELLCHECK_MULTI_LINGUAL:
       return true;
   }
@@ -120,13 +123,13 @@ bool SpellingOptionsSubMenuObserver::IsCommandIdSupported(int command_id) {
 }
 
 bool SpellingOptionsSubMenuObserver::IsCommandIdChecked(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
 
   if (command_id == IDC_SPELLCHECK_MULTI_LINGUAL)
     return num_selected_dictionaries_ == dictionaries_.size();
 
   if (command_id >= IDC_SPELLCHECK_LANGUAGES_FIRST &&
-      command_id < IDC_SPELLCHECK_LANGUAGES_LAST) {
+      command_id <= IDC_SPELLCHECK_LANGUAGES_LAST) {
     if (num_selected_dictionaries_ == dictionaries_.size())
       return dictionaries_.size() == 1;
 
@@ -148,13 +151,13 @@ bool SpellingOptionsSubMenuObserver::IsCommandIdChecked(int command_id) {
 }
 
 bool SpellingOptionsSubMenuObserver::IsCommandIdEnabled(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
 
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M163);
   const PrefService* pref = profile->GetPrefs();
   if ((command_id >= IDC_SPELLCHECK_LANGUAGES_FIRST &&
-       command_id < IDC_SPELLCHECK_LANGUAGES_LAST) ||
+       command_id <= IDC_SPELLCHECK_LANGUAGES_LAST) ||
       command_id == IDC_SPELLCHECK_MULTI_LINGUAL) {
     return pref->GetBoolean(spellcheck::prefs::kSpellCheckEnable);
   }
@@ -164,7 +167,7 @@ bool SpellingOptionsSubMenuObserver::IsCommandIdEnabled(int command_id) {
       return !pref->FindPreference(spellcheck::prefs::kSpellCheckEnable)
                   ->IsManaged();
 
-    case IDC_SPELLCHECK_MENU:
+    case kSubMenuPlaceholder:
       return true;
   }
 
@@ -172,11 +175,11 @@ bool SpellingOptionsSubMenuObserver::IsCommandIdEnabled(int command_id) {
 }
 
 void SpellingOptionsSubMenuObserver::ExecuteCommand(int command_id) {
-  DCHECK(IsCommandIdSupported(command_id));
+  CHECK(IsCommandIdSupported(command_id), base::NotFatalUntil::M163);
 
   // Check to see if one of the spell check language ids have been clicked.
   Profile* profile = Profile::FromBrowserContext(proxy_->GetBrowserContext());
-  DCHECK(profile);
+  CHECK(profile, base::NotFatalUntil::M163);
 
   if (command_id >= IDC_SPELLCHECK_LANGUAGES_FIRST &&
       static_cast<size_t>(command_id) <

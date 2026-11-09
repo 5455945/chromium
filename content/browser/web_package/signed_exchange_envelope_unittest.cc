@@ -1,12 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/web_package/signed_exchange_envelope.h"
 
-#include "base/callback.h"
+#include <string_view>
+
+#include "base/compiler_specific.h"
+#include "base/containers/span.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
+#include "base/functional/callback.h"
 #include "base/path_service.h"
 #include "components/cbor/values.h"
 #include "components/cbor/writer.h"
@@ -29,25 +33,27 @@ const char kSignatureString[] =
     " cert-sha256=*W7uB969dFW3Mb5ZefPS9Tq5ZbH5iSmOILpjv2qEArmI=*;"
     " date=1511128380; expires=1511733180";
 
-cbor::Value CBORByteString(const char* str) {
-  return cbor::Value(str, cbor::Value::Type::BYTE_STRING);
+cbor::Value CBORByteString(std::string_view str) {
+  return cbor::Value(base::as_byte_span(str));
 }
 
-absl::optional<SignedExchangeEnvelope> GenerateHeaderAndParse(
+std::optional<SignedExchangeEnvelope> GenerateHeaderAndParse(
     SignedExchangeVersion version,
-    base::StringPiece fallback_url,
-    base::StringPiece signature,
+    std::string_view fallback_url,
+    std::string_view signature,
     const std::map<const char*, const char*>& response_map) {
   cbor::Value::MapValue response_cbor_map;
-  for (auto& pair : response_map)
-    response_cbor_map[CBORByteString(pair.first)] = CBORByteString(pair.second);
+  for (auto& pair : response_map) {
+    response_cbor_map.insert_or_assign(CBORByteString(pair.first),
+                                       CBORByteString(pair.second));
+  }
 
   DCHECK_EQ(version, SignedExchangeVersion::kB3);
   auto serialized =
       cbor::Writer::Write(cbor::Value(std::move(response_cbor_map)));
   return SignedExchangeEnvelope::Parse(
       version, signed_exchange_utils::URLWithRawString(fallback_url), signature,
-      base::make_span(serialized->data(), serialized->size()),
+      UNSAFE_TODO(base::span(serialized->data(), serialized->size())),
       nullptr /* devtools_proxy */);
 }
 
@@ -64,38 +70,42 @@ TEST_P(SignedExchangeEnvelopeTest, ParseGoldenFile) {
 
   std::string contents;
   ASSERT_TRUE(base::ReadFileToString(test_sxg_path, &contents));
-  auto* contents_bytes = reinterpret_cast<const uint8_t*>(contents.data());
+  base::span<const uint8_t> contents_bytes = base::as_byte_span(contents);
 
   ASSERT_GT(contents.size(),
             signed_exchange_prologue::BeforeFallbackUrl::kEncodedSizeInBytes);
   signed_exchange_prologue::BeforeFallbackUrl prologue_a =
       signed_exchange_prologue::BeforeFallbackUrl::Parse(
-          base::make_span(
-              contents_bytes,
-              signed_exchange_prologue::BeforeFallbackUrl::kEncodedSizeInBytes),
+          UNSAFE_TODO(base::span(contents_bytes.data(),
+                                 signed_exchange_prologue::BeforeFallbackUrl::
+                                     kEncodedSizeInBytes)),
           nullptr /* devtools_proxy */);
   ASSERT_GT(contents.size(),
             signed_exchange_prologue::BeforeFallbackUrl::kEncodedSizeInBytes +
                 prologue_a.ComputeFallbackUrlAndAfterLength());
   signed_exchange_prologue::FallbackUrlAndAfter prologue_b =
       signed_exchange_prologue::FallbackUrlAndAfter::Parse(
-          base::make_span(contents_bytes +
-                              signed_exchange_prologue::BeforeFallbackUrl::
-                                  kEncodedSizeInBytes,
-                          prologue_a.ComputeFallbackUrlAndAfterLength()),
+          UNSAFE_TODO(base::span(
+              contents_bytes
+                  .subspan(signed_exchange_prologue::BeforeFallbackUrl::
+                               kEncodedSizeInBytes)
+                  .data(),
+              prologue_a.ComputeFallbackUrlAndAfterLength())),
           prologue_a, nullptr /* devtools_proxy */);
 
   size_t signature_header_field_offset =
       signed_exchange_prologue::BeforeFallbackUrl::kEncodedSizeInBytes +
       prologue_a.ComputeFallbackUrlAndAfterLength();
-  base::StringPiece signature_header_field(
-      contents.data() + signature_header_field_offset,
+  std::string_view signature_header_field(
+      UNSAFE_TODO(contents.data() + signature_header_field_offset),
       prologue_b.signature_header_field_length());
-  const auto cbor_bytes =
-      base::make_span(contents_bytes + signature_header_field_offset +
-                          prologue_b.signature_header_field_length(),
-                      prologue_b.cbor_header_length());
-  const absl::optional<SignedExchangeEnvelope> envelope =
+  const auto cbor_bytes = UNSAFE_TODO(
+      base::span(contents_bytes
+                     .subspan(signature_header_field_offset +
+                              prologue_b.signature_header_field_length())
+                     .data(),
+                 prologue_b.cbor_header_length()));
+  const std::optional<SignedExchangeEnvelope> envelope =
       SignedExchangeEnvelope::Parse(
           SignedExchangeVersion::kB3, prologue_b.fallback_url(),
           signature_header_field, cbor_bytes, nullptr /* devtools_proxy */);

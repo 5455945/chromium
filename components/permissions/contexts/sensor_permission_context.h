@@ -1,15 +1,15 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERMISSIONS_CONTEXTS_SENSOR_PERMISSION_CONTEXT_H_
 #define COMPONENTS_PERMISSIONS_CONTEXTS_SENSOR_PERMISSION_CONTEXT_H_
 
-#include "components/permissions/permission_context_base.h"
+#include "components/permissions/content_setting_permission_context_base.h"
 
 namespace permissions {
 
-class SensorPermissionContext : public PermissionContextBase {
+class SensorPermissionContext : public ContentSettingPermissionContextBase {
  public:
   explicit SensorPermissionContext(content::BrowserContext* browser_context);
   SensorPermissionContext(const SensorPermissionContext&) = delete;
@@ -18,10 +18,8 @@ class SensorPermissionContext : public PermissionContextBase {
 
  private:
   // PermissionContextBase:
-  void UpdateTabContext(const PermissionRequestID& id,
-                        const GURL& requesting_frame,
+  void UpdateTabContext(const PermissionRequestData& request_data,
                         bool allowed) override;
-  bool IsRestrictedToSecureOrigins() const override;
 };
 
 }  // namespace permissions

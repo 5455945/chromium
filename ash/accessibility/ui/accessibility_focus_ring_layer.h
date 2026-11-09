@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,7 +9,6 @@
 #include "ash/accessibility/ui/focus_ring_layer.h"
 #include "ash/ash_export.h"
 #include "ash/public/cpp/accessibility_focus_ring_info.h"
-#include "base/macros.h"
 #include "ui/compositor/paint_recorder.h"
 
 namespace ash {
@@ -20,6 +19,11 @@ namespace ash {
 class ASH_EXPORT AccessibilityFocusRingLayer : public FocusRingLayer {
  public:
   explicit AccessibilityFocusRingLayer(AccessibilityLayerDelegate* delegate);
+
+  AccessibilityFocusRingLayer(const AccessibilityFocusRingLayer&) = delete;
+  AccessibilityFocusRingLayer& operator=(const AccessibilityFocusRingLayer&) =
+      delete;
+
   ~AccessibilityFocusRingLayer() override;
 
   // Create the layer and update its bounds and position in the hierarchy.
@@ -29,7 +33,7 @@ class ASH_EXPORT AccessibilityFocusRingLayer : public FocusRingLayer {
                      FocusRingStackingOrder stacking_order,
                      SkColor color,
                      SkColor secondary_color,
-                     SkColor background_alpha);
+                     SkColor background_color);
 
   SkColor color_for_testing() { return custom_color(); }
 
@@ -45,17 +49,15 @@ class ASH_EXPORT AccessibilityFocusRingLayer : public FocusRingLayer {
   // The outline of the current focus ring.
   AccessibilityFocusRing ring_;
   // The type of focus ring.
-  FocusRingType type_;
+  FocusRingType type_ = FocusRingType::GLOW;
   // How the focus ring should be stacked relative to other layers.
   FocusRingStackingOrder stacking_order_ =
       FocusRingStackingOrder::ABOVE_ACCESSIBILITY_BUBBLES;
   // The secondary color.
-  SkColor secondary_color_;
+  SkColor secondary_color_ = SK_ColorTRANSPARENT;
   // The color of the background. When fully transparent, no background will be
   // drawn.
   SkColor background_color_ = SK_ColorTRANSPARENT;
-
-  DISALLOW_COPY_AND_ASSIGN(AccessibilityFocusRingLayer);
 };
 
 }  // namespace ash

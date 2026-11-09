@@ -30,37 +30,42 @@
 
 #include "third_party/blink/renderer/modules/peerconnection/rtc_session_description_request_impl.h"
 
-#include "base/memory/scoped_refptr.h"
+#include "base/check.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sdp_type.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_session_description_init.h"
-#include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_error_util.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_peer_connection.h"
 #include "third_party/blink/renderer/modules/peerconnection/rtc_session_description.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h"
+#include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_request.h"
+#include "third_party/webrtc/api/rtc_error.h"
 
 namespace blink {
 
 RTCSessionDescriptionRequestImpl* RTCSessionDescriptionRequestImpl::Create(
     ExecutionContext* context,
-    RTCCreateSessionDescriptionOperation operation,
     RTCPeerConnection* requester,
     V8RTCSessionDescriptionCallback* success_callback,
-    V8RTCPeerConnectionErrorCallback* error_callback) {
+    V8RTCPeerConnectionErrorCallback* error_callback,
+    bool is_offer) {
   return MakeGarbageCollected<RTCSessionDescriptionRequestImpl>(
-      context, operation, requester, success_callback, error_callback);
+      context, requester, success_callback, error_callback, is_offer);
 }
 
 RTCSessionDescriptionRequestImpl::RTCSessionDescriptionRequestImpl(
     ExecutionContext* context,
-    RTCCreateSessionDescriptionOperation operation,
     RTCPeerConnection* requester,
     V8RTCSessionDescriptionCallback* success_callback,
-    V8RTCPeerConnectionErrorCallback* error_callback)
+    V8RTCPeerConnectionErrorCallback* error_callback,
+    bool is_offer)
     : ExecutionContextLifecycleObserver(context),
-      operation_(operation),
       success_callback_(success_callback),
       error_callback_(error_callback),
-      requester_(requester) {
+      requester_(requester),
+      is_offer_(is_offer) {
   DCHECK(requester_);
 }
 
@@ -71,15 +76,15 @@ void RTCSessionDescriptionRequestImpl::RequestSucceeded(
   bool should_fire_callback =
       requester_ ? requester_->ShouldFireDefaultCallbacks() : false;
   if (should_fire_callback && success_callback_) {
-    requester_->NoteSessionDescriptionRequestCompleted(operation_, true);
     RTCSessionDescriptionInit* description =
         RTCSessionDescriptionInit::Create();
-    if (description_platform->GetType())
-      description->setType(description_platform->GetType());
+    if (description_platform->GetType()) {
+      description->setType(
+          V8RTCSdpType::Create(description_platform->GetType()).value());
+    }
     description->setSdp(description_platform->Sdp());
 
-    requester_->NoteSdpCreated(
-        *RTCSessionDescription::Create(description_platform));
+    requester_->NoteSdpCreated(*description);
     success_callback_->InvokeAndReportException(nullptr, description);
   }
   Clear();
@@ -89,8 +94,11 @@ void RTCSessionDescriptionRequestImpl::RequestFailed(
     const webrtc::RTCError& error) {
   bool should_fire_callback =
       requester_ ? requester_->ShouldFireDefaultCallbacks() : false;
+  if (requester_) {
+    is_offer_ ? requester_->NoteCreateOfferFailed()
+              : requester_->NoteCreateAnswerFailed();
+  }
   if (should_fire_callback && error_callback_) {
-    requester_->NoteSessionDescriptionRequestCompleted(operation_, false);
     error_callback_->InvokeAndReportException(
         nullptr, CreateDOMExceptionFromRTCError(error));
   }

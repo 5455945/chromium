@@ -1,16 +1,25 @@
 # User Action Guidelines
 
+[TOC]
+
 This document covers the best practices on using user actions in code and
-documenting them for the dashboard. User actions come with only a name and
-a timestamp. They are best used when you care about a sequence—which actions
-happen in what order. If you don't care about the order, you should be using
+documenting them for the dashboard. (You can find user actions on the dashboard
+by typing "user actions" in the Metrics/Histograms search bar and selecting it.)
+User actions come with only a name and a timestamp. They are best used when you
+care about a sequence—which actions happen in what order. If you don't care
+about the order, you should be using
 [histograms](https://chromium.googlesource.com/chromium/src.git/+/HEAD/tools/metrics/histograms/README.md)
-(likely [enumerated histograms](https://chromium.googlesource.com/chromium/src.git/+/HEAD/tools/metrics/histograms/README.md#Enum-Histograms)).
+(likely
+[enumerated histograms](https://chromium.googlesource.com/chromium/src.git/+/HEAD/tools/metrics/histograms/README.md#Enum-Histograms)).
 
 Often, you want both user actions and histogram logging in your code. They
 enable different analyses. They're complementary.
 
-[TOC]
+## Permitted Metrics
+
+Google has policies restricting what data can be collected and for what purpose.
+Googlers, see go/uma-privacy#principles to verify your desired user action
+adheres to those policies.
 
 ## Coding (emitting to user actions)
 
@@ -88,7 +97,7 @@ you need.
 
 It's okay to emit user actions such as "ShowTranslateInfobar" or
 "DisplayedImageLinkContextMenu". Remember to mark them as
-[not_user_triggered](#not_user_triggered) and please try to make sure they're
+[not_user_triggered](#not-user-triggered) and please try to make sure they're
 not excessive. For example, don't emit "ShowedSecureIconNextToOmnibox" because
 that's likely to appear on most pages. That said, if you need
 ShowedSecureIconNextToOmnibox logged in order to analyze a sequence of user
@@ -100,9 +109,9 @@ Test your user actions using `chrome://user-actions`. Make sure they're being
 emitted when you expect and not emitted otherwise.
 
 If this is a general UI surface, please try to check every platform. In
-particular, check Windows (Views-based platforms), Mac (non-Views), Android
-phone (yet other UI wrapper code), Android tablet (often triggers look-alike but
-different menus), and iOS (yet more different UI wrapper code).
+particular, check Windows (Views-based platforms), Android phone (yet other UI
+wrapper code), Android tablet (often triggers look-alike but different menus),
+and iOS (yet more different UI wrapper code).
 
 Also, check that your new user action is not mostly redundant in light of
 existing user actions (see [advice above](#Try-to-avoid-redundant-emits)) and
@@ -111,6 +120,20 @@ not emitted excessively (see [advice above](#Do-not-emit-excessively)).
 In addition to testing interactively, unit tests can check the number of times a
 user action was emitted. See [user_action_tester.h](https://cs.chromium.org/chromium/src/base/test/metrics/user_action_tester.h)
 for details.
+
+See also `chrome://metrics-internals` ([docs](https://chromium.googlesource.com/chromium/src/+/master/components/metrics/debug/README.md))
+for more thorough manual testing if needed.
+
+### Verify Action Variants
+
+If you have actions with `<variant>` entries that need to be updated to match
+code, you can use functions from
+[`action_variants_reader.h`](https://cs.chromium.org/chromium/src/base/test/metrics/action_variants_reader.h)
+to read and verify the expected values in a unit test. This prevents a mismatch
+between code and action data from slipping through CQ.
+
+For an example, see
+[BrowserUserEducationServiceTest.CheckFeaturePromoActions](https://cs.chromium.org/chromium/src/chrome/browser/ui/views/user_education/browser_user_education_service_unittest.cc).
 
 ## Interpreting the resulting data
 
@@ -175,7 +198,7 @@ the metrics team may file bugs related to user actions, and such bugs need to be
 triaged by someone familiar with the metric. If an appropriate mailing list or
 team email is available, it's a good idea to list it as a secondary owner.
 
-### Set `not_user_triggered="true"` when appropriate {#not_user_triggered}
+### Set `not_user_triggered="true"` when appropriate {#not-user-triggered}
 
 actions.xml allows you to annotate an action as `not_user_triggered="true"`.
 Use it when appropriate. For example, showing a notification is not user
@@ -185,27 +208,4 @@ actions. If not, please use a histogram to count these events instead.
 
 ## Cleaning up user action entries
 
-Do not delete actions from actions.xml. Instead, mark unused user actions as
-obsolete, annotating them with the associated date or milestone in the obsolete
-tag entry.
-
-If the user action is being replaced by a new version:
-
-* Note in the `<obsolete>` message the name of the replacement action.
-
-* Make sure the descriptions of the original and replacement user actions
-  are different. It's never appropriate for them to be identical. Either
-  the old description was wrong, and it should be revised to explain what
-  it actually measured, or the old user action was measuring something not
-  as useful as the replacement, in which case the new user action is
-  measuring something different and needs to have a new description.
-
-A changelist that marks a user action as obsolete should be reviewed by all
-current owners.
-
-Deleting user action entries would be bad if someone accidentally reused your
-old user action name. If this happened, new data would be corrupted by whatever
-old data was still coming in. It's also useful to keep obsolete user action
-descriptions in actions.xml. That way, someone searching for a user action to
-answer a particular question can learn if there was a user action at some point
-that did so—even if it isn't active now.
+When a user action is removed from the code, it should be removed from actions.xml. Avoid reusing old user action names to prevent data corruption.

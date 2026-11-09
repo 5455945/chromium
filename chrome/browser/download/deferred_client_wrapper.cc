@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,33 +6,35 @@
 
 #include <vector>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "build/build_config.h"
-#include "chrome/browser/android/startup_bridge.h"
 #include "chrome/browser/browser_process.h"
-#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/transition_manager/full_browser_transition_manager.h"
 #include "components/download/public/background_service/clients.h"
 #include "components/download/public/background_service/download_metadata.h"
 #include "components/keyed_service/core/simple_factory_key.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "chrome/browser/android/startup_bridge.h"
+#endif
 
 namespace download {
 
 DeferredClientWrapper::DeferredClientWrapper(ClientFactory client_factory,
                                              SimpleFactoryKey* key)
     : client_factory_(std::move(client_factory)), key_(key) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   full_browser_requested_ = false;
 #endif
 
   FullBrowserTransitionManager::Get()->RegisterCallbackOnProfileCreation(
       key_, base::BindOnce(&DeferredClientWrapper::InflateClient,
                            weak_ptr_factory_.GetWeakPtr()));
-#if !defined(OS_ANDROID)
+#if !BUILDFLAG(IS_ANDROID)
   // On non-android platforms we can only be running in full browser mode. In
   // full browser mode, FullBrowserTransitionManager synchronously calls the
   // callback when it is registered.
-  DCHECK(wrapped_client_);
+  CHECK(wrapped_client_, base::NotFatalUntil::M161);
 #endif
 }
 
@@ -121,6 +123,10 @@ void DeferredClientWrapper::GetUploadData(
   RunDeferredClosures(true /*force_inflate*/);
 }
 
+bool DeferredClientWrapper::RequiresCustomRequestParameters() const {
+  return wrapped_client_ && wrapped_client_->RequiresCustomRequestParameters();
+}
+
 void DeferredClientWrapper::ForwardOnServiceInitialized(
     bool state_lost,
     const std::vector<DownloadMetaData>& downloads) {
@@ -174,7 +180,7 @@ void DeferredClientWrapper::RunDeferredClosures(bool force_inflate) {
   if (wrapped_client_) {
     DoRunDeferredClosures();
   } else if (force_inflate) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
     // The constructor registers InflateClient as a callback with
     // FullBrowserTransitionManager on Profile creation. We just need to trigger
     // loading full browser. Once full browser is loaded and  profile is
@@ -189,7 +195,7 @@ void DeferredClientWrapper::RunDeferredClosures(bool force_inflate) {
 }
 
 void DeferredClientWrapper::DoRunDeferredClosures() {
-  DCHECK(wrapped_client_);
+  CHECK(wrapped_client_, base::NotFatalUntil::M161);
   auto deferred_closures = std::move(deferred_closures_);
   for (auto& closure : deferred_closures) {
     std::move(closure).Run();
@@ -197,13 +203,13 @@ void DeferredClientWrapper::DoRunDeferredClosures() {
 }
 
 void DeferredClientWrapper::InflateClient(Profile* profile) {
-  DCHECK(profile);
-  DCHECK(client_factory_);
+  CHECK(profile, base::NotFatalUntil::M161);
+  CHECK(client_factory_, base::NotFatalUntil::M161);
   wrapped_client_ = std::move(client_factory_).Run(profile);
   DoRunDeferredClosures();
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 void DeferredClientWrapper::LaunchFullBrowser() {
   if (full_browser_requested_)
     return;

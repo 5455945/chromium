@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,13 +6,12 @@
 
 #include "base/strings/string_util.h"
 #include "chrome/browser/ash/login/test/js_checker.h"
-#include "chrome/browser/ash/login/ui/login_display_host.h"
-#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "chrome/browser/ui/ash/login/login_display_host.h"
+#include "chrome/browser/ui/webui/ash/login/oobe_ui.h"
 #include "content/public/test/browser_test_utils.h"
 
-namespace chromeos {
+namespace ash {
 namespace test {
-
 namespace {
 
 constexpr char kGaiaAuthenticator[] = "$('gaia-signin').authenticator_";
@@ -41,7 +40,6 @@ void OobeAuthPageWaiter::WaitUntilReady() {
 void OobeAuthPageWaiter::WaitForEvent(const std::string& event) {
   // Starts listening to message before executing the JS code that generates
   // the message below.
-  content::DOMMessageQueue message_queue;
   std::string js =
       R"((function() {
               var authenticator = $AuthenticatorId;
@@ -59,7 +57,9 @@ void OobeAuthPageWaiter::WaitForEvent(const std::string& event) {
   // the call might hang or won't execute properly.
   MaybeWaitForOobeToInitialize();
 
-  test::OobeJS().Evaluate(js);
+  content::DOMMessageQueue message_queue(
+      LoginDisplayHost::default_host()->GetOobeWebContents());
+  OobeJS().Evaluate(js);
 
   std::string message;
   do {
@@ -75,7 +75,6 @@ const char* OobeAuthPageWaiter::GetAuthenticator() {
       return kEnrollmentAuthenticator;
   }
   NOTREACHED() << "Unexpected value for auth_page_type_";
-  return kGaiaAuthenticator;
 }
 
 OobeAuthPageWaiter OobeGaiaPageWaiter() {
@@ -87,4 +86,4 @@ OobeAuthPageWaiter OobeEnrollmentPageWaiter() {
 }
 
 }  // namespace test
-}  // namespace chromeos
+}  // namespace ash

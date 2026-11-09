@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,9 @@
 #include <stdint.h>
 
 #include "base/compiler_specific.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_span.h"
 #include "media/filters/ffmpeg_glue.h"
 
 namespace media {
@@ -20,23 +22,26 @@ namespace media {
 //       this object.
 class MEDIA_EXPORT InMemoryUrlProtocol : public FFmpegURLProtocol {
  public:
-  InMemoryUrlProtocol(const uint8_t* buf, int64_t size, bool streaming);
+  InMemoryUrlProtocol() = delete;
+
+  InMemoryUrlProtocol(base::span<const uint8_t> buf, bool streaming);
+
+  InMemoryUrlProtocol(const InMemoryUrlProtocol&) = delete;
+  InMemoryUrlProtocol& operator=(const InMemoryUrlProtocol&) = delete;
+
   virtual ~InMemoryUrlProtocol();
 
   // FFmpegURLProtocol methods.
-  int Read(int size, uint8_t* data) override;
+  int Read(base::span<uint8_t> data) override;
   bool GetPosition(int64_t* position_out) override;
   bool SetPosition(int64_t position) override;
   bool GetSize(int64_t* size_out) override;
   bool IsStreaming() override;
 
  private:
-  const uint8_t* data_;
-  int64_t size_;
+  base::raw_span<const uint8_t, DanglingUntriaged> data_;
   int64_t position_;
   bool streaming_;
-
-  DISALLOW_IMPLICIT_CONSTRUCTORS(InMemoryUrlProtocol);
 };
 
 }  // namespace media

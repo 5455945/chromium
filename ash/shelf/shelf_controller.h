@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,29 +9,46 @@
 #include <string>
 
 #include "ash/ash_export.h"
-#include "ash/display/window_tree_host_manager.h"
 #include "ash/public/cpp/session/session_observer.h"
 #include "ash/public/cpp/shelf_model.h"
 #include "ash/public/cpp/shelf_model_observer.h"
-#include "ash/public/cpp/tablet_mode_observer.h"
+#include "base/memory/raw_ptr.h"
+#include "base/scoped_observation.h"
 #include "components/services/app_service/public/cpp/app_registry_cache.h"
 #include "components/services/app_service/public/cpp/app_update.h"
+#include "ui/display/display_observer.h"
+#include "ui/display/manager/display_manager_observer.h"
+#include "ui/display/tablet_state.h"
 
 class PrefChangeRegistrar;
 class PrefRegistrySimple;
 
+namespace display {
+enum class TabletState;
+}  // namespace display
+
 namespace ash {
+
+class LauncherNudgeController;
 
 // ShelfController owns the ShelfModel and manages shelf preferences.
 // ChromeShelfController and related classes largely manage the ShelfModel.
 class ASH_EXPORT ShelfController : public SessionObserver,
-                                   public TabletModeObserver,
-                                   public WindowTreeHostManager::Observer,
+                                   public display::DisplayObserver,
+                                   public display::DisplayManagerObserver,
                                    public apps::AppRegistryCache::Observer,
                                    public ShelfModelObserver {
  public:
   ShelfController();
+
+  ShelfController(const ShelfController&) = delete;
+  ShelfController& operator=(const ShelfController&) = delete;
+
   ~ShelfController() override;
+
+  // Creates `launcher_nudge_controller_` instance which needs AppListController
+  // instance to construct.
+  void Init();
 
   // Removes observers from this object's dependencies.
   void Shutdown();
@@ -40,16 +57,19 @@ class ASH_EXPORT ShelfController : public SessionObserver,
 
   ShelfModel* model() { return &model_; }
 
+  LauncherNudgeController* launcher_nudge_controller() const {
+    return launcher_nudge_controller_.get();
+  }
+
  private:
   // SessionObserver:
   void OnActiveUserPrefServiceChanged(PrefService* pref_service) override;
 
-  // TabletModeObserver:
-  void OnTabletModeStarted() override;
-  void OnTabletModeEnded() override;
+  // display::DisplayObserver:
+  void OnDisplayTabletStateChanged(display::TabletState state) override;
 
-  // WindowTreeHostManager::Observer:
-  void OnDisplayConfigurationChanged() override;
+  // display::DisplayManagerObserver:
+  void OnDidApplyDisplayChanges() override;
 
   // apps::AppRegistryCache::Observer:
   void OnAppUpdate(const apps::AppUpdate& update) override;
@@ -66,20 +86,24 @@ class ASH_EXPORT ShelfController : public SessionObserver,
   // The shelf model shared by all shelf instances.
   ShelfModel model_;
 
-  // Whether notification indicators are enabled for app icons in the shelf.
-  const bool is_notification_indicator_enabled_;
+  // The controller of the launcher nudge that animates the home button.
+  std::unique_ptr<LauncherNudgeController> launcher_nudge_controller_;
 
   // Whether the pref for notification badging is enabled.
-  absl::optional<bool> notification_badging_pref_enabled_;
+  std::optional<bool> notification_badging_pref_enabled_;
 
   // Observes user profile prefs for the shelf.
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 
   // Observed to update notification badging on shelf items. Also used to get
   // initial notification badge information when shelf items are added.
-  apps::AppRegistryCache* cache_ = nullptr;
+  raw_ptr<apps::AppRegistryCache> cache_ = nullptr;
 
-  DISALLOW_COPY_AND_ASSIGN(ShelfController);
+  base::ScopedObservation<apps::AppRegistryCache,
+                          apps::AppRegistryCache::Observer>
+      app_registry_cache_observer_{this};
+
+  display::ScopedDisplayObserver display_observer_{this};
 };
 
 }  // namespace ash

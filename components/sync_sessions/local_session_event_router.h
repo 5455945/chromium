@@ -1,12 +1,9 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_SYNC_SESSIONS_LOCAL_SESSION_EVENT_ROUTER_H_
 #define COMPONENTS_SYNC_SESSIONS_LOCAL_SESSION_EVENT_ROUTER_H_
-
-#include "base/macros.h"
-#include "url/gurl.h"
 
 namespace sync_sessions {
 
@@ -18,7 +15,10 @@ class SyncedTabDelegate;
 // via ProcessSyncChanges, just with a more granular breakdown.
 class LocalSessionEventHandler {
  public:
-  virtual ~LocalSessionEventHandler() {}
+  LocalSessionEventHandler(const LocalSessionEventHandler&) = delete;
+  LocalSessionEventHandler& operator=(const LocalSessionEventHandler&) = delete;
+
+  virtual ~LocalSessionEventHandler() = default;
 
   // Called when asynchronous session restore has completed. On Android, this
   // can be called multiple times (e.g. transition from a CCT without tabbed
@@ -29,11 +29,12 @@ class LocalSessionEventHandler {
   // for this instance of Chrome.
   virtual void OnLocalTabModified(SyncedTabDelegate* modified_tab) = 0;
 
- protected:
-  LocalSessionEventHandler() {}
+  // A local tab was closed. It's the job of the LocalSessionEventHandler to
+  // figure out which tab this is and to react accordingly.
+  virtual void OnLocalTabClosed() = 0;
 
- private:
-  DISALLOW_COPY_AND_ASSIGN(LocalSessionEventHandler);
+ protected:
+  LocalSessionEventHandler() = default;
 };
 
 // The LocalSessionEventRouter is responsible for hooking itself up to various
@@ -41,15 +42,15 @@ class LocalSessionEventHandler {
 // events to a handler as defined in the LocalSessionEventHandler contract.
 class LocalSessionEventRouter {
  public:
-  virtual ~LocalSessionEventRouter() {}
+  LocalSessionEventRouter(const LocalSessionEventRouter&) = delete;
+  LocalSessionEventRouter& operator=(const LocalSessionEventRouter&) = delete;
+
+  virtual ~LocalSessionEventRouter() = default;
   virtual void StartRoutingTo(LocalSessionEventHandler* handler) = 0;
   virtual void Stop() = 0;
 
  protected:
-  LocalSessionEventRouter() {}
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(LocalSessionEventRouter);
+  LocalSessionEventRouter() = default;
 };
 
 }  // namespace sync_sessions

@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,75 +11,72 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/memory/ref_counted.h"
+#include "base/functional/callback_forward.h"
+#include "base/memory/scoped_refptr.h"
+#include "base/types/pass_key.h"
 #include "media/base/cdm_config.h"
+#include "media/base/cdm_factory.h"
+#include "media/base/key_systems.h"
 #include "third_party/blink/public/platform/web_content_decryption_module.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 
-namespace blink {
-class WebSecurityOrigin;
-}
-
 namespace media {
-
-struct CdmConfig;
 class CdmContextRef;
 class CdmFactory;
+struct CdmConfig;
+}  // namespace media
+
+namespace blink {
+
 class CdmSessionAdapter;
+class WebSecurityOrigin;
 
 using WebCdmCreatedCB =
-    base::OnceCallback<void(blink::WebContentDecryptionModule* cdm,
-                            const std::string& error_message)>;
+    base::OnceCallback<void(std::unique_ptr<WebContentDecryptionModule> cdm,
+                            media::CreateCdmStatus status)>;
 
 class PLATFORM_EXPORT WebContentDecryptionModuleImpl
-    : public blink::WebContentDecryptionModule {
+    : public WebContentDecryptionModule {
  public:
-  static void Create(CdmFactory* cdm_factory,
-                     const std::u16string& key_system,
-                     const blink::WebSecurityOrigin& security_origin,
-                     const CdmConfig& cdm_config,
+  static void Create(media::CdmFactory* cdm_factory,
+                     media::KeySystems* key_systems,
+                     const WebSecurityOrigin& security_origin,
+                     const media::CdmConfig& cdm_config,
                      WebCdmCreatedCB web_cdm_created_cb);
 
+  // Takes reference to |adapter|.
+  WebContentDecryptionModuleImpl(base::PassKey<CdmSessionAdapter>,
+                                 scoped_refptr<CdmSessionAdapter> adapter,
+                                 media::KeySystems* key_systems);
   WebContentDecryptionModuleImpl(const WebContentDecryptionModuleImpl&) =
       delete;
   WebContentDecryptionModuleImpl& operator=(
       const WebContentDecryptionModuleImpl&) = delete;
   ~WebContentDecryptionModuleImpl() override;
 
-  // blink::WebContentDecryptionModule implementation.
-  std::unique_ptr<blink::WebContentDecryptionModuleSession> CreateSession(
-      blink::WebEncryptedMediaSessionType session_type) override;
-  void SetServerCertificate(
-      const uint8_t* server_certificate,
-      size_t server_certificate_length,
-      blink::WebContentDecryptionModuleResult result) override;
-  void GetStatusForPolicy(
-      const blink::WebString& min_hdcp_version_string,
-      blink::WebContentDecryptionModuleResult result) override;
+  // WebContentDecryptionModule implementation.
+  std::unique_ptr<WebContentDecryptionModuleSession> CreateSession(
+      WebEncryptedMediaSessionType session_type) override;
+  void SetServerCertificate(base::span<const uint8_t> server_certificate,
+                            WebContentDecryptionModuleResult result) override;
+  void GetStatusForPolicy(const WebString& min_hdcp_version_string,
+                          WebContentDecryptionModuleResult result) override;
 
-  std::unique_ptr<CdmContextRef> GetCdmContextRef();
-
-  std::string GetKeySystem() const;
-
-  CdmConfig GetCdmConfig() const;
+  std::unique_ptr<media::CdmContextRef> GetCdmContextRef();
+  media::CdmConfig GetCdmConfig() const;
 
  private:
-  friend CdmSessionAdapter;
-
-  // Takes reference to |adapter|.
-  WebContentDecryptionModuleImpl(scoped_refptr<CdmSessionAdapter> adapter);
-
   scoped_refptr<CdmSessionAdapter> adapter_;
+  // Non-owned.
+  raw_ptr<media::KeySystems> key_systems_;
 };
 
 // Allow typecasting from blink type as this is the only implementation.
-PLATFORM_EXPORT
 inline WebContentDecryptionModuleImpl* ToWebContentDecryptionModuleImpl(
-    blink::WebContentDecryptionModule* cdm) {
+    WebContentDecryptionModule* cdm) {
   return static_cast<WebContentDecryptionModuleImpl*>(cdm);
 }
 
-}  // namespace media
+}  // namespace blink
 
 #endif  // THIRD_PARTY_BLINK_RENDERER_PLATFORM_MEDIA_WEB_CONTENT_DECRYPTION_MODULE_IMPL_H_

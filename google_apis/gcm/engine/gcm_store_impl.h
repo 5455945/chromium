@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 
 #include <stdint.h>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "google_apis/gcm/base/gcm_export.h"
 #include "google_apis/gcm/engine/gcm_store.h"
@@ -27,13 +26,13 @@ class Encryptor;
 // all callbacks to the thread on which the GCMStoreImpl is created.
 class GCM_EXPORT GCMStoreImpl : public GCMStore {
  public:
-  // |remove_account_mappings_with_email_key| indicates whether account mappings
-  // having email as account key should be removed while loading. This is
-  // required during the migration of account identifier from email to Gaia ID.
   GCMStoreImpl(const base::FilePath& path,
-               bool remove_account_mappings_with_email_key,
                scoped_refptr<base::SequencedTaskRunner> blocking_task_runner,
                std::unique_ptr<Encryptor> encryptor);
+
+  GCMStoreImpl(const GCMStoreImpl&) = delete;
+  GCMStoreImpl& operator=(const GCMStoreImpl&) = delete;
+
   ~GCMStoreImpl() override;
 
   // Load the directory and pass the initial state back to caller.
@@ -83,30 +82,12 @@ class GCM_EXPORT GCMStoreImpl : public GCMStore {
 
   // Sets last device's checkin information.
   void SetLastCheckinInfo(const base::Time& time,
-                          const std::set<std::string>& accounts,
                           UpdateCallback callback) override;
 
   // G-service settings handling.
   void SetGServicesSettings(const std::map<std::string, std::string>& settings,
                             const std::string& settings_digest,
                             UpdateCallback callback) override;
-
-  // Sets the account information related to device to account mapping.
-  void AddAccountMapping(const AccountMapping& account_mapping,
-                         UpdateCallback callback) override;
-  void RemoveAccountMapping(const CoreAccountId& account_id,
-                            UpdateCallback callback) override;
-
-  // Sets last token fetch time.
-  void SetLastTokenFetchTime(const base::Time& time,
-                             UpdateCallback callback) override;
-
-  // Sets the custom client heartbeat interval for the scope.
-  void AddHeartbeatInterval(const std::string& scope,
-                            int interval_ms,
-                            UpdateCallback callback) override;
-  void RemoveHeartbeatInterval(const std::string& scope,
-                               UpdateCallback callback) override;
 
   // Instance ID data.
   void AddInstanceIDData(const std::string& app_id,
@@ -151,8 +132,6 @@ class GCM_EXPORT GCMStoreImpl : public GCMStore {
   scoped_refptr<base::SequencedTaskRunner> blocking_task_runner_;
 
   base::WeakPtrFactory<GCMStoreImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(GCMStoreImpl);
 };
 
 }  // namespace gcm

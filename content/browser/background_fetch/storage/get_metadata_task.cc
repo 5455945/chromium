@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
 #include "content/browser/background_fetch/storage/database_helpers.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
@@ -43,7 +43,7 @@ void GetMetadataTask::DidGetUniqueId(const std::vector<std::string>& data,
       FinishWithError(blink::mojom::BackgroundFetchError::INVALID_ID);
       return;
     case DatabaseStatus::kOk:
-      DCHECK_EQ(1u, data.size());
+      CHECK_EQ(1u, data.size(), base::NotFatalUntil::M158);
       service_worker_context()->GetRegistrationUserData(
           service_worker_registration_id_, {RegistrationKey(data[0])},
           base::BindOnce(&GetMetadataTask::DidGetMetadata,
@@ -64,7 +64,7 @@ void GetMetadataTask::DidGetMetadata(const std::vector<std::string>& data,
       FinishWithError(blink::mojom::BackgroundFetchError::STORAGE_ERROR);
       return;
     case DatabaseStatus::kOk:
-      DCHECK_EQ(1u, data.size());
+      CHECK_EQ(1u, data.size(), base::NotFatalUntil::M158);
       ProcessMetadata(data[0]);
       return;
     case DatabaseStatus::kFailed:
@@ -81,11 +81,9 @@ void GetMetadataTask::ProcessMetadata(const std::string& metadata) {
   }
 
   const auto& registration_proto = metadata_proto_->registration();
-  // TODO(https://crbug.com/1199077): Check that the storage key matches once we
-  // can get it from `metadata_proto_`.
+  auto meta_storage_key = GetMetadataStorageKey(*metadata_proto_);
   if (registration_proto.developer_id() != developer_id_ ||
-      !storage_key_.origin().IsSameOriginWith(
-          url::Origin::Create(GURL(metadata_proto_->origin())))) {
+      meta_storage_key != storage_key_) {
     FinishWithError(blink::mojom::BackgroundFetchError::STORAGE_ERROR);
     return;
   }

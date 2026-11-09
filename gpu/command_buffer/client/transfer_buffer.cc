@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,10 +8,14 @@
 
 #include <stddef.h>
 #include <stdint.h>
+
+#include <algorithm>
 #include <climits>
 
 #include "base/bits.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/numerics/clamped_math.h"
 #include "base/trace_event/trace_event.h"
 #include "gpu/command_buffer/client/cmd_buffer_helper.h"
 
@@ -67,14 +71,14 @@ void TransferBuffer::Free() {
       return;
     }
     buffer_id_ = -1;
-    buffer_ = nullptr;
-    result_buffer_ = nullptr;
     result_shm_offset_ = 0;
     DCHECK_EQ(ring_buffer_->NumUsedBlocks(), 0u);
     previous_ring_buffers_.push_back(std::move(ring_buffer_));
     last_allocated_size_ = 0;
     high_water_mark_ = GetPreviousRingBufferUsedBytes();
     bytes_since_last_shrink_ = 0;
+    result_buffer_ = nullptr;
+    buffer_ = nullptr;
   }
 }
 
@@ -119,14 +123,13 @@ void TransferBuffer::AllocateRingBuffer(unsigned int size) {
   for (;size >= min_buffer_size_; size /= 2) {
     int32_t id = -1;
     scoped_refptr<gpu::Buffer> buffer =
-        helper_->command_buffer()->CreateTransferBuffer(size, &id);
+        helper_->command_buffer()->CreateTransferBuffer(size, &id, alignment_);
     if (id != -1) {
       last_allocated_size_ = size;
       DCHECK(buffer.get());
       buffer_ = buffer;
-      ring_buffer_ = std::make_unique<RingBuffer>(
-          alignment_, result_size_, buffer_->size() - result_size_, helper_,
-          static_cast<char*>(buffer_->memory()) + result_size_);
+      ring_buffer_ = std::make_unique<RingBuffer>(buffer_, alignment_,
+                                                  result_size_, helper_);
       buffer_id_ = id;
       result_buffer_ = buffer_->memory();
       result_shm_offset_ = 0;
@@ -144,8 +147,9 @@ static unsigned int ComputePOTSize(unsigned int dimension) {
   // undefined behavior.
   return (dimension == 0)
              ? 0
-             : 1 << std::min(static_cast<int>(sizeof(dimension) * CHAR_BIT - 1),
-                             base::bits::Log2Ceiling(dimension));
+             : 1u << std::min(
+                   static_cast<int>(sizeof(dimension) * CHAR_BIT - 1),
+                   base::bits::Log2Ceiling(dimension));
 }
 
 void TransferBuffer::ReallocateRingBuffer(unsigned int size, bool shrink) {
@@ -153,7 +157,8 @@ void TransferBuffer::ReallocateRingBuffer(unsigned int size, bool shrink) {
   // pointer that hasn't been released.
   DCHECK(!shrink || !outstanding_result_pointer_);
   // What size buffer would we ask for if we needed a new one?
-  unsigned int needed_buffer_size = ComputePOTSize(size + result_size_);
+  unsigned int needed_buffer_size =
+      ComputePOTSize(base::ClampAdd(size, result_size_));
   DCHECK_EQ(needed_buffer_size % alignment_, 0u)
       << "Buffer size is not a multiple of alignment_";
   needed_buffer_size = std::max(needed_buffer_size, min_buffer_size_);
@@ -199,14 +204,16 @@ void TransferBuffer::ShrinkOrExpandRingBufferIfNecessary(
     return;
 
   unsigned int available_size = GetFreeSize();
-  high_water_mark_ =
-      std::max(high_water_mark_, last_allocated_size_ - available_size +
-                                     size_to_allocate +
-                                     GetPreviousRingBufferUsedBytes());
+  unsigned int new_high_water_mark = base::ClampAdd(
+      last_allocated_size_ - available_size,
+      base::ClampAdd(size_to_allocate, GetPreviousRingBufferUsedBytes()));
+  high_water_mark_ = std::min(max_buffer_size_,
+                              std::max(high_water_mark_, new_high_water_mark));
   if (size_to_allocate > available_size) {
     // Try to expand the ring buffer.
     ReallocateRingBuffer(high_water_mark_);
-  } else if (bytes_since_last_shrink_ > high_water_mark_ * kShrinkThreshold) {
+  } else if (bytes_since_last_shrink_ >
+             uint64_t{high_water_mark_} * kShrinkThreshold) {
     // The intent of the above check is to limit the frequency of buffer shrink
     // attempts. Unfortunately if an application uploads a large amount of data
     // once and from then on uploads only a small amount per frame, it will be a
@@ -216,38 +223,37 @@ void TransferBuffer::ShrinkOrExpandRingBufferIfNecessary(
     // instead, and consider shrinking at the end of each frame (for clients
     // that have a notion of frames).
     bytes_since_last_shrink_ = 0;
-    ReallocateRingBuffer(high_water_mark_ + high_water_mark_ / 4,
+    ReallocateRingBuffer(base::ClampAdd(high_water_mark_, high_water_mark_ / 4),
                          true /* shrink */);
-    high_water_mark_ = size_to_allocate + GetPreviousRingBufferUsedBytes();
+    high_water_mark_ = std::min<unsigned int>(
+        max_buffer_size_,
+        base::ClampAdd(size_to_allocate, GetPreviousRingBufferUsedBytes()));
   }
 }
 
-void* TransferBuffer::AllocUpTo(
-    unsigned int size, unsigned int* size_allocated) {
-  DCHECK(size_allocated);
-
+base::span<uint8_t> TransferBuffer::AllocUpTo(unsigned int size) {
   ShrinkOrExpandRingBufferIfNecessary(size);
 
   if (!HaveBuffer()) {
-    return nullptr;
+    return {};
   }
 
-  unsigned int max_size = ring_buffer_->GetLargestFreeOrPendingSize();
-  *size_allocated = std::min(max_size, size);
-  bytes_since_last_shrink_ += *size_allocated;
-  return ring_buffer_->Alloc(*size_allocated);
+  uint32_t max_size = ring_buffer_->GetLargestFreeOrPendingSize();
+  uint32_t size_allocated = std::min(max_size, size);
+  bytes_since_last_shrink_ += size_allocated;
+  return ring_buffer_->Alloc(size_allocated);
 }
 
-void* TransferBuffer::Alloc(unsigned int size) {
+base::span<uint8_t> TransferBuffer::Alloc(unsigned int size) {
   ShrinkOrExpandRingBufferIfNecessary(size);
 
   if (!HaveBuffer()) {
-    return nullptr;
+    return {};
   }
 
   unsigned int max_size = ring_buffer_->GetLargestFreeOrPendingSize();
   if (size > max_size) {
-    return nullptr;
+    return {};
   }
   bytes_since_last_shrink_ += size;
   return ring_buffer_->Alloc(size);
@@ -289,26 +295,22 @@ unsigned int TransferBuffer::GetCurrentMaxAllocationWithoutRealloc() const {
 ScopedTransferBufferPtr::ScopedTransferBufferPtr(
     ScopedTransferBufferPtr&& other)
     : buffer_(other.buffer_),
-      size_(other.size_),
       helper_(other.helper_),
       transfer_buffer_(other.transfer_buffer_) {
-  other.buffer_ = nullptr;
-  other.size_ = 0u;
+  other.buffer_ = {};
 }
 
 void ScopedTransferBufferPtr::Release() {
-  if (buffer_) {
-    transfer_buffer_->FreePendingToken(buffer_, helper_->InsertToken());
-    buffer_ = nullptr;
-    size_ = 0;
+  if (valid()) {
+    transfer_buffer_->FreePendingToken(buffer_.data(), helper_->InsertToken());
+    buffer_ = {};
   }
 }
 
 void ScopedTransferBufferPtr::Discard() {
-  if (buffer_) {
-    transfer_buffer_->DiscardBlock(buffer_);
-    buffer_ = nullptr;
-    size_ = 0;
+  if (valid()) {
+    transfer_buffer_->DiscardBlock(buffer_.data());
+    buffer_ = {};
   }
 }
 
@@ -319,21 +321,23 @@ void ScopedTransferBufferPtr::Reset(unsigned int new_size) {
   // will be valid. That has the side effect that we'll insert a token on free.
   // We could add code skip the token for a zero size buffer but it doesn't seem
   // worth the complication.
-  buffer_ = transfer_buffer_->AllocUpTo(new_size, &size_);
+  buffer_ = transfer_buffer_->AllocUpTo(new_size);
 }
 
 void ScopedTransferBufferPtr::Shrink(unsigned int new_size) {
-  if (!transfer_buffer_->HaveBuffer() || new_size >= size_)
+  if (!transfer_buffer_->HaveBuffer() || new_size >= buffer_.size()) {
     return;
+  }
   transfer_buffer_->ShrinkLastBlock(new_size);
-  size_ = new_size;
+  buffer_ = buffer_.first(new_size);
 }
 
-bool ScopedTransferBufferPtr::BelongsToBuffer(char* memory) const {
-  if (!buffer_)
+bool ScopedTransferBufferPtr::BelongsToBuffer(uint8_t* memory) const {
+  if (buffer_.empty()) {
     return false;
-  char* start = reinterpret_cast<char*>(buffer_);
-  char* end = start + size_;
+  }
+  const uint8_t* start = &buffer_.front();
+  const uint8_t* end = &buffer_.back();
   return memory >= start && memory <= end;
 }
 

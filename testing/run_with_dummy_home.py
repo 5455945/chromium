@@ -1,8 +1,7 @@
-#!/usr/bin/env python
-# Copyright 2018 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2018 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
 """Usage: run_with_dummy_home.py <command>
 
 Helper for running a test with a dummy $HOME, populated with just enough for
@@ -30,8 +29,13 @@ def _set_up_dummy_home(original_home, dummy_home):
 
   # Prevent fontconfig etc. from reconstructing the cache and symlink rr
   # trace directory.
-  for dirpath in [['.cache'], ['.local', 'share', 'rr'], ['.vpython'],
-                  ['.vpython_cipd_cache'], ['.vpython-root']]:
+  for dirpath in [
+    ['.cache'],
+    ['.local', 'share', 'rr'],
+    ['.vpython'],
+    ['.vpython_cipd_cache'],
+    ['.vpython-root'],
+  ]:
     original_path = os.path.join(original_home, *dirpath)
     if not os.path.exists(original_path):
       continue
@@ -44,7 +48,7 @@ def _set_up_dummy_home(original_home, dummy_home):
 def main():
   try:
     dummy_home = tempfile.mkdtemp()
-    print 'Creating dummy home in %s' % dummy_home
+    print('Creating dummy home in %s' % dummy_home)
 
     original_home = os.environ['HOME']
     os.environ['HOME'] = dummy_home

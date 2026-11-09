@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,7 @@
 #include <memory>
 #include <string>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/devtools/device/android_device_manager.h"
 #include "chrome/browser/devtools/device/tcp_device_provider.h"
@@ -24,6 +23,9 @@ class CastDeviceProvider
       public local_discovery::ServiceDiscoveryDeviceLister::Delegate {
  public:
   CastDeviceProvider();
+
+  CastDeviceProvider(const CastDeviceProvider&) = delete;
+  CastDeviceProvider& operator=(const CastDeviceProvider&) = delete;
 
   // DeviceProvider implementation:
   void QueryDevices(SerialsCallback callback) override;
@@ -41,9 +43,17 @@ class CastDeviceProvider
   void OnDeviceRemoved(const std::string& service_type,
                        const std::string& service_name) override;
   void OnDeviceCacheFlushed(const std::string& service_type) override;
+  void OnPermissionRejected() override;
+
+  void OnDeviceChangedWithPref(
+      const std::string& service_type,
+      bool added,
+      const local_discovery::ServiceDescription& service_description,
+      bool allow_all_ips);
 
  private:
   class DeviceListerDelegate;
+  friend class CastDeviceProviderTest;
 
   ~CastDeviceProvider() override;
 
@@ -58,8 +68,6 @@ class CastDeviceProvider
   std::map<std::string, std::string> service_hostname_map_;
 
   base::WeakPtrFactory<CastDeviceProvider> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(CastDeviceProvider);
 };
 
 #endif  // CHROME_BROWSER_DEVTOOLS_DEVICE_CAST_DEVICE_PROVIDER_H_

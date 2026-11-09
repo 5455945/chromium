@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,12 @@
 
 #include <utility>
 
+#include "base/containers/linear_find.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
+#include "chromecast/app/grit/shell_resources.h"
 #include "chromecast/base/cast_features.h"
 #include "chromecast/base/chromecast_switches.h"
 #include "chromecast/base/metrics/cast_metrics_helper.h"
@@ -19,18 +20,27 @@
 #include "chromecast/browser/lru_renderer_cache.h"
 #include "chromecast/browser/renderer_prelauncher.h"
 #include "chromecast/chromecast_buildflags.h"
+#include "chromecast/graphics/cast_screen.h"
+#include "components/input/native_web_keyboard_event.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/media_capture_devices.h"
 #include "content/public/browser/media_session.h"
+#include "content/public/browser/permission_controller.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/site_instance.h"
-#include "ipc/ipc_message.h"
+#include "mojo/public/cpp/bindings/callback_helpers.h"
 #include "net/base/net_errors.h"
-#include "third_party/blink/public/mojom/mediastream/media_stream.mojom-shared.h"
+#include "third_party/blink/public/common/input/web_input_event.h"
+#include "third_party/blink/public/common/permissions/permission_utils.h"
+#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+#include "third_party/blink/public/mojom/permissions/permission.mojom.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/keycodes/keyboard_codes.h"
 #include "url/gurl.h"
 
 #if defined(USE_AURA)
@@ -41,23 +51,41 @@ namespace chromecast {
 
 namespace {
 
+bool IsBackKey(int windows_key_code) {
+  // Check for special control flow navigation only keys, not keyboard keys
+  // like "back/backspace" (ui::VKEY_BACK).
+  return windows_key_code == ui::VKEY_BROWSER_BACK ||
+         windows_key_code == ui::VKEY_ESCAPE;
+}
+
+std::u16string GetBackPressedScript() {
+  if (!ui::ResourceBundle::HasSharedInstance()) {
+    return std::u16string();
+  }
+  return base::UTF8ToUTF16(
+      ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+          IDR_CAST_SHELL_BACK_PRESSED_JS));
+}
+
 std::unique_ptr<content::WebContents> CreateWebContents(
     content::BrowserContext* browser_context,
-    scoped_refptr<content::SiteInstance> site_instance) {
+    scoped_refptr<content::SiteInstance> site_instance,
+    const mojom::CastWebViewParams& params) {
   DCHECK(browser_context);
   content::WebContents::CreateParams create_params(browser_context, nullptr);
   create_params.site_instance = site_instance;
+
   return content::WebContents::Create(create_params);
 }
 
 std::unique_ptr<RendererPrelauncher> TakeOrCreatePrelauncher(
     const GURL& prelaunch_url,
-    CastWebView::RendererPool renderer_pool,
+    mojom::RendererPool renderer_pool,
     CastWebService* web_service) {
   if (!prelaunch_url.is_valid()) {
     return nullptr;
   }
-  if (renderer_pool == CastWebView::RendererPool::OVERLAY) {
+  if (renderer_pool == mojom::RendererPool::OVERLAY) {
     return web_service->overlay_renderer_cache()->TakeRendererPrelauncher(
         prelaunch_url);
   }
@@ -74,55 +102,57 @@ scoped_refptr<content::SiteInstance> Prelaunch(
   return prelauncher->site_instance();
 }
 
+#if defined(USE_AURA)
+constexpr gfx::Rect k720pDimensions(0, 0, 1280, 720);
+#endif
+
 }  // namespace
 
 CastWebViewDefault::CastWebViewDefault(
-    const CreateParams& params,
+    mojom::CastWebViewParamsPtr params,
     CastWebService* web_service,
     content::BrowserContext* browser_context,
     std::unique_ptr<CastContentWindow> cast_content_window)
-    : delegate_(params.delegate),
+    : params_(std::move(params)),
       web_service_(web_service),
-      shutdown_delay_(params.shutdown_delay),
-      renderer_pool_(params.renderer_pool),
-      prelaunch_url_(params.prelaunch_url),
-      activity_id_(params.activity_id),
-      session_id_(params.window_params.session_id),
-      sdk_version_(params.sdk_version),
-      allow_media_access_(params.allow_media_access),
-      log_js_console_messages_(params.log_js_console_messages),
-      log_prefix_(params.log_prefix),
-      renderer_prelauncher_(TakeOrCreatePrelauncher(prelaunch_url_,
-                                                    renderer_pool_,
+      renderer_prelauncher_(TakeOrCreatePrelauncher(params_->prelaunch_url,
+                                                    params_->renderer_pool,
                                                     web_service_)),
       site_instance_(Prelaunch(renderer_prelauncher_.get())),
-      web_contents_(CreateWebContents(browser_context, site_instance_)),
-      cast_web_contents_(web_contents_.get(), params.web_contents_params),
+      web_contents_(
+          CreateWebContents(browser_context, site_instance_, *params_)),
+      cast_web_contents_(web_contents_.get(), params_->Clone()),
       window_(cast_content_window
                   ? std::move(cast_content_window)
-                  : web_service->CreateWindow(params.window_params)) {
+                  : web_service->CreateWindow(params_->Clone())) {
   DCHECK(web_service_);
   DCHECK(window_);
+  content::RenderFrameHost::AllowInjectingJavaScript();
   window_->SetCastWebContents(&cast_web_contents_);
   web_contents_->SetDelegate(this);
 #if defined(USE_AURA)
-  web_contents_->GetNativeView()->SetName(params.activity_id);
-#endif
+  web_contents_->GetNativeView()->SetName(params_->activity_id);
+  if (params_->force_720p_resolution) {
+    const auto primary_display = display::Screen::Get()->GetPrimaryDisplay();
 
-#if BUILDFLAG(IS_ANDROID_APPLIANCE)
-  // Configure the ducking multiplier for AThings-like speakers. We don't want
-  // the Chromium MediaSession to duck since we are doing our own ducking.
-  constexpr double kDuckingMultiplier = 1.0;
-  content::MediaSession::Get(web_contents_.get())
-      ->SetDuckingVolumeMultiplier(kDuckingMultiplier);
+    // Force scale factor to 1.0 and screen bounds to 720p.
+    // When performed prior to the creation of the web view this causes blink to
+    // render at a 1.0 pixel ratio but the compositor still scales out at 1.5,
+    // increasing performance on 1080p displays (at the expense of visual
+    // quality).
+    shell::CastBrowserProcess::GetInstance()
+        ->cast_screen()
+        ->OverridePrimaryDisplaySettings(k720pDimensions, 1.0,
+                                         primary_display.rotation());
+  }
 #endif
 }
 
 CastWebViewDefault::~CastWebViewDefault() {
-  if (renderer_prelauncher_ && prelaunch_url_.is_valid() &&
-      renderer_pool_ == RendererPool::OVERLAY) {
+  if (renderer_prelauncher_ && params_->prelaunch_url.is_valid() &&
+      params_->renderer_pool == mojom::RendererPool::OVERLAY) {
     web_service_->overlay_renderer_cache()->ReleaseRendererPrelauncher(
-        prelaunch_url_);
+        params_->prelaunch_url);
   }
 }
 
@@ -139,7 +169,17 @@ CastWebContents* CastWebViewDefault::cast_web_contents() {
 }
 
 base::TimeDelta CastWebViewDefault::shutdown_delay() const {
-  return shutdown_delay_;
+  return params_->shutdown_delay;
+}
+
+void CastWebViewDefault::OwnerDestroyed() {
+#if defined(USE_AURA)
+  if (params_->force_720p_resolution) {
+    shell::CastBrowserProcess::GetInstance()
+        ->cast_screen()
+        ->RestorePrimaryDisplaySettings();
+  }
+#endif
 }
 
 void CastWebViewDefault::CloseContents(content::WebContents* source) {
@@ -152,7 +192,9 @@ void CastWebViewDefault::CloseContents(content::WebContents* source) {
 
 content::WebContents* CastWebViewDefault::OpenURLFromTab(
     content::WebContents* source,
-    const content::OpenURLParams& params) {
+    const content::OpenURLParams& params,
+    base::OnceCallback<void(content::NavigationHandle&)>
+        navigation_handle_callback) {
   LOG(INFO) << "Change url: " << params.url;
   // If source is NULL which means current tab, use web_contents_ of this class.
   if (!source)
@@ -160,8 +202,13 @@ content::WebContents* CastWebViewDefault::OpenURLFromTab(
   DCHECK_EQ(source, web_contents_.get());
   // We don't want to create another web_contents. Load url only when source is
   // specified.
-  source->GetController().LoadURL(params.url, params.referrer,
-                                  params.transition, params.extra_headers);
+  content::NavigationController::LoadURLParams load_params(params);
+  auto navigation_handle =
+      source->GetController().LoadURLWithParams(load_params);
+
+  if (navigation_handle_callback && navigation_handle) {
+    std::move(navigation_handle_callback).Run(*navigation_handle);
+  }
   return source;
 }
 
@@ -172,14 +219,28 @@ void CastWebViewDefault::ActivateContents(content::WebContents* contents) {
 
 bool CastWebViewDefault::CheckMediaAccessPermission(
     content::RenderFrameHost* render_frame_host,
-    const GURL& security_origin,
+    const url::Origin& security_origin,
     blink::mojom::MediaStreamType type) {
   if (!chromecast::IsFeatureEnabled(kAllowUserMediaAccess) &&
-      !allow_media_access_) {
+      !params_->allow_media_access) {
     LOG(WARNING) << __func__ << ": media access is disabled.";
     return false;
   }
-  return true;
+  if (!render_frame_host) {
+    return false;
+  }
+
+  auto permission_descriptor = blink::mojom::PermissionDescriptor::New();
+  permission_descriptor->name =
+      type == blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE
+          ? blink::mojom::PermissionName::AUDIO_CAPTURE
+          : blink::mojom::PermissionName::VIDEO_CAPTURE;
+
+  content::PermissionController* permission_controller =
+      web_contents_->GetBrowserContext()->GetPermissionController();
+  return permission_controller->GetPermissionStatusForCurrentDocument(
+             permission_descriptor, render_frame_host) ==
+         blink::mojom::PermissionStatus::GRANTED;
 }
 
 bool CastWebViewDefault::DidAddMessageToConsole(
@@ -188,27 +249,23 @@ bool CastWebViewDefault::DidAddMessageToConsole(
     const std::u16string& message,
     int32_t line_no,
     const std::u16string& source_id) {
-  if (!log_js_console_messages_)
+  if (!params_->log_js_console_messages)
     return true;
   std::u16string single_line_message;
   // Mult-line message is not friendly to dumpstate redact.
   base::ReplaceChars(message, u"\n", u"\\n ", &single_line_message);
-  logging::LogMessage("CONSOLE", line_no, ::logging::LOG_INFO).stream()
-      << log_prefix_ << ": \"" << single_line_message
+  logging::LogMessage("CONSOLE", line_no, ::logging::LOGGING_INFO).stream()
+      << params_->log_prefix << ": \"" << single_line_message
       << "\", source: " << source_id << " (" << line_no << ")";
   return true;
 }
 
 const blink::MediaStreamDevice* GetRequestedDeviceOrDefault(
     const blink::MediaStreamDevices& devices,
-    const std::string& requested_device_id) {
-  if (!requested_device_id.empty()) {
-    auto it = std::find_if(
-        devices.begin(), devices.end(),
-        [requested_device_id](const blink::MediaStreamDevice& device) {
-          return device.id == requested_device_id;
-        });
-    return it != devices.end() ? &(*it) : nullptr;
+    const std::vector<std::string>& requested_device_ids) {
+  if (!requested_device_ids.empty() && !requested_device_ids.front().empty()) {
+    return base::LinearFind(devices, requested_device_ids.front(),
+                            &blink::MediaStreamDevice::id);
   }
 
   if (!devices.empty())
@@ -221,11 +278,24 @@ void CastWebViewDefault::RequestMediaAccessPermission(
     content::WebContents* web_contents,
     const content::MediaStreamRequest& request,
     content::MediaResponseCallback callback) {
-  if (!chromecast::IsFeatureEnabled(kAllowUserMediaAccess) &&
-      !allow_media_access_) {
-    LOG(WARNING) << __func__ << ": media access is disabled.";
+  content::RenderFrameHost* rfh = content::RenderFrameHost::FromID(
+      request.render_process_id, request.render_frame_id);
+  bool audio_allowed =
+      request.audio_type ==
+          blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE &&
+      CheckMediaAccessPermission(rfh,
+                                 url::Origin::Create(request.security_origin),
+                                 request.audio_type);
+  bool video_allowed =
+      request.video_type ==
+          blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE &&
+      CheckMediaAccessPermission(rfh,
+                                 url::Origin::Create(request.security_origin),
+                                 request.video_type);
+  if (!audio_allowed && !video_allowed) {
+    LOG(WARNING) << __func__ << ": media access is denied.";
     std::move(callback).Run(
-        blink::MediaStreamDevices(),
+        blink::mojom::StreamDevicesSet(),
         blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
         std::unique_ptr<content::MediaStreamUI>());
     return;
@@ -238,30 +308,32 @@ void CastWebViewDefault::RequestMediaAccessPermission(
   DVLOG(2) << __func__ << " audio_devices=" << audio_devices.size()
            << " video_devices=" << video_devices.size();
 
-  blink::MediaStreamDevices devices;
-  if (request.audio_type ==
-      blink::mojom::MediaStreamType::DEVICE_AUDIO_CAPTURE) {
+  blink::mojom::StreamDevicesSet stream_devices_set;
+  stream_devices_set.stream_devices.emplace_back(
+      blink::mojom::StreamDevices::New());
+  blink::mojom::StreamDevices& devices = *stream_devices_set.stream_devices[0];
+  if (audio_allowed) {
     const blink::MediaStreamDevice* device = GetRequestedDeviceOrDefault(
-        audio_devices, request.requested_audio_device_id);
+        audio_devices, request.requested_audio_device_ids);
     if (device) {
       DVLOG(1) << __func__ << "Using audio device: id=" << device->id
                << " name=" << device->name;
-      devices.push_back(*device);
+      devices.audio_device = *device;
     }
   }
 
-  if (request.video_type ==
-      blink::mojom::MediaStreamType::DEVICE_VIDEO_CAPTURE) {
+  if (video_allowed) {
     const blink::MediaStreamDevice* device = GetRequestedDeviceOrDefault(
-        video_devices, request.requested_video_device_id);
+        video_devices, request.requested_video_device_ids);
     if (device) {
       DVLOG(1) << __func__ << "Using video device: id=" << device->id
                << " name=" << device->name;
-      devices.push_back(*device);
+      devices.video_device = *device;
     }
   }
 
-  std::move(callback).Run(devices, blink::mojom::MediaStreamRequestResult::OK,
+  std::move(callback).Run(stream_devices_set,
+                          blink::mojom::MediaStreamRequestResult::OK,
                           std::unique_ptr<content::MediaStreamUI>());
 }
 
@@ -271,9 +343,102 @@ bool CastWebViewDefault::ShouldAllowRunningInsecureContent(
     const url::Origin& /* origin */,
     const GURL& /* resource_url */) {
   metrics::CastMetricsHelper::GetInstance()->RecordApplicationEvent(
-      activity_id_, session_id_, sdk_version_,
+      params_->activity_id, params_->session_id, params_->sdk_version,
       "Cast.Platform.AppRunningInsecureContent");
   return allowed_per_prefs;
+}
+
+content::KeyboardEventProcessingResult
+CastWebViewDefault::PreHandleKeyboardEvent(
+    content::WebContents* source,
+    const input::NativeWebKeyboardEvent& event) {
+  // |window_| is reset once the page is closing; see CloseContents().
+  if (!window_ || window_->HandlesBackPress() ||
+      !IsBackKey(event.windows_key_code)) {
+    return content::KeyboardEventProcessingResult::NOT_HANDLED;
+  }
+
+  if (event.GetType() != blink::WebInputEvent::Type::kRawKeyDown &&
+      event.GetType() != blink::WebInputEvent::Type::kKeyDown) {
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+
+  if ((event.GetModifiers() & blink::WebInputEvent::kIsAutoRepeat) != 0 ||
+      back_press_in_flight_) {
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+
+  content::RenderFrameHost* rfh =
+      source ? source->GetPrimaryMainFrame()
+             : (web_contents_ ? web_contents_->GetPrimaryMainFrame() : nullptr);
+  if (!rfh || !rfh->IsRenderFrameLive() ||
+      rfh->GetLastCommittedURL().is_empty()) {
+    CloseForUnhandledBackPress();
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+
+  std::u16string script = GetBackPressedScript();
+  if (script.empty()) {
+    CloseForUnhandledBackPress();
+    return content::KeyboardEventProcessingResult::HANDLED;
+  }
+
+  back_press_in_flight_ = true;
+  const uint64_t sequence_id = ++back_press_sequence_id_;
+  const content::GlobalRenderFrameHostId rfh_id = rfh->GetGlobalId();
+  back_press_timeout_timer_.Start(
+      FROM_HERE, base::Milliseconds(500),
+      base::BindOnce(&CastWebViewDefault::OnBackPressedTimeout,
+                     weak_factory_.GetWeakPtr(), sequence_id, rfh_id));
+  rfh->ExecuteJavaScript(
+      script,
+      mojo::WrapCallbackWithDefaultInvokeIfNotRun(
+          base::BindOnce(&CastWebViewDefault::OnBackPressedResult,
+                         weak_factory_.GetWeakPtr(), sequence_id, rfh_id),
+          base::Value(false)));
+  return content::KeyboardEventProcessingResult::HANDLED;
+}
+
+void CastWebViewDefault::OnBackPressedResult(
+    uint64_t sequence_id,
+    content::GlobalRenderFrameHostId rfh_id,
+    base::Value result) {
+  if (!back_press_in_flight_ || sequence_id != back_press_sequence_id_) {
+    return;
+  }
+  back_press_in_flight_ = false;
+  back_press_timeout_timer_.Stop();
+  if (result.is_bool() && result.GetBool()) {
+    return;
+  }
+  if (web_contents_ && web_contents_->GetPrimaryMainFrame() &&
+      web_contents_->GetPrimaryMainFrame()->GetGlobalId() != rfh_id &&
+      web_contents_->GetPrimaryMainFrame()->IsRenderFrameLive()) {
+    return;
+  }
+  CloseForUnhandledBackPress();
+}
+
+void CastWebViewDefault::OnBackPressedTimeout(
+    uint64_t sequence_id,
+    content::GlobalRenderFrameHostId rfh_id) {
+  if (!back_press_in_flight_ || sequence_id != back_press_sequence_id_) {
+    return;
+  }
+  back_press_in_flight_ = false;
+  if (web_contents_ && web_contents_->GetPrimaryMainFrame() &&
+      web_contents_->GetPrimaryMainFrame()->GetGlobalId() != rfh_id &&
+      web_contents_->GetPrimaryMainFrame()->IsRenderFrameLive()) {
+    return;
+  }
+  CloseForUnhandledBackPress();
+}
+
+void CastWebViewDefault::CloseForUnhandledBackPress() {
+  if (!web_contents_ || !window_) {
+    return;
+  }
+  CloseContents(web_contents_.get());
 }
 
 }  // namespace chromecast

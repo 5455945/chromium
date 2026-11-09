@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,29 +10,21 @@
 namespace blink {
 
 template <typename T, typename V8TypedArray, bool clamped>
-v8::MaybeLocal<v8::Value> DOMTypedArray<T, V8TypedArray, clamped>::Wrap(
+v8::Local<v8::Value> DOMTypedArray<T, V8TypedArray, clamped>::Wrap(
     ScriptState* script_state) {
-  DCHECK(!DOMDataStore::ContainsWrapper(this, script_state->GetIsolate()));
+  DCHECK(!DOMDataStore::ContainsWrapper(script_state->GetIsolate(), this));
 
   const WrapperTypeInfo* wrapper_type_info = GetWrapperTypeInfo();
   DOMArrayBufferBase* buffer = BufferBase();
-  v8::Local<v8::Value> v8_buffer;
-  if (!ToV8Traits<DOMArrayBufferBase>::ToV8(script_state, buffer)
-           .ToLocal(&v8_buffer)) {
-    return v8::MaybeLocal<v8::Value>();
-  }
+  v8::Local<v8::Value> v8_buffer =
+      ToV8Traits<DOMArrayBufferBase>::ToV8(script_state, buffer);
   DCHECK_EQ(IsShared(), v8_buffer->IsSharedArrayBuffer());
 
   v8::Local<v8::Object> wrapper;
   {
     v8::Context::Scope context_scope(script_state->GetContext());
-    if (IsShared()) {
-      wrapper = V8TypedArray::New(v8_buffer.As<v8::SharedArrayBuffer>(),
-                                  byteOffset(), length());
-    } else {
-      wrapper = V8TypedArray::New(v8_buffer.As<v8::ArrayBuffer>(), byteOffset(),
-                                  length());
-    }
+    wrapper = V8TypedArray::New(v8_buffer.As<v8::ArrayBufferBase>(),
+                                byteOffset(), length());
   }
 
   return AssociateWithWrapper(script_state->GetIsolate(), wrapper_type_info,
@@ -47,6 +39,7 @@ v8::MaybeLocal<v8::Value> DOMTypedArray<T, V8TypedArray, clamped>::Wrap(
   V(uint8_t, Uint8Clamped, true)           \
   V(uint16_t, Uint16, false)               \
   V(uint32_t, Uint32, false)               \
+  V(uint16_t, Float16, false)              \
   V(float, Float32, false)                 \
   V(double, Float64, false)                \
   V(int64_t, BigInt64, false)              \
@@ -56,15 +49,18 @@ v8::MaybeLocal<v8::Value> DOMTypedArray<T, V8TypedArray, clamped>::Wrap(
   template <>                                                                  \
   const WrapperTypeInfo                                                        \
       DOMTypedArray<val_t, v8::Type##Array, clamped>::wrapper_type_info_body_{ \
-          gin::kEmbedderBlink,                                                 \
+          {gin::kEmbedderBlink},                                               \
           nullptr,                                                             \
           nullptr,                                                             \
           #Type "Array",                                                       \
           nullptr,                                                             \
+          static_cast<v8::CppHeapPointerTag>(                                  \
+              CppHeapPointerTag::kDOM##Type##ArrayTag),                        \
+          static_cast<v8::CppHeapPointerTag>(                                  \
+              CppHeapPointerTag::kDOM##Type##ArrayTag),                        \
           WrapperTypeInfo::kWrapperTypeObjectPrototype,                        \
           WrapperTypeInfo::kObjectClassId,                                     \
-          WrapperTypeInfo::kNotInheritFromActiveScriptWrappable,               \
-          WrapperTypeInfo::kIdlBufferSourceType,                               \
+          WrapperTypeInfo::kIdlOtherType,                                      \
       };                                                                       \
   template <>                                                                  \
   const WrapperTypeInfo& DOMTypedArray<val_t, v8::Type##Array,                 \

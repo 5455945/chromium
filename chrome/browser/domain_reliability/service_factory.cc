@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,7 +6,6 @@
 
 #include "base/command_line.h"
 #include "base/metrics/field_trial.h"
-#include "chrome/browser/metrics/chrome_metrics_service_accessor.h"
 #include "chrome/common/chrome_switches.h"
 
 namespace domain_reliability {
@@ -22,18 +21,20 @@ const char kFieldTrialValueEnable[] = "enable";
 
 }  // namespace
 
-// Identifies Chrome as the source of Domain Reliability uploads it sends.
-const char DomainReliabilityServiceFactory::kUploadReporterString[] = "chrome";
+const char kUploadReporterString[] = "chrome";
 
-// static
-bool DomainReliabilityServiceFactory::ShouldCreateService() {
+bool ShouldCreateService(const DomainReliabilityServiceDelegate* delegate) {
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
   if (command_line->HasSwitch(switches::kDisableDomainReliability))
     return false;
   if (command_line->HasSwitch(switches::kEnableDomainReliability))
     return true;
-  if (!ChromeMetricsServiceAccessor::IsMetricsAndCrashReportingEnabled())
+  if (!delegate->IsDomainReliabilityAllowed()) {
     return false;
+  }
+  if (!delegate->IsMetricsAndCrashReportingEnabled()) {
+    return false;
+  }
   if (base::FieldTrialList::TrialExists(kFieldTrialName)) {
     std::string value = base::FieldTrialList::FindFullName(kFieldTrialName);
     return (value == kFieldTrialValueEnable);

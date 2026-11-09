@@ -25,7 +25,10 @@
 #define THIRD_PARTY_BLINK_RENDERER_CORE_STYLE_STYLE_GENERATED_IMAGE_H_
 
 #include "third_party/blink/renderer/core/core_export.h"
+#include "third_party/blink/renderer/core/css/css_to_length_conversion_data.h"
 #include "third_party/blink/renderer/core/style/style_image.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/wtf/casting.h"
 
 namespace blink {
@@ -39,40 +42,55 @@ class ImageResourceObserver;
 // function. Use only for images that have no intrinsic dimensions.
 class CORE_EXPORT StyleGeneratedImage final : public StyleImage {
  public:
-  explicit StyleGeneratedImage(const CSSImageGeneratorValue&);
+  using ContainerSizes = CSSToLengthConversionData::ContainerSizes;
+  using ViewportSize = CSSToLengthConversionData::ViewportSize;
+
+  StyleGeneratedImage(const CSSImageGeneratorValue&,
+                      const ContainerSizes&,
+                      const ViewportSize&);
 
   WrappedImagePtr Data() const override { return image_generator_value_.Get(); }
 
   CSSValue* CssValue() const override;
   CSSValue* ComputedCSSValue(const ComputedStyle&,
-                             bool allow_visited_style) const override;
+                             bool allow_visited_style,
+                             CSSValuePhase value_phase) const override;
 
-  bool IsAccessAllowed(String&) const override { return true; }
+  bool IsCorsSameOrigin() const override;
 
-  FloatSize ImageSize(float multiplier,
-                      const FloatSize& default_object_size,
-                      RespectImageOrientationEnum) const override;
+  NaturalSizingInfo GetNaturalSizingInfo(
+      float multiplier,
+      RespectImageOrientationEnum) const override;
+  gfx::SizeF ImageSize(float multiplier,
+                       const gfx::SizeF& default_object_size,
+                       RespectImageOrientationEnum) const override;
   bool HasIntrinsicSize() const override { return false; }
   void AddClient(ImageResourceObserver*) override;
   void RemoveClient(ImageResourceObserver*) override;
   // The |target_size| is the desired image size
   scoped_refptr<Image> GetImage(const ImageResourceObserver&,
-                                const Document&,
+                                const Node&,
                                 const ComputedStyle&,
-                                const FloatSize& target_size) const override;
+                                const gfx::SizeF& target_size) const override;
   bool KnownToBeOpaque(const Document&, const ComputedStyle&) const override;
 
   bool IsUsingCustomProperty(const AtomicString& custom_property_name,
                              const Document&) const;
+  bool IsUsingCurrentColor() const;
+
+  bool DependsOnCurrentColor() const override { return IsUsingCurrentColor(); }
 
   void Trace(Visitor*) const override;
 
  private:
   bool IsEqual(const StyleImage&) const override;
 
-  // TODO(sashab): Replace this with <const CSSImageGeneratorValue> once
-  // Member<> supports const types.
   Member<CSSImageGeneratorValue> image_generator_value_;
+  ContainerSizes container_sizes_;
+  // Snapshot of the viewport size taken when this image was created, for
+  // gradients that resolve viewport units. Default-constructed for images that
+  // do not, so that they keep comparing equal across viewport changes.
+  ViewportSize viewport_size_;
 };
 
 template <>

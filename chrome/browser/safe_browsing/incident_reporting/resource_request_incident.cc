@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,13 +13,12 @@ namespace safe_browsing {
 ResourceRequestIncident::ResourceRequestIncident(
     std::unique_ptr<ClientIncidentReport_IncidentData_ResourceRequestIncident>
         script_request_incident) {
-  DCHECK(script_request_incident);
-  DCHECK(script_request_incident->has_digest());
+  CHECK(script_request_incident, base::NotFatalUntil::M162);
+  CHECK(script_request_incident->has_digest(), base::NotFatalUntil::M162);
   payload()->set_allocated_resource_request(script_request_incident.release());
 }
 
-ResourceRequestIncident::~ResourceRequestIncident() {
-}
+ResourceRequestIncident::~ResourceRequestIncident() = default;
 
 IncidentType ResourceRequestIncident::GetType() const {
   return IncidentType::RESOURCE_REQUEST;

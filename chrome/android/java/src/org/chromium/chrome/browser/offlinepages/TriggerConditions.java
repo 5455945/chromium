@@ -1,10 +1,13 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.offlinepages;
 
+import org.chromium.build.annotations.NullMarked;
+
 /** Set of system conditions to trigger background processing. */
+@NullMarked
 public class TriggerConditions {
     private final boolean mRequirePowerConnected;
     private final int mMinimumBatteryPercentage;
@@ -16,7 +19,9 @@ public class TriggerConditions {
      * @param minimumBatteryPercentage minimum percentage (0-100) of remaining battery power
      * @param requireUnmeteredNetwork whether to require connection to unmetered network
      */
-    public TriggerConditions(boolean requirePowerConnected, int minimumBatteryPercentage,
+    public TriggerConditions(
+            boolean requirePowerConnected,
+            int minimumBatteryPercentage,
             boolean requireUnmeteredNetwork) {
         mRequirePowerConnected = requirePowerConnected;
         mMinimumBatteryPercentage = minimumBatteryPercentage;
@@ -49,8 +54,7 @@ public class TriggerConditions {
 
     @Override
     public boolean equals(Object other) {
-        if (!(other instanceof TriggerConditions)) return false;
-        TriggerConditions otherTriggerConditions = (TriggerConditions) other;
+        if (!(other instanceof TriggerConditions otherTriggerConditions)) return false;
         return mRequirePowerConnected == otherTriggerConditions.mRequirePowerConnected
                 && mMinimumBatteryPercentage == otherTriggerConditions.mMinimumBatteryPercentage
                 && mRequireUnmeteredNetwork == otherTriggerConditions.mRequireUnmeteredNetwork;

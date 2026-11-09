@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,13 +11,13 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/observer_list.h"
 #include "extensions/common/mojom/host_id.mojom-forward.h"
 #include "extensions/common/mojom/run_location.mojom-shared.h"
 #include "extensions/common/user_script.h"
 #include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/web/extension_script_streamer.h"
 
 class GURL;
 
@@ -44,21 +44,36 @@ class UserScriptSet {
   };
 
   explicit UserScriptSet(mojom::HostID host_id);
+
+  UserScriptSet(const UserScriptSet&) = delete;
+  UserScriptSet& operator=(const UserScriptSet&) = delete;
+
   ~UserScriptSet();
 
   // Adds or removes observers.
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
-  // Append any ScriptInjections that should run on the given |render_frame| and
-  // |tab_id|, at the given |run_location|, to |injections|.
-  // |extensions| is passed in to verify the corresponding extension is still
+  // Append any ScriptInjections that should run on the given `render_frame` and
+  // `tab_id`, at the given `run_location`, to `injections`.
+  // `extensions` is passed in to verify the corresponding extension is still
   // valid.
   void GetInjections(std::vector<std::unique_ptr<ScriptInjection>>* injections,
                      content::RenderFrame* render_frame,
                      int tab_id,
                      mojom::RunLocation run_location,
                      bool log_activity);
+
+  // Creates `ExtensionScriptStreamer`s and insert them into `script_streamers`
+  // for any scripts that should be injected at document start and qualify for
+  // being compiled in the background.
+  void InsertStreamersForInjectionsAtDocumentStart(
+      const GURL& document_url,
+      blink::WebLocalFrame* web_frame,
+      std::map<GURL, std::optional<blink::ExtensionScriptStreamer>>&
+          script_streamers,
+      uint64_t& streamed_scripts_count,
+      uint64_t& injected_scripts_count) const;
 
   std::unique_ptr<ScriptInjection> GetDeclarativeScriptInjection(
       const std::string& script_id,
@@ -79,13 +94,13 @@ class UserScriptSet {
 
   // Returns the contents of a script file.
   // Note that copying is cheap as this uses WebString.
-  blink::WebString GetJsSource(const UserScript::File& file,
+  blink::WebString GetJsSource(const UserScript::Content& file,
                                bool emulate_greasemonkey);
-  blink::WebString GetCssSource(const UserScript::File& file);
+  blink::WebString GetCssSource(const UserScript::Content& file);
 
  private:
-  // Returns a new ScriptInjection for the given |script| to execute in the
-  // |render_frame|, or NULL if the script should not execute.
+  // Returns a new ScriptInjection for the given `script` to execute in the
+  // `render_frame`, or NULL if the script should not execute.
   std::unique_ptr<ScriptInjection> GetInjectionForScript(
       const UserScript* script,
       content::RenderFrame* render_frame,
@@ -104,13 +119,11 @@ class UserScriptSet {
   // Map of user script file url -> source.
   std::map<GURL, blink::WebString> script_sources_;
 
-  // The HostID which |scripts_| is associated with.
+  // The HostID which `scripts_` is associated with.
   mojom::HostID host_id_;
 
   // The associated observers.
   base::ObserverList<Observer>::Unchecked observers_;
-
-  DISALLOW_COPY_AND_ASSIGN(UserScriptSet);
 };
 
 }  // namespace extensions

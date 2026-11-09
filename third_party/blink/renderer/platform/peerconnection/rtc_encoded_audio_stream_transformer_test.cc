@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,20 +7,20 @@
 #include <stdint.h>
 
 #include <memory>
-#include <vector>
 
+#include "base/location.h"
 #include "base/memory/scoped_refptr.h"
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/task/thread_pool.h"
 #include "base/test/task_environment.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/blink/public/platform/scheduler/test/renderer_scheduler_test_support.h"
-#include "third_party/blink/renderer/platform/peerconnection/rtc_scoped_refptr_cross_thread_copier.h"
 #include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
 #include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 #include "third_party/blink/renderer/platform/wtf/functional.h"
 #include "third_party/webrtc/api/frame_transformer_interface.h"
+#include "third_party/webrtc/api/scoped_refptr.h"
 #include "third_party/webrtc/rtc_base/ref_counted_object.h"
 
 namespace blink {
@@ -32,12 +32,14 @@ class MockWebRtcTransformedFrameCallback
  public:
   MOCK_METHOD1(OnTransformedFrame,
                void(std::unique_ptr<webrtc::TransformableFrameInterface>));
+  MOCK_METHOD0(StartShortCircuiting, void());
+  MOCK_METHOD0(StopShortCircuiting, void());
 };
 
 class MockTransformerCallbackHolder {
  public:
   MOCK_METHOD1(OnEncodedFrame,
-               void(std::unique_ptr<webrtc::TransformableFrameInterface>));
+               void(std::unique_ptr<webrtc::TransformableAudioFrameInterface>));
 };
 
 }  // namespace
@@ -49,7 +51,7 @@ class RTCEncodedAudioStreamTransformerTest : public ::testing::Test {
             blink::scheduler::GetSingleThreadTaskRunnerForTesting()),
         webrtc_task_runner_(base::ThreadPool::CreateSingleThreadTaskRunner({})),
         webrtc_callback_(
-            new rtc::RefCountedObject<MockWebRtcTransformedFrameCallback>()),
+            new webrtc::RefCountedObject<MockWebRtcTransformedFrameCallback>()),
         encoded_audio_stream_transformer_(main_task_runner_) {}
 
   void SetUp() override {
@@ -71,7 +73,7 @@ class RTCEncodedAudioStreamTransformerTest : public ::testing::Test {
   base::test::TaskEnvironment task_environment_;
   scoped_refptr<base::SingleThreadTaskRunner> main_task_runner_;
   scoped_refptr<base::SingleThreadTaskRunner> webrtc_task_runner_;
-  rtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_;
+  webrtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_;
   MockTransformerCallbackHolder mock_transformer_callback_holder_;
   RTCEncodedAudioStreamTransformer encoded_audio_stream_transformer_;
 };
@@ -80,8 +82,9 @@ TEST_F(RTCEncodedAudioStreamTransformerTest,
        TransformerForwardsFrameToTransformerCallback) {
   EXPECT_FALSE(encoded_audio_stream_transformer_.HasTransformerCallback());
   encoded_audio_stream_transformer_.SetTransformerCallback(
-      WTF::BindRepeating(&MockTransformerCallbackHolder::OnEncodedFrame,
-                         WTF::Unretained(&mock_transformer_callback_holder_)));
+      CrossThreadBindRepeating(
+          &MockTransformerCallbackHolder::OnEncodedFrame,
+          CrossThreadUnretained(&mock_transformer_callback_holder_)));
   EXPECT_TRUE(encoded_audio_stream_transformer_.HasTransformerCallback());
 
   EXPECT_CALL(mock_transformer_callback_holder_, OnEncodedFrame);
@@ -101,6 +104,46 @@ TEST_F(RTCEncodedAudioStreamTransformerTest, TransformerForwardsFrameToWebRTC) {
   EXPECT_CALL(*webrtc_callback_, OnTransformedFrame);
   encoded_audio_stream_transformer_.SendFrameToSink(nullptr);
   task_environment_.RunUntilIdle();
+}
+
+TEST_F(RTCEncodedAudioStreamTransformerTest, ShortCircuitingPropagated) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_audio_stream_transformer_.StartShortCircuiting();
+  task_environment_.RunUntilIdle();
+}
+
+TEST_F(RTCEncodedAudioStreamTransformerTest,
+       ShortCircuitingSetOnLateRegisteredCallback) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_audio_stream_transformer_.StartShortCircuiting();
+
+  webrtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_2(
+      new webrtc::RefCountedObject<MockWebRtcTransformedFrameCallback>());
+  EXPECT_CALL(*webrtc_callback_2, StartShortCircuiting);
+  encoded_audio_stream_transformer_.RegisterTransformedFrameCallback(
+      webrtc_callback_2);
+}
+
+TEST_F(RTCEncodedAudioStreamTransformerTest, StopShortCircuitingPropagated) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  encoded_audio_stream_transformer_.StartShortCircuiting();
+
+  EXPECT_CALL(*webrtc_callback_, StopShortCircuiting);
+  encoded_audio_stream_transformer_.StopShortCircuiting();
+}
+
+TEST_F(RTCEncodedAudioStreamTransformerTest,
+       ShortCircuitingNotSetOnLateRegisteredCallbackAfterStop) {
+  EXPECT_CALL(*webrtc_callback_, StartShortCircuiting);
+  EXPECT_CALL(*webrtc_callback_, StopShortCircuiting);
+  encoded_audio_stream_transformer_.StartShortCircuiting();
+  encoded_audio_stream_transformer_.StopShortCircuiting();
+
+  webrtc::scoped_refptr<MockWebRtcTransformedFrameCallback> webrtc_callback_2(
+      new webrtc::RefCountedObject<MockWebRtcTransformedFrameCallback>());
+  EXPECT_CALL(*webrtc_callback_2, StartShortCircuiting).Times(0);
+  encoded_audio_stream_transformer_.RegisterTransformedFrameCallback(
+      webrtc_callback_2);
 }
 
 }  // namespace blink

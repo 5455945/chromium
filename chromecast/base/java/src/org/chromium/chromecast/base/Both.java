@@ -1,15 +1,18 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chromecast.base;
 
-import android.annotation.SuppressLint;
-
-import org.chromium.base.Consumer;
-import org.chromium.base.Function;
+import androidx.annotation.NonNull;
 
 import java.util.Objects;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.BiPredicate;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Predicate;
 
 /**
  * Represents a structure containing an instance of both A and B.
@@ -45,11 +48,7 @@ public class Both<A, B> {
 
     @Override
     public String toString() {
-        return new StringBuilder()
-                .append(this.first.toString())
-                .append(", ")
-                .append(this.second.toString())
-                .toString();
+        return this.first + ", " + this.second;
     }
 
     @Override
@@ -61,26 +60,19 @@ public class Both<A, B> {
         return false;
     }
 
-    @SuppressLint("NewApi")
     @Override
     public int hashCode() {
         return Objects.hash(this.first, this.second);
     }
 
-    /**
-     * Constructs a Both object containing both `a` and `b`.
-     */
-    public static <A, B> Both<A, B> both(A a, B b) {
-        assert a != null;
-        assert b != null;
+    /** Constructs a Both object containing both `a` and `b`. */
+    public static <A, B> Both<A, B> of(@NonNull A a, @NonNull B b) {
         return new Both<>(a, b);
     }
 
-    /**
-     * Turns a function of two arguments into a function of a single Both argument.
-     */
-    public static <A, B, R> Function<Both<A, B>, R> adapt(
-            BiFunction<? super A, ? super B, ? extends R> function) {
+    /** Turns a function of two arguments into a function of a single Both argument. */
+    public static <A, B, C> Function<Both<A, B>, C> adapt(
+            BiFunction<? super A, ? super B, ? extends C> function) {
         return (Both<A, B> data) -> function.apply(data.first, data.second);
     }
 

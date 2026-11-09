@@ -1,17 +1,20 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/password_manager/core/browser/credential_manager_password_form_manager.h"
 
 #include <memory>
+#include <vector>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/test/task_environment.h"
+#include "components/affiliations/core/browser/match_type.h"
 #include "components/password_manager/core/browser/fake_form_fetcher.h"
 #include "components/password_manager/core/browser/password_form.h"
+#include "components/password_manager/core/browser/password_string.h"
 #include "components/password_manager/core/browser/stub_form_saver.h"
 #include "components/password_manager/core/browser/stub_password_manager_client.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -19,7 +22,6 @@
 
 using base::ASCIIToUTF16;
 using testing::_;
-using testing::Invoke;
 
 namespace password_manager {
 
@@ -33,31 +35,37 @@ class MockDelegate : public CredentialManagerPasswordFormManagerDelegate {
 class MockFormSaver : public StubFormSaver {
  public:
   MockFormSaver() = default;
+  MockFormSaver(const MockFormSaver&) = delete;
+  MockFormSaver& operator=(const MockFormSaver&) = delete;
   ~MockFormSaver() override = default;
 
   // FormSaver:
-  MOCK_METHOD3(Save,
-               void(PasswordForm pending,
-                    const std::vector<const PasswordForm*>& matches,
-                    const std::u16string& old_password));
-  MOCK_METHOD3(Update,
-               void(PasswordForm pending,
-                    const std::vector<const PasswordForm*>& matches,
-                    const std::u16string& old_password));
+  MOCK_METHOD3(
+      Save,
+      void(PasswordForm pending,
+           const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
+               matches,
+           const std::u16string& old_password));
+  MOCK_METHOD3(
+      Update,
+      void(PasswordForm pending,
+           const std::vector<raw_ptr<const PasswordForm, VectorExperimental>>&
+               matches,
+           const std::u16string& old_password));
+  MOCK_METHOD1(UpdateWithoutPostProcessing, void(PasswordForm pending));
 
   // Convenience downcasting method.
   static MockFormSaver& Get(PasswordFormManager* form_manager) {
-    return *static_cast<MockFormSaver*>(form_manager->form_saver());
+    return *static_cast<MockFormSaver*>(
+        form_manager->profile_store_form_saver());
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(MockFormSaver);
 };
 
 MATCHER_P(FormMatches, form, "") {
   return form.signon_realm == arg.signon_realm && form.url == arg.url &&
          form.username_value == arg.username_value &&
-         form.password_value == arg.password_value &&
+         form.password_value.secure_value() ==
+             arg.password_value.secure_value() &&
          form.scheme == arg.scheme && form.type == arg.type;
 }
 
@@ -69,10 +77,15 @@ class CredentialManagerPasswordFormManagerTest : public testing::Test {
     form_to_save_.url = GURL("https://example.com/path");
     form_to_save_.signon_realm = "https://example.com/";
     form_to_save_.username_value = u"user1";
-    form_to_save_.password_value = u"pass1";
+    form_to_save_.password_value = PasswordString(u"pass1");
     form_to_save_.scheme = PasswordForm::Scheme::kHtml;
     form_to_save_.type = PasswordForm::Type::kApi;
+    form_to_save_.in_store = PasswordForm::Store::kProfileStore;
   }
+  CredentialManagerPasswordFormManagerTest(
+      const CredentialManagerPasswordFormManagerTest&) = delete;
+  CredentialManagerPasswordFormManagerTest& operator=(
+      const CredentialManagerPasswordFormManagerTest&) = delete;
 
  protected:
   std::unique_ptr<CredentialManagerPasswordFormManager> CreateFormManager(
@@ -86,9 +99,10 @@ class CredentialManagerPasswordFormManagerTest : public testing::Test {
 
   void SetNonFederatedAndNotifyFetchCompleted(
       FormFetcher* fetcher,
-      const std::vector<const PasswordForm*>& non_federated) {
+      const std::vector<PasswordForm>& non_federated) {
     auto* fake_fetcher = static_cast<FakeFormFetcher*>(fetcher);
     fake_fetcher->SetNonFederated(non_federated);
+    fake_fetcher->SetBestMatches(non_federated);
     fake_fetcher->NotifyFetchCompleted();
     // It is required because of PostTask in
     // CredentialManagerPasswordFormManager::OnFetchCompleted
@@ -101,8 +115,6 @@ class CredentialManagerPasswordFormManagerTest : public testing::Test {
   StubPasswordManagerClient client_;
   MockDelegate delegate_;
   PasswordForm form_to_save_;
-
-  DISALLOW_COPY_AND_ASSIGN(CredentialManagerPasswordFormManagerTest);
 };
 
 // Ensure that GetCredentialSource is actually overriden and returns the proper
@@ -135,7 +147,8 @@ TEST_F(CredentialManagerPasswordFormManagerTest,
   // username/password as a submitted one.
   PasswordForm saved_match = form_to_save_;
   saved_match.username_value += u"1";
-  saved_match.password_value += u"1";
+  saved_match.password_value =
+      PasswordString(saved_match.password_value.value() + u"1");
 
   std::unique_ptr<CredentialManagerPasswordFormManager> form_manager =
       CreateFormManager(form_to_save_);
@@ -143,7 +156,7 @@ TEST_F(CredentialManagerPasswordFormManagerTest,
 
   EXPECT_CALL(delegate_, OnProvisionalSaveComplete());
   SetNonFederatedAndNotifyFetchCompleted(form_manager->GetFormFetcher(),
-                                         {&saved_match});
+                                         {saved_match});
   EXPECT_TRUE(form_manager->IsNewLogin());
   EXPECT_TRUE(form_manager->is_submitted());
   EXPECT_EQ(form_to_save_.url, form_manager->GetURL());
@@ -156,7 +169,9 @@ TEST_F(CredentialManagerPasswordFormManagerTest, UpdatePasswordCredentialAPI) {
   // Simulate that the submitted credential has the same username but the
   // different password from already saved one.
   PasswordForm saved_match = form_to_save_;
-  saved_match.password_value += u"1";
+  saved_match.password_value =
+      PasswordString(saved_match.password_value.value() + u"1");
+  saved_match.match_type = affiliations::MatchType::kExact;
 
   std::unique_ptr<CredentialManagerPasswordFormManager> form_manager =
       CreateFormManager(form_to_save_);
@@ -164,7 +179,7 @@ TEST_F(CredentialManagerPasswordFormManagerTest, UpdatePasswordCredentialAPI) {
 
   EXPECT_CALL(delegate_, OnProvisionalSaveComplete());
   SetNonFederatedAndNotifyFetchCompleted(form_manager->GetFormFetcher(),
-                                         {&saved_match});
+                                         {saved_match});
   EXPECT_FALSE(form_manager->IsNewLogin());
   EXPECT_TRUE(form_manager->is_submitted());
 

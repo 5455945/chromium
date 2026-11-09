@@ -1,22 +1,31 @@
 # Chromium docs
 
-This directory contains chromium project documentation in
-[Gitiles-flavored Markdown].  It is automatically [rendered by Gitiles].
+This directory contains [chromium project](https://www.chromium.org/Home/)
+documentation in [Gitiles-flavored Markdown]. It is automatically
+[rendered by Gitiles].
 
 [Gitiles-flavored Markdown]: https://gerrit.googlesource.com/gitiles/+/master/Documentation/markdown.md
 [rendered by Gitiles]: https://chromium.googlesource.com/chromium/src/+/main/docs/
 
-If you add new documents, please also add a link to them in the Document Index
-below.
+**If you add new documents, please also add a link to them in the Document Index
+below.**
 
 [TOC]
 
 ## Creating Documentation
 
-Markdown documents must follow the
-[style guide](https://github.com/google/styleguide/tree/gh-pages/docguide).
+### Guidelines
 
-### Preview local changes using [md_browser](../tools/md_browser/):
+*   See the [Chromium Documentation Guidelines](documentation_guidelines.md)
+    and the
+    [Chromium Documentation Best Practices](documentation_best_practices.md).
+*   Markdown documents must follow the
+    [Markdown Style
+    Guide](https://chromium.googlesource.com/chromium/src/+/HEAD/styleguide/markdown/markdown.md).
+
+### Previewing changes
+
+#### Locally using [md_browser](../tools/md_browser/)
 
 ```bash
 # in chromium checkout
@@ -25,18 +34,28 @@ Markdown documents must follow the
 
 This is only an estimate. The **gitiles** view may differ.
 
-### Review changes online with gerrit's links to gitiles:
+#### Online with Gerrit's links to gitiles
 
 1.  Upload a patch to gerrit, or receive a review request.
-    e.g. https://chromium-review.googlesource.com/c/572236
+    e.g. https://chromium-review.googlesource.com/c/3362532
 2.  View a specific .md file.
-    e.g. https://chromium-review.googlesource.com/c/572236/2/docs/README.md
-3.  Click on **gitiles** link at top of page.
+    e.g. https://chromium-review.googlesource.com/c/3362532/2/docs/README.md
+3.  You will see something like <br>
+    Base
+    [preview](https://chromium.googlesource.com/chromium/src/+/ad44f6081ccc6b92479b12f1eb7e9482f474859d/docs/README.md)
+    -> Patchset 3
+    [preview](https://chromium.googlesource.com/chromium/src/+/refs/changes/32/3362532/3/docs/README.md)
+    | DOWNLOAD <br>
+    at the top left of the page. Click on the second
+    "[preview](https://chromium.googlesource.com/chromium/src/+/refs/changes/32/3362532/3/docs/README.md)"
+    link to open the preview for the current patch set.
 
 This **gitiles** view is the authoritative view, exactly the same as will be
 used when committed.
 
 ## Document Index
+
+**Note**: this is not an exhaustive list of all documents.
 
 ### Checking Out and Building
 *   [Linux Build Instructions](linux/build_instructions.md) - Linux
@@ -52,13 +71,13 @@ used when committed.
     Fuchsia target (on a Linux host)
 *   [iOS Build Instructions](ios/build_instructions.md) - iOS target (on a MacOS
     host)
+*   [Gerrit Guide](gerrit_guide.md) - Setup Gerrit access
+*   [Gerrit ReAuth](gerrit_reauth.md) - Gerrit ReAuth guide
 *   [Chrome OS Build Instructions](chromeos_build_instructions.md) - Chrome OS
 *   [Linux Chromium ARM Recipes](linux/chromium_arm.md) - Recipes for building
     Chromium for ARM on Linux.
 *   [Chrome Component Build](component_build.md) - Faster builds using more
     libraries
-*   [Using the BuildRunner](using_build_runner.md) - Scripts that extract build
-    stops from builders and runs them locally on a slave
 *   [Cr User Manual](cr_user_manual.md) - Manual for `cr`, a tool that tries to
     hide some of the tools used for working on Chromium behind an abstraction
     layer
@@ -82,6 +101,7 @@ used when committed.
 *   [Git Cookbook](git_cookbook.md) - A collection of git recipes for common
     tasks
 *   [Git Tips](git_tips.md) - More git tips
+*   [Git submodules](git_submodules.md) - Git submodule (tips, FAQ)
 
 ### Clang
 *   [Clang Compiler](clang.md) - General information on the clang compiler, used
@@ -108,6 +128,7 @@ used when committed.
 *   [Commit Checklist](commit_checklist.md) - Streamlined checklist to go
     through before uploading CLs on Gerrit.
 *   [Code Reviews](code_reviews.md) - Code review requirements and guidelines
+*   [Dependency management](dependencies.md) - Managing dependencies (DEPS, git submodules)
 *   [Respectful Code Reviews](cr_respect.md) - A guide for code reviewers
 *   [Respectful Changes](cl_respect.md) - A guide for code authors
 *   [Mandatory Code-Review Rollout](code_review_owners.md) - Upcoming policy changes related to code review and OWNERS
@@ -134,24 +155,18 @@ used when committed.
     Visualizing view trees during debugging
 *   [Bitmap Pipeline](bitmap_pipeline.md) - How bitmaps are moved from the
     renderer to the screen.
+*   [Flag Guarding Guidelines](flag_guarding_guidelines.md) - When to use
+    server controlled kill switches and A/B experiments to safely roll out
+    changes.
 *   [Using the Origin Trials Framework](origin_trials_integration.md) - A
     framework for conditionally enabling experimental APIs for testing.
-*   [`ClientTagBasedModelTypeProcessor` in Unified Sync and Storage](sync/uss/client_tag_based_model_type_processor.md) -
-    Notes on the central data structure used in Chrome Sync.
-*   [Chrome Sync's Model API](sync/model_api.md) - Data models used for syncing
-    information across devices using Chrome Sync.
+*   [Chrome Sync](https://source.chromium.org/chromium/chromium/src/+/main:docs/website/site/developers/design-documents/sync) -
+    Docs for the subsystem that allows one to sync data across devices.
 *   [Ozone Overview](ozone_overview.md) - Ozone is an abstraction layer between
     the window system and low level input and graphics.
-*   [Optimizing Chrome Web UIs](optimizing_web_uis.md) - Notes on making webuis
-    more performant
-*   [Adding a new feature flag in chrome://flags](how_to_add_your_feature_flag.md) - Quick
-    guide to add a new feature flag to experiment your feature.
 *   [Guidelines for considering branch dates in project planning](release_branch_guidance.md) -
     What to do (and not to do) around branch dates when scheduling your project
     work.
-*   [WebUI Explainer](webui_explainer.md) - An explanation of C++ and JavaScript
-    infrastructural code for Chrome UIs implemented with web technologies (i.e.
-    chrome:// URLs).
 *   [Watchlists](infra/watchlists.md) - Use watchlists to get notified of CLs
     you are interested in.
 *   [Shutdown](shutdown.md) - Explains the steps of Chrome shutdown, to make it
@@ -159,6 +174,9 @@ used when committed.
 *   [API Keys](api_keys.md) - When you need access to Google APIs for a custom
     build, fork, integration of stock Chromium, or are building ChromiumOS (for
     login).
+*   [User Education](../components/user_education/README.md) - Create
+    in-product help (IPH) and tutorials to call out Chromium features.
+*   [User-Agent](./user_agent/README.md) - User-Agent and User-Agent Client Hints.
 
 ### Testing
 *   [Running and Debugging Web Tests](testing/web_tests.md)
@@ -180,14 +198,24 @@ used when committed.
 *   [Using Crashpad with `content_shell`](testing/using_crashpad_with_content_shell.md) -
     Capture stack traces on layout test crashes without an attached debugger
 *   [Test Descriptions](testing/test_descriptions.md) - Unit test targets that can be
-    built, with associated desciptions.
+    built, with associated descriptions.
 *   [Fuzz Testing](../testing/libfuzzer/README.md) - Fuzz testing in Chromium.
-*   [IPC Fuzzer](testing/ipc_fuzzer.md) - Fuzz testing of Chromium IPC interfaces.
 *   [Running Chrome tests with AddressSanitizer (asan) and LeakSanitizer (lsan)](testing/linux_running_asan_tests.md) -
     Run Chrome tests with ASAN and LSAN builds to detect addressability issues and memory leaks.
 *   [Code Coverage](testing/code_coverage.md) - Code coverage for Chromium.
 *   [Code Coverage in Gerrit](testing/code_coverage_in_gerrit.md) - Per-CL code
     coverage in Gerrit to assist code reviews.
+*   [Chrome for Testing](chrome_for_testing/README.md) - The functional and behavioral differences of Chrome for Testing from standard Chrome.
+*   [Chrome for Testing configuration](chrome_for_testing/chrome_for_testing_configuration.md) - Customizing Chrome for Testing required components installation and UI behavior.
+
+### Configuration Docs
+
+*   [Configuration: Prefs, Settings, Features, Switches & Flags](configuration.md) - Explains different ways to gate a new feature.
+*   [Adding a new feature flag in chrome://flags](how_to_add_your_feature_flag.md) - Quick guide to add a new feature flag to experiment your feature.
+*   [Runtime Enabled Features](https://chromium.googlesource.com/chromium/src/+/main/third_party/blink/renderer/platform/RuntimeEnabledFeatures.md)
+*   [Initialization of Blink runtime features in content layer](initialize_blink_features.md)
+*   [Integrating a feature with the origin trials framework](origin_trials_integration.md)
+*   [Custom Type Helpers for Origin-Trial-Controlled HTML Elements](custom_type_helpers_for_origin_trial_elements.md)
 
 ### GPU-related docs
 *   [GPU Pixel Wrangling](gpu/pixel_wrangling.md) - Instructions for GPU
@@ -203,7 +231,7 @@ used when committed.
 *   [Linux Proxy Config](linux/proxy_config.md) - Network proxy sources on Linux
 *   [Debugging SSL on Linux](linux/debugging_ssl.md) - Tips on debugging SSL
     code in Linux
-*   [Linux Cert Managment](linux/cert_management.md) - Managing X.509
+*   [Linux Cert Management](linux/cert_management.md) - Managing X.509
     Certificates in Linux
 *   [Tips for Debugging on Linux](linux/debugging.md)
 *   [Linux GTK Theme Integration](linux/gtk_theme_integration.md) - Having
@@ -233,7 +261,7 @@ used when committed.
     related tools.
 *   [Chroot Notes](linux/using_a_chroot.md) - Setting up a chroot to work around
     libfreetype differences in some versions of Linux.
-*   [Linux Sandboxing](linux/sandboxing.md) - The Linux multi-process model to
+*   [Linux Sandboxing](../sandbox/linux/README.md) - The Linux multi-process model to
     isolate browser components with different privileges.
 *   [Zygote Process](linux/zygote.md) - How the Linux Zygote process, used to
     spawn new processes, works.
@@ -250,7 +278,6 @@ used when committed.
     with clang/ninja
 *   [Cocoa tips and tricks](cocoa_tips_and_tricks.md) - A collection of idioms
     used when writing Cocoa views and controllers
-*   [MacViews Release Plan](ui/views/macviews_release.md)
 
 ### Misc Windows-Specific Docs
 *   [Handling cygwin rebaseall failures](cygwin_dll_remapping_failure.md)
@@ -282,14 +309,13 @@ used when committed.
     Java related issues at compile time with the 'lint' tool.
 *   [Java Code Coverage](../build/android/docs/coverage.md) - Collecting code
     coverage data with the EMMA tool.
-*   [Android BuildConfig files](../build/android/docs/build_config.md) -
-    What are .build_config files and how they are used.
-*   [Android App Bundles](../build/android/docs/android_app_bundles.md) -
-    How to build Android app bundles for Chrome.
-*   [Dynamic Feature Modules (DFMs)](android_dynamic_feature_modules.md) - How
-    to create dynamic feature modules.
+*   [Dynamic Feature Modules (DFMs)](android_dynamic_feature_modules.md) - What
+    are they and how to create new ones.
+*   [Other build-related Android docs](../build/android/docs/README.md)
 *   [Chrome for Android UI](ui/android/overview.md) - Resources and best practices for
     developing UI
+*   [Android Settings Search Testing](/components/browser_ui/settings/android/settings_search_testing.md) -
+    Testing guide and parity invariants for Android Settings Search.
 
 ### Misc iOS-Specific Docs
 *   [Continuous Build and Test Infrastructure for Chromium for iOS](ios/infra.md)
@@ -310,18 +336,28 @@ used when committed.
 *   [Debugging tips](testing/chromeos_debugging_tips.md)
 
 ### Misc WebUI-Specific Docs
-*   [Creating WebUI Interfaces in components/](webui_in_components.md) How to
-    create a new WebUI component in the `components/` directory.
-*   [Trusted Types on WebUI](trusted_types_on_webui.md) Tips for coding in WebUI
-    with Trusted Types in mind.
+*   [WebUI Explainer](webui/webui_explainer.md) - An explanation of C++ and
+    TypeScript infrastructural code for Chrome UIs implemented with web
+    technologies (i.e. chrome:// URLs).
+*   [Optimizing Chrome Web UIs](webui/optimizing_web_uis.md) - Notes on making
+    WebUIs more performant
+*   [Trusted Types on WebUI](webui/trusted_types_on_webui.md) - Tips for coding
+    in WebUI with Trusted Types in mind.
+*   [chrome-untrusted:// FAQ](webui/chrome_untrusted.md) - Explainer on the
+    usage of the `chrome-untrusted://` scheme for hosting WebUIs that handle
+    untrustworthy content.
 
 ### Media
 *   [Audio Focus Handling](media/audio_focus.md) - How multiple MediaSession
     audio streams interact
 *   [Autoplay of HTMLMediaElements](media/autoplay.md) - How HTMLMediaElements
     are autoplayed.
+*   [Latency tracing](media/latency_tracing.md) - How to use the
+    `"audio.latency"` tracing category to measure audio latency.
 *   [Piranha Plant](piranha_plant.md) - Future architecture of MediaStreams
-*   [Video Encode Accelerator Tests](media/gpu/veatest_usage.md) - How to
+*   [Media Capture](media/capture/README.md) - Features and APIs that enable the
+    browser to capture pixels and audio from itself or the underlying OS.
+*   [Video Encode Accelerator Tests](media/gpu/video_encoder_test_usage.md) - How to
     use the accelerated video encoder test program.
 *   [Video Decoder Tests](media/gpu/video_decoder_test_usage.md) - Running the
     video decoder tests.
@@ -331,25 +367,26 @@ used when committed.
 ### Accessibility
 *   [Accessibility Overview](accessibility/overview.md) - Overview of
     accessibility concerns and approaches in Chromium.
-*   [Accessibility Tests](accessibility/tests.md) - Where to find
+*   [Accessibility Tests](accessibility/browser/tests.md) - Where to find
     accessibility-related tests in the codebase.
-*   [ChromeVox on Chrome OS](accessibility/chromevox.md) - Enabling spoken
+*   [ChromeVox on Chrome OS](accessibility/os/chromevox.md) - Enabling spoken
     feedback (ChromeVox) on Chrome OS.
-*   [ChromeVox on Desktop Linux](accessibility/chromevox_on_desktop_linux.md) -
+*   [ChromeVox on Desktop Linux](accessibility/os/chromevox_on_desktop_linux.md) -
     Enabling spoken feedback (ChromeVox) on desktop Linux.
-*   [Offscreen, Invisible and Size](accessibility/offscreen.md) - How Chrome
+*   [Offscreen, Invisible and Size](accessibility/browser/offscreen.md) - How Chrome
     defines offscreen, invisible and size in the accessibility tree.
-*   [Text to Speech](accessibility/tts.md) - Overview of text to speech in
+*   [Text to Speech](accessibility/browser/tts.md) - Overview of text to speech in
     Chrome and Chrome OS.
-*   [BRLTTY in Chrome OS](accessibility/brltty.md) - Chrome OS integration with
+*   [BRLTTY in Chrome OS](accessibility/os/brltty.md) - Chrome OS integration with
     BRLTTY to support refreshable braille displays
-*   [PATTS on Chrome OS](accessibility/patts.md) - Notes on the PATTS speech
-    sythesis engine used on Chrome OS
+*   [PATTS on Chrome OS](accessibility/os/patts.md) - Notes on the PATTS speech
+    synthesis engine used on Chrome OS
 *   [VoiceOver](ios/voiceover.md) - Using Apple's VoiceOver feature with
     Chromium on iOS.
 
 ### Memory
 *   [Memory Overview](memory/README.md)
+*   [Heap Profiling with External Tools](memory/heap_profiling_external.md)
 
 ### Memory Infrastructure Timeline Profiling (MemoryInfra)
 *   [Overview](memory-infra/README.md)
@@ -401,9 +438,40 @@ used when committed.
 *   [D-Bus Mojo Connection Service](dbus_mojo_connection_service.md) - A service
     in Chrome to bootstrap CrOS services' Mojo connection.
 
+### Security
+*   [The Rule Of 2](security/rule-of-2.md) - An important security rule when
+    handling untrustworthy contents (like anything downloaded from the web).
+*   [SECURITY.md Guidelines](security/security_md_guidelines.md) - Guidelines for writing
+    an effective SECURITY.md for Chromium components.
+
 ### Speed
 *   [Chrome Speed](speed/README.md) - Documentation for performance measurements and regressions in Chrome.
-*   [Chrome Speed Metrics](speed_metrics/README.md) - Documentation about user experience metrics in the web and their JavaScript APIs.
+*   [Chrome Speed Metrics](speed_metrics/README.md) - Documentation about user experience metrics on the web and their JavaScript APIs.
+
+### Stability
+*   [Overview of stability/crash metrics and reporting](stability.md) - Describes the different ways Chrome monitors stability and attempts to improve stability.
+
+### UI
+*   [Chromium UI Platform](ui/index.md) - All things user interface
+
+### What's Up With That Transcripts
+
+These are transcripts of [What's Up With
+That](https://www.youtube.com/playlist?list=PL9ioqAuyl6ULIdZQys3fwRxi3G3ns39Hq),
+a video series of interviews with Chromium software engineers.
+
+*   [What's Up With Pointers - Episode 1](transcripts/wuwt-e01-pointers.md)
+*   [What's Up With DCHECKs - Episode 2](transcripts/wuwt-e02-dchecks.md)
+*   [What's Up With //content - Episode 3](transcripts/wuwt-e03-content.md)
+*   [What's Up With Tests - Episode 4](transcripts/wuwt-e04-tests.md)
+*   [What's Up With BUILD.gn - Episode 5](transcripts/wuwt-e05-build-gn.md)
+*   [What's Up With Open Source - Episode 6](transcripts/wuwt-e06-open-source.md)
+*   [What's Up With Mojo - Episode 7](transcripts/wuwt-e07-mojo.md)
+*   [What's Up With Processes - Episode 8](transcripts/wuwt-e08-processes.md)
+*   [What's Up With Site Isolation - Episode 9](transcripts/wuwt-e09-site-isolation.md)
+*   [What's Up With Web Platform - Episode 10](transcripts/wuwt-e10-web-platform.md)
+*   [What's Up With Web Standards - Episode 11](transcripts/wuwt-e11-web-standards.md)
+*   [What's Up With Base - Episode 12](transcripts/wuwt-e12-base.md)
 
 ### Probably Obsolete
 *   [TPM Quick Reference](tpm_quick_ref.md) - Trusted Platform Module notes.
@@ -412,8 +480,8 @@ used when committed.
 *   [WebView Policies](webview_policies.md)
 *   [Linux Profiling](linux/profiling.md) - How to profile Chromium on Linux
 *   [Linux Graphics Pipeline](linux/graphics_pipeline.md)
-*   [Linux `SUID` Sandbox](linux/suid_sandbox.md) - Sandboxing renderers using a
-    SUID binary on Linux
+*   [Linux `SUID` Sandbox](../sandbox/linux/README.md) - Sandboxing renderers
+    using a SUID binary on Linux
 *   [Linux `SUID` Sandbox Development](linux/suid_sandbox_development.md) -
     Development on the above system.
 *   [Linux PID Namespace Support](linux/pid_namespace_support.md)

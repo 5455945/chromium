@@ -1,8 +1,6 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-
-#include <tuple>
 
 #include "components/subresource_filter/content/browser/subresource_filter_test_harness.h"
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
@@ -25,12 +23,8 @@ class SubresourceFilterConfigurationTest
 
 // Do not configure the URL with Safe Browsing to be part of any list. The only
 // time we should filter subresources is if we have ALL_SITES scope.
-TEST_P(SubresourceFilterConfigurationTest,
-       DISABLED_NoList_UsuallyNoActivation) {
-  ActivationScope scope;
-  ActivationList activation_list;
-  ActivationLevel level;
-  std::tie(scope, activation_list, level) = GetParam();
+TEST_P(SubresourceFilterConfigurationTest, NoList_UsuallyNoActivation) {
+  auto [scope, activation_list, level] = GetParam();
   SCOPED_TRACE(::testing::Message("ActivationScope: ") << scope);
   SCOPED_TRACE(::testing::Message("ActivationList: ") << activation_list);
   SCOPED_TRACE(::testing::Message("ActivationLevel: ") << level);
@@ -44,24 +38,21 @@ TEST_P(SubresourceFilterConfigurationTest,
   }
 }
 
-TEST_P(SubresourceFilterConfigurationTest, DISABLED_OneListActivation) {
-  ActivationScope scope;
-  ActivationList activation_list;
-  ActivationLevel level;
-  std::tie(scope, activation_list, level) = GetParam();
+TEST_P(SubresourceFilterConfigurationTest, OneListActivation) {
+  auto [scope, activation_list, level] = GetParam();
   SCOPED_TRACE(::testing::Message("ActivationScope: ") << scope);
   SCOPED_TRACE(::testing::Message("ActivationList: ") << activation_list);
   SCOPED_TRACE(::testing::Message("ActivationLevel: ") << level);
 
   const GURL url("https://example.test/");
-  ConfigureAsSubresourceFilterOnlyURL(url);
+  ConfigureAsBetterAdsURL(url);
   scoped_configuration().ResetConfiguration(
       Configuration(level, scope, activation_list));
   SimulateNavigateAndCommit(url, main_rfh());
   if (!CreateAndNavigateDisallowedSubframe(main_rfh())) {
     EXPECT_TRUE(scope == ActivationScope::ALL_SITES ||
                 (scope == ActivationScope::ACTIVATION_LIST &&
-                 activation_list == ActivationList::SUBRESOURCE_FILTER));
+                 activation_list == ActivationList::BETTER_ADS));
   }
 }
 
@@ -73,9 +64,8 @@ INSTANTIATE_TEST_SUITE_P(
                           ActivationScope::ALL_SITES,
                           ActivationScope::ACTIVATION_LIST),
         ::testing::Values(ActivationList::NONE,
-                          ActivationList::SOCIAL_ENG_ADS_INTERSTITIAL,
                           ActivationList::PHISHING_INTERSTITIAL,
-                          ActivationList::SUBRESOURCE_FILTER),
+                          ActivationList::BETTER_ADS),
         ::testing::Values(ActivationLevel::kEnabled,
                           ActivationLevel::kDisabled,
                           ActivationLevel::kDryRun)));

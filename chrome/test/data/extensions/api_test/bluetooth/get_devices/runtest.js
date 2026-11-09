@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,7 +10,7 @@ function testGetDevices() {
   chrome.test.succeed();
 }
 
-var devices = null;
+let devices = null;
 
 function failOnError() {
   if (chrome.runtime.lastError) {
@@ -18,12 +18,10 @@ function failOnError() {
   }
 }
 
-chrome.bluetooth.getDevices(
-  function(result) {
-    failOnError();
-    devices = result;
-    chrome.test.sendMessage('ready',
-      function(message) {
-        chrome.test.runTests([testGetDevices]);
-      });
+chrome.bluetooth.getDevices(function(result) {
+  failOnError();
+  devices = result;
+  chrome.test.sendMessage('ready', function(message) {
+    chrome.test.runTests([testGetDevices]);
   });
+});

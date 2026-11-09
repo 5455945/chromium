@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,36 +7,52 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
-#include "base/allocator/partition_allocator/page_allocator.h"
+#include "base/base_paths.h"
+#include "base/bits.h"
 #include "base/check.h"
+#include "base/check_op.h"
+#include "base/containers/span.h"
 #include "base/debug/alias.h"
 #include "base/debug/crash_logging.h"
 #include "base/feature_list.h"
+#include "base/feature_visitor.h"
 #include "base/files/file.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/files/memory_mapped_file.h"
 #include "base/lazy_instance.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
 #include "base/notreached.h"
 #include "base/path_service.h"
 #include "base/rand_util.h"
-#include "base/strings/string_util.h"
-#include "base/strings/sys_string_conversions.h"
+#include "base/strings/span_printf.h"
+#include "base/strings/string_split.h"
 #include "base/system/sys_info.h"
 #include "base/threading/platform_thread.h"
 #include "base/time/time.h"
-#include "base/win/windows_version.h"
 #include "build/build_config.h"
+#include "gin/array_buffer.h"
 #include "gin/gin_features.h"
+#include "partition_alloc/page_allocator.h"
+#include "partition_alloc/partition_address_space.h"
+#include "tools/v8_context_snapshot/buildflags.h"
+#include "v8/include/v8-initialization.h"
+#include "v8/include/v8-snapshot.h"
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 #include "base/android/apk_assets.h"
-#elif defined(OS_MAC)
-#include "base/mac/foundation_util.h"
+#elif BUILDFLAG(IS_MAC)
+#include "base/apple/foundation_util.h"
 #endif
 #endif  // V8_USE_EXTERNAL_STARTUP_DATA
 
@@ -47,16 +63,51 @@ namespace {
 // This global is never freed nor closed.
 base::MemoryMappedFile* g_mapped_snapshot = nullptr;
 
+#if defined(V8_USE_EXTERNAL_STARTUP_DATA)
+std::optional<gin::V8SnapshotFileType> g_snapshot_file_type;
+#if BUILDFLAG(IS_WIN)
+std::optional<bool> g_use_module_dir_for_v8_files;
+#endif
+#endif
+
+base::debug::CrashKeySize ToCrashKeySize(v8::CrashKeySize size) {
+  switch (size) {
+    case v8::CrashKeySize::Size32:
+      return base::debug::CrashKeySize::Size32;
+    case v8::CrashKeySize::Size64:
+      return base::debug::CrashKeySize::Size64;
+    case v8::CrashKeySize::Size256:
+      return base::debug::CrashKeySize::Size256;
+    case v8::CrashKeySize::Size1024:
+      return base::debug::CrashKeySize::Size1024;
+  }
+  NOTREACHED();
+}
+
+v8::CrashKey AllocateCrashKey(const char key[], v8::CrashKeySize size) {
+  return base::debug::AllocateCrashKeyString(key, ToCrashKeySize(size));
+}
+
+void SetCrashKey(v8::CrashKey key, std::string_view value) {
+  base::debug::SetCrashKeyString(static_cast<base::debug::CrashKeyString*>(key),
+                                 value);
+}
+
 bool GenerateEntropy(unsigned char* buffer, size_t amount) {
-  base::RandBytes(buffer, amount);
+  base::RandBytes(
+      // SAFETY: This depends on v8 providing a valid pointer/size pair.
+      //
+      // TODO(crbug.com/338574383): The signature is fixed as it's a callback
+      // from v8, but maybe v8 can use a span.
+      UNSAFE_BUFFERS(base::span(buffer, amount)));
   return true;
 }
 
 void GetMappedFileData(base::MemoryMappedFile* mapped_file,
                        v8::StartupData* data) {
   if (mapped_file) {
-    data->data = reinterpret_cast<const char*>(mapped_file->data());
-    data->raw_size = static_cast<int>(mapped_file->length());
+    data->data = reinterpret_cast<const char*>(mapped_file->bytes().data());
+    data->raw_size = static_cast<int>(mapped_file->bytes().size());
   } else {
     data->data = nullptr;
     data->raw_size = 0;
@@ -65,7 +116,7 @@ void GetMappedFileData(base::MemoryMappedFile* mapped_file,
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 const char kV8ContextSnapshotFileName64[] = "v8_context_snapshot_64.bin";
 const char kV8ContextSnapshotFileName32[] = "v8_context_snapshot_32.bin";
 const char kSnapshotFileName64[] = "snapshot_blob_64.bin";
@@ -79,43 +130,59 @@ const char kSnapshotFileName32[] = "snapshot_blob_32.bin";
 #define kSnapshotFileName kSnapshotFileName32
 #endif
 
-#else  // defined(OS_ANDROID)
-#if defined(USE_V8_CONTEXT_SNAPSHOT)
-const char kV8ContextSnapshotFileName[] = V8_CONTEXT_SNAPSHOT_FILENAME;
+#else  // BUILDFLAG(IS_ANDROID)
+#if BUILDFLAG(USE_V8_CONTEXT_SNAPSHOT)
+const char kV8ContextSnapshotFileName[] =
+    BUILDFLAG(V8_CONTEXT_SNAPSHOT_FILENAME);
 #endif
 const char kSnapshotFileName[] = "snapshot_blob.bin";
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-const char* GetSnapshotFileName(
-    const V8Initializer::V8SnapshotFileType file_type) {
+const char* GetSnapshotFileName(const V8SnapshotFileType file_type) {
   switch (file_type) {
-    case V8Initializer::V8SnapshotFileType::kDefault:
+    case V8SnapshotFileType::kDefault:
       return kSnapshotFileName;
-    case V8Initializer::V8SnapshotFileType::kWithAdditionalContext:
-#if defined(USE_V8_CONTEXT_SNAPSHOT)
+    case V8SnapshotFileType::kWithAdditionalContext:
+#if BUILDFLAG(USE_V8_CONTEXT_SNAPSHOT)
       return kV8ContextSnapshotFileName;
 #else
       NOTREACHED();
-      return nullptr;
 #endif
   }
   NOTREACHED();
-  return nullptr;
 }
 
 void GetV8FilePath(const char* file_name, base::FilePath* path_out) {
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   // This is the path within the .apk.
   *path_out =
       base::FilePath(FILE_PATH_LITERAL("assets")).AppendASCII(file_name);
-#elif defined(OS_MAC)
-  base::ScopedCFTypeRef<CFStringRef> bundle_resource(
-      base::SysUTF8ToCFStringRef(file_name));
-  *path_out = base::mac::PathForFrameworkBundleResource(bundle_resource);
+#elif BUILDFLAG(IS_MAC)
+  *path_out = base::apple::PathForFrameworkBundleResource(file_name);
 #else
   base::FilePath data_path;
   bool r = base::PathService::Get(base::DIR_ASSETS, &data_path);
   DCHECK(r);
+
+#if BUILDFLAG(IS_WIN)
+  // When running a dynamically patched module from a subdirectory, DIR_MODULE
+  // differs from DIR_ASSETS. Prefer the snapshot bundled with the module if
+  // present, falling back to the base assets directory otherwise. Cache the
+  // decision so all V8 files in the process resolve from the same directory.
+  base::FilePath module_path;
+  if (base::PathService::Get(base::DIR_MODULE, &module_path)) {
+    if (!g_use_module_dir_for_v8_files.has_value()) {
+      g_use_module_dir_for_v8_files =
+          module_path != data_path &&
+          base::PathExists(module_path.AppendASCII(file_name));
+    }
+    if (*g_use_module_dir_for_v8_files) {
+      *path_out = module_path.AppendASCII(file_name);
+      return;
+    }
+  }
+#endif  // BUILDFLAG(IS_WIN)
+
   *path_out = data_path.AppendASCII(file_name);
 #endif
 }
@@ -138,53 +205,32 @@ base::File OpenV8File(const char* file_name,
   // Re-try logic here is motivated by http://crbug.com/479537
   // for A/V on Windows (https://support.microsoft.com/en-us/kb/316609).
 
-  // These match tools/metrics/histograms.xml
-  enum OpenV8FileResult {
-    OPENED = 0,
-    OPENED_RETRY,
-    FAILED_IN_USE,
-    FAILED_OTHER,
-    MAX_VALUE
-  };
   base::FilePath path;
   GetV8FilePath(file_name, &path);
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
   base::File file(base::android::OpenApkAsset(path.value(), region_out));
-  OpenV8FileResult result = file.IsValid() ? OpenV8FileResult::OPENED
-                                           : OpenV8FileResult::FAILED_OTHER;
 #else
   // Re-try logic here is motivated by http://crbug.com/479537
   // for A/V on Windows (https://support.microsoft.com/en-us/kb/316609).
   const int kMaxOpenAttempts = 5;
   const int kOpenRetryDelayMillis = 250;
 
-  OpenV8FileResult result = OpenV8FileResult::FAILED_IN_USE;
-  int flags = base::File::FLAG_OPEN | base::File::FLAG_READ;
+  int flags = base::File::FLAG_OPEN | base::File::FLAG_READ |
+              base::File::FLAG_WIN_SHARE_DELETE;
   base::File file;
   for (int attempt = 0; attempt < kMaxOpenAttempts; attempt++) {
     file.Initialize(path, flags);
     if (file.IsValid()) {
       *region_out = base::MemoryMappedFile::Region::kWholeFile;
-      if (attempt == 0) {
-        result = OpenV8FileResult::OPENED;
-        break;
-      } else {
-        result = OpenV8FileResult::OPENED_RETRY;
-        break;
-      }
+      break;
     } else if (file.error_details() != base::File::FILE_ERROR_IN_USE) {
-      result = OpenV8FileResult::FAILED_OTHER;
       break;
     } else if (kMaxOpenAttempts - 1 != attempt) {
-      base::PlatformThread::Sleep(
-          base::TimeDelta::FromMilliseconds(kOpenRetryDelayMillis));
+      base::PlatformThread::Sleep(base::Milliseconds(kOpenRetryDelayMillis));
     }
   }
-#endif  // defined(OS_ANDROID)
-
-  UMA_HISTOGRAM_ENUMERATION("V8.Initializer.OpenV8File.Result", result,
-                            OpenV8FileResult::MAX_VALUE);
+#endif  // BUILDFLAG(IS_ANDROID)
   return file;
 }
 
@@ -199,178 +245,346 @@ void SetV8FlagsFormatted(const char* format, ...) {
   char buffer[128];
   va_list args;
   va_start(args, format);
-  int length = base::vsnprintf(buffer, sizeof(buffer), format, args);
+  int length = UNSAFE_TODO(base::VSpanPrintf(buffer, format, args));
   if (length <= 0 || sizeof(buffer) <= static_cast<unsigned>(length)) {
     PLOG(ERROR) << "Invalid formatted V8 flag: " << format;
     return;
   }
-  v8::V8::SetFlagsFromString(buffer, length - 1);
+  v8::V8::SetFlagsFromString(buffer, length);
 }
 
-void RunArrayBufferCageReservationExperiment() {
-  // TODO(1218005) remove this function and windows_version.h include once the
-  // experiment has ended.
-#if defined(ARCH_CPU_64_BITS)
-  constexpr size_t kGigaBytes = 1024 * 1024 * 1024;
-  constexpr size_t kTeraBytes = 1024 * kGigaBytes;
-
-  constexpr size_t kCageMaxSize = 1 * kTeraBytes;
-  constexpr size_t kCageMinSize = 8 * kGigaBytes;
-
-#if defined(OS_WIN)
-  // Windows prior to Win10 (or possibly Win8/8.1) appears to create page table
-  // entries when reserving virtual memory, causing unacceptably high memory
-  // consumption (e.g. ~2GB when reserving 1TB). As such, the experiment is
-  // only enabled on Win10.
-  if (base::win::GetVersion() < base::win::Version::WIN10) {
+template <size_t N, size_t M>
+void SetV8FlagsIfOverridden(const base::Feature& feature,
+                            const char (&enabling_flag)[N],
+                            const char (&disabling_flag)[M]) {
+  auto overridden_state = base::FeatureList::GetStateIfOverridden(feature);
+  if (!overridden_state.has_value()) {
     return;
   }
-#endif
+  if (overridden_state.value()) {
+    SetV8Flags(enabling_flag);
+  } else {
+    SetV8Flags(disabling_flag);
+  }
+}
 
-  void* reservation = nullptr;
-  size_t current_size = kCageMaxSize;
-  while (!reservation && current_size >= kCageMinSize) {
-    // The cage reservation will need to be 4GB aligned.
-    reservation = base::AllocPages(nullptr, current_size, 4 * kGigaBytes,
-                                   base::PageInaccessible, base::PageTag::kV8);
-    if (!reservation) {
-      current_size /= 2;
+constexpr std::string_view kV8FlagFeaturePrefix = "V8Flag_";
+constexpr std::string_view kV8FlagParam = "V8FlagParam";
+
+}  // namespace
+
+class V8FeatureVisitor : public base::FeatureVisitor {
+ public:
+  void Visit(const std::string& feature_name,
+             base::FeatureList::OverrideState override_state,
+             const base::FieldTrialParams& params,
+             const std::string& trial_name,
+             const std::string& group_name) override {
+    std::string_view feature_name_view(feature_name);
+
+    // VisitFeaturesAndParams is called with kV8FlagFeaturePrefix as a filter
+    // prefix, so we expect all feature names to start with "V8Flag_". Strip
+    // this prefix off to get the corresponding V8 flag name.
+    DCHECK(feature_name_view.starts_with(kV8FlagFeaturePrefix));
+    std::string flag_name(
+        feature_name_view.substr(kV8FlagFeaturePrefix.size()));
+
+    switch (override_state) {
+      case base::FeatureList::OverrideState::OVERRIDE_USE_DEFAULT:
+        return;
+
+      case base::FeatureList::OverrideState::OVERRIDE_DISABLE_FEATURE:
+        SetV8FlagsFormatted("--no-%s", flag_name.c_str());
+        // Do not set parameters for disabled features.
+        break;
+
+      case base::FeatureList::OverrideState::OVERRIDE_ENABLE_FEATURE:
+        auto it = params.begin();
+        if (it != params.end() && it->first == kV8FlagParam) {
+          SetV8FlagsFormatted("--%s=%s", flag_name.c_str(), it->second.c_str());
+          ++it;
+        } else {
+          SetV8FlagsFormatted("--%s", flag_name.c_str());
+        }
+        for (; it != params.end(); ++it) {
+          const auto& [param_name, param_value] = *it;
+          SetV8FlagsFormatted("--%s=%s", param_name.c_str(),
+                              param_value.c_str());
+        }
+        break;
+    }
+  }
+};
+
+namespace {
+
+// Sets mandatory V8 flags.
+void SetFlags(IsolateHolder::ScriptMode mode,
+              const std::string& js_command_line_flags) {
+
+  if (IsolateHolder::kStrictMode == mode) {
+    SetV8Flags("--use_strict");
+  }
+
+  // Apply any --js-flags explicitly specified by the caller.
+  if (!js_command_line_flags.empty()) {
+    std::vector<std::string_view> flag_list = base::SplitStringPiece(
+        js_command_line_flags, ",", base::TRIM_WHITESPACE,
+        base::SPLIT_WANT_NONEMPTY);
+    for (const auto& flag : flag_list) {
+      v8::V8::SetFlagsFromString(std::string(flag).c_str(), flag.size());
+    }
+  }
+}
+
+// Sets feature flags that are default to enabled.
+//
+// This function must be called *before* SetFeatureFlags is called, so that
+// default-enabled flags may be overridden and disabled.
+//
+// Usually V8 is the source of truth for the default state of feature flags.
+// However, some features must be shipped from the blink side because they add
+// new globals, which requires updating web tests that cannot be skipped (to
+// safeguard against accidentally breaking the web).
+void SetDefaultEnabledFeatureFlags() {}
+
+// Sets feature controlled V8 flags.
+void SetFeatureFlags() {
+  // Chromium features prefixed with "V8Flag_" are forwarded to V8 as V8 flags,
+  // with the "V8Flag_" prefix stripped off. For example, an enabled feature
+  // "V8Flag_foo_bar" will be passed to V8 as the flag `--foo_bar`. Similarly,
+  // if that feature is explicitly disabled, it will be passed to V8 as
+  // `--no-foo_bar`. No Chromium-side declaration of a V8Flag_foo_bar feature
+  // is necessary, the matching is done on strings.
+  //
+  // Parameters attached to features will also be passed through, with the same
+  // name as the parameter and the value passed by string, to be decoded by V8's
+  // flag parsing.
+  //
+  // Thus, running Chromium with:
+  //
+  //   --enable-features=V8Flag_foo,V8Flag_bar:bar_param/20
+  //   --disable-features=V8Flag_baz
+  //
+  // will be converted, on V8 initialization, to V8 flags:
+  //
+  //   --foo --bar --bar_param=20 --no-baz
+  //
+  // If an argument is needed for the main flag, a "V8FlagParam" param can be be
+  // used as the first parameter. Additional parameters can still be passed. For
+  // example, running Chromium with:
+  //
+  //   --enable-features=V8Flag_foo:V8FlagParam/bar/baz_param/20
+  //
+  // will be converted to these V8 flags:
+  //
+  //   --foo=bar --baz_param=20
+  V8FeatureVisitor feature_visitor;
+  base::FeatureList::VisitFeaturesAndParams(feature_visitor,
+                                            kV8FlagFeaturePrefix);
+
+  // Otherwise, feature flags explicitly defined in Chromium are translated
+  // to V8 flags as follows. We ignore feature flag default values, instead
+  // using the corresponding V8 flags default values if there is no explicit
+  // feature override.
+  SetV8FlagsIfOverridden(features::kV8CompactCodeSpaceWithStack,
+                         "--compact-code-space-with-stack",
+                         "--no-compact-code-space-with-stack");
+  SetV8FlagsIfOverridden(features::kV8CompactWithStack, "--compact-with-stack",
+                         "--no-compact-with-stack");
+  SetV8FlagsIfOverridden(features::kV8OptimizeJavascript, "--opt", "--no-opt");
+  SetV8FlagsIfOverridden(features::kV8FlushBytecode, "--flush-bytecode",
+                         "--no-flush-bytecode");
+  SetV8FlagsIfOverridden(features::kV8FlushBaselineCode,
+                         "--flush-baseline-code", "--no-flush-baseline-code");
+  SetV8FlagsIfOverridden(features::kV8FlushCodeBasedOnTabVisibility,
+                         "--flush-code-based-on-tab-visibility",
+                         "--no-flush-code-based-on-tab-visibility");
+  SetV8FlagsIfOverridden(features::kV8FlushCodeBasedOnTime,
+                         "--flush-code-based-on-time",
+                         "--no-flush-code-based-on-time");
+  SetV8FlagsIfOverridden(features::kV8OffThreadFinalization,
+                         "--finalize-streaming-on-background",
+                         "--no-finalize-streaming-on-background");
+  SetV8FlagsIfOverridden(features::kV8ConcurrentMarkingHighPriorityThreads,
+                         "--concurrent-marking-high-priority-threads",
+                         "--no-concurrent-marking-high-priority-threads");
+  SetV8FlagsIfOverridden(features::kV8LazyFeedbackAllocation,
+                         "--lazy-feedback-allocation",
+                         "--no-lazy-feedback-allocation");
+  SetV8FlagsIfOverridden(features::kV8PerContextMarkingWorklist,
+                         "--stress-per-context-marking-worklist",
+                         "--no-stress-per-context-marking-worklist");
+  SetV8FlagsIfOverridden(features::kV8FlushEmbeddedBlobICache,
+                         "--experimental-flush-embedded-blob-icache",
+                         "--no-experimental-flush-embedded-blob-icache");
+  SetV8FlagsIfOverridden(features::kV8ReduceConcurrentMarkingTasks,
+                         "--gc-experiment-reduce-concurrent-marking-tasks",
+                         "--no-gc-experiment-reduce-concurrent-marking-tasks");
+  SetV8FlagsIfOverridden(features::kV8NoReclaimUnmodifiedWrappers,
+                         "--no-reclaim-unmodified-wrappers",
+                         "--reclaim-unmodified-wrappers");
+  SetV8FlagsIfOverridden(
+      features::kV8ExperimentalRegexpEngine,
+      "--enable-experimental-regexp-engine-on-excessive-backtracks",
+      "--no-enable-experimental-regexp-engine-on-excessive-backtracks");
+  SetV8FlagsIfOverridden(features::kV8TurboFastApiCalls,
+                         "--turbo-fast-api-calls", "--no-turbo-fast-api-calls");
+  SetV8FlagsIfOverridden(features::kV8MegaDomIC, "--mega-dom-ic",
+                         "--no-mega-dom-ic");
+  SetV8FlagsIfOverridden(features::kV8Maglev, "--maglev", "--no-maglev");
+  SetV8FlagsIfOverridden(features::kV8ConcurrentMaglevHighPriorityThreads,
+                         "--concurrent-maglev-high-priority-threads",
+                         "--no-concurrent-maglev-high-priority-threads");
+  if (base::FeatureList::IsEnabled(features::kV8MaxValidPolymorphicMapCount)) {
+    SetV8FlagsFormatted("--max-valid-polymorphic-map-count=10");
+  }
+  if (base::FeatureList::IsEnabled(features::kV8MemoryReducer)) {
+    SetV8FlagsFormatted("--memory-reducer-gc-count=%i",
+                        features::kV8MemoryReducerGCCount.Get());
+  }
+  if (base::FeatureList::IsEnabled(features::kV8PreconfigureOldGen)) {
+    SetV8FlagsFormatted("--preconfigured-old-space-size=%i",
+                        features::kV8PreconfigureOldGenSize.Get());
+  }
+  if (base::FeatureList::IsEnabled(features::kV8MemoryReducerDelay)) {
+    SetV8FlagsFormatted("--memory-reducer-delay-ms=%i",
+                        features::kV8MemoryReducerDelayInSeconds.Get() * 1000);
+  }
+  if (base::FeatureList::IsEnabled(features::kV8HighEndAndroid)) {
+    SetV8FlagsFormatted("--high-end-android-physical-memory-threshold=%i",
+                        features::kV8HighEndAndroidMemoryThreshold.Get());
+  }
+  SetV8FlagsIfOverridden(features::kV8IdleGcOnContextDisposal,
+                         "--idle-gc-on-context-disposal",
+                         "--no-idle-gc-on-context-disposal");
+  SetV8FlagsIfOverridden(features::kV8MemoryPoolReleaseOnMallocFailures,
+                         "--memory-pool-release-on-malloc-failures",
+                         "--no-memory-pool-release-on-malloc-failures");
+  if (base::FeatureList::IsEnabled(features::kV8ScavengerHigherCapacity)) {
+    SetV8FlagsFormatted("--scavenger-max-new-space-capacity-mb=%i",
+                        features::kV8ScavengerMaxCapacity.Get());
+  }
+  SetV8FlagsIfOverridden(features::kV8Sparkplug, "--sparkplug",
+                         "--no-sparkplug");
+  SetV8FlagsIfOverridden(features::kV8Turbofan, "--turbofan", "--no-turbofan");
+  SetV8FlagsIfOverridden(features::kV8Turboshaft, "--turboshaft",
+                         "--no-turboshaft");
+  SetV8FlagsIfOverridden(features::kV8TurboshaftInstructionSelection,
+                         "--turboshaft-instruction-selection",
+                         "--no-turboshaft-instruction-selection");
+  SetV8FlagsIfOverridden(features::kV8ConcurrentSparkplug,
+                         "--concurrent-sparkplug", "--no-concurrent-sparkplug");
+  SetV8FlagsIfOverridden(features::kV8SparkplugNeedsShortBuiltinCalls,
+                         "--sparkplug-needs-short-builtins",
+                         "--no-sparkplug-needs-short-builtins");
+  SetV8FlagsIfOverridden(features::kV8BaselineBatchCompilation,
+                         "--baseline-batch-compilation",
+                         "--no-baseline-batch-compilation");
+  SetV8FlagsIfOverridden(features::kV8ShortBuiltinCalls,
+                         "--short-builtin-calls", "--no-short-builtin-calls");
+  SetV8FlagsIfOverridden(features::kV8CodeMemoryWriteProtection,
+                         "--write-protect-code-memory",
+                         "--no-write-protect-code-memory");
+  SetV8FlagsIfOverridden(features::kV8SlowHistograms, "--slow-histograms",
+                         "--no-slow-histograms");
+  SetV8FlagsIfOverridden(features::kV8SideStepTransitions,
+                         "--clone_object_sidestep_transitions",
+                         "--noclone_object_sidestep_transitions");
+  SetV8FlagsIfOverridden(features::kV8SingleThreadedGCInBackground,
+                         "--single-threaded-gc-in-background",
+                         "--no-single-threaded-gc-in-background");
+  SetV8FlagsIfOverridden(features::kV8SingleThreadedGCInBackgroundParallelPause,
+                         "--parallel-pause-for-gc-in-background",
+                         "--no-parallel-pause-for-gc-in-background");
+  SetV8FlagsIfOverridden(
+      features::kV8SingleThreadedGCInBackgroundNoIncrementalMarking,
+      "--no-incremental-marking-for-gc-in-background",
+      "--incremental-marking-for-gc-in-background");
+
+  if (base::FeatureList::IsEnabled(features::kV8ConcurrentSparkplug)) {
+    if (int max_threads = features::kV8ConcurrentSparkplugMaxThreads.Get()) {
+      SetV8FlagsFormatted("--concurrent-sparkplug-max-threads=%i", max_threads);
+    }
+    SetV8FlagsIfOverridden(features::kV8ConcurrentSparkplugHighPriorityThreads,
+                           "--concurrent-sparkplug-high-priority-threads",
+                           "--no-concurrent-sparkplug-high-priority-threads");
+  }
+
+  if (base::FeatureList::IsEnabled(features::kV8FlushBytecode)) {
+    if (int old_age = features::kV8FlushBytecodeOldAge.Get()) {
+      SetV8FlagsFormatted("--bytecode-old-age=%i", old_age);
     }
   }
 
-  int result = current_size / kGigaBytes;
-  if (reservation) {
-    base::FreePages(reservation, current_size);
-  } else {
-    result = 0;
+  if (base::FeatureList::IsEnabled(features::kV8FlushCodeBasedOnTime)) {
+    if (int old_time = features::kV8FlushCodeOldTime.Get()) {
+      SetV8FlagsFormatted("--bytecode-old-time=%i", old_time);
+    }
   }
 
-  base::UmaHistogramSparse("V8.MaxArrayBufferCageReservationSize", result);
-#endif
+  // Make sure aliases of kV8SlowHistograms only enable the feature to
+  // avoid contradicting settings between multiple finch experiments.
+  bool any_slow_histograms_alias =
+      base::FeatureList::IsEnabled(
+          features::kV8SlowHistogramsCodeMemoryWriteProtection) ||
+      base::FeatureList::IsEnabled(features::kV8SlowHistogramsSparkplug) ||
+      base::FeatureList::IsEnabled(features::kV8SlowHistogramsSparkplugAndroid);
+  if (any_slow_histograms_alias) {
+    SetV8Flags("--slow-histograms");
+  } else {
+    SetV8FlagsIfOverridden(features::kV8SlowHistograms, "--slow-histograms",
+                           "--no-slow-histograms");
+  }
+
+  SetV8FlagsIfOverridden(features::kV8IgnitionElideRedundantTdzChecks,
+                         "--ignition-elide-redundant-tdz-checks",
+                         "--no-ignition-elide-redundant-tdz-checks");
+
+  SetV8FlagsIfOverridden(features::kV8UseOriginalMessageForStackTrace,
+                         "--use-original-message-for-stack-trace",
+                         "--no-use-original-message-for-stack-trace");
+
+  // JavaScript language features.
+  SetV8FlagsIfOverridden(features::kJavaScriptImportAttributes,
+                         "--harmony-import-attributes",
+                         "--no-harmony-import-attributes");
+
+  // WebAssembly features (currently none).
 }
 
 }  // namespace
 
 // static
-void V8Initializer::Initialize(IsolateHolder::ScriptMode mode) {
+void V8Initializer::Initialize(IsolateHolder::ScriptMode mode,
+                               const std::string& js_command_line_flags,
+                               bool disallow_v8_feature_flag_overrides,
+                               v8::OOMErrorCallback oom_error_callback) {
   static bool v8_is_initialized = false;
   if (v8_is_initialized)
     return;
 
-  if (base::FeatureList::IsEnabled(
-          features::kV8ArrayBufferCageReservationExperiment)) {
-    RunArrayBufferCageReservationExperiment();
+  // Flags need to be set before InitializePlatform as they are used for system
+  // instrumentation initialization, see https://crbug.com/v8/11043. --js-flags
+  // and other mandatory flags in `SetFlags` must be ordered after feature flag
+  // overrides.
+  SetDefaultEnabledFeatureFlags();
+  if (!disallow_v8_feature_flag_overrides) {
+    SetFeatureFlags();
   }
+  SetFlags(mode, js_command_line_flags);
 
   v8::V8::InitializePlatform(V8Platform::Get());
 
-  if (!base::FeatureList::IsEnabled(features::kV8OptimizeJavascript)) {
-    // We avoid explicitly passing --opt if kV8OptimizeJavascript is enabled
-    // since it is the default, and doing so would override flags passed
-    // explicitly, e.g., via --js-flags=--no-opt.
-    SetV8Flags("--no-opt");
-  }
+  // Set this as early as possible in order to ensure OOM errors are reported
+  // correctly.
+  v8::V8::SetFatalMemoryErrorCallback(oom_error_callback);
 
-  if (!base::FeatureList::IsEnabled(features::kV8FlushBytecode)) {
-    SetV8Flags("--no-flush-bytecode");
-  }
+  // Set this early on as some initialization steps, such as the initialization
+  // of the virtual memory cage, already use V8's random number generator.
+  v8::V8::SetEntropySource(&GenerateEntropy);
 
-  if (base::FeatureList::IsEnabled(features::kV8OffThreadFinalization)) {
-    SetV8Flags("--finalize-streaming-on-background");
-  }
-
-  if (!base::FeatureList::IsEnabled(features::kV8LazyFeedbackAllocation)) {
-    SetV8Flags("--no-lazy-feedback-allocation");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8ConcurrentInlining)) {
-    SetV8Flags("--concurrent_inlining");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8PerContextMarkingWorklist)) {
-    SetV8Flags("--stress-per-context-marking-worklist");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8FlushEmbeddedBlobICache)) {
-    SetV8Flags("--experimental-flush-embedded-blob-icache");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8ReduceConcurrentMarkingTasks)) {
-    SetV8Flags("--gc-experiment-reduce-concurrent-marking-tasks");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8NoReclaimUnmodifiedWrappers)) {
-    SetV8Flags("--no-reclaim-unmodified-wrappers");
-  }
-
-  if (!base::FeatureList::IsEnabled(features::kV8LocalHeaps)) {
-    // The --local-heaps flag is enabled by default, so we need to explicitly
-    // disable it if kV8LocalHeaps is disabled.
-    // Also disable TurboFan's direct access if local heaps are not enabled.
-    SetV8Flags("--no-local-heaps --no-turbo-direct-heap-access");
-  }
-
-  if (!base::FeatureList::IsEnabled(features::kV8TurboDirectHeapAccess)) {
-    // The --turbo-direct-heap-access flag is enabled by default, so we need to
-    // explicitly disable it if kV8TurboDirectHeapAccess is disabled.
-    SetV8Flags("--no-turbo-direct-heap-access");
-  }
-
-  if (!base::FeatureList::IsEnabled(features::kV8ExperimentalRegexpEngine)) {
-    // The --enable-experimental-regexp-engine-on-excessive-backtracks flag is
-    // enabled by default, so we need to explicitly disable it if
-    // kV8ExperimentalRegexpEngine is disabled.
-    SetV8Flags(
-        "--no-enable-experimental-regexp-engine-on-excessive-backtracks");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8TurboFastApiCalls)) {
-    SetV8Flags("--turbo-fast-api-calls");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8Turboprop)) {
-    SetV8Flags("--turboprop");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8Sparkplug)) {
-    SetV8Flags("--sparkplug");
-  }
-
-  if (base::FeatureList::IsEnabled(
-          features::kV8SparkplugNeedsShortBuiltinCalls)) {
-    SetV8Flags("--sparkplug-needs-short-builtins");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8UntrustedCodeMitigations)) {
-    SetV8Flags("--untrusted-code-mitigations");
-  } else {
-    SetV8Flags("--no-untrusted-code-mitigations");
-  }
-
-  if (base::FeatureList::IsEnabled(features::kV8ScriptAblation)) {
-    if (int delay = features::kV8ScriptDelayMs.Get()) {
-      SetV8FlagsFormatted("--script-delay=%i", delay);
-    }
-    if (int delay = features::kV8ScriptDelayOnceMs.Get()) {
-      SetV8FlagsFormatted("--script-delay-once=%i", delay);
-    }
-    if (double fraction = features::kV8ScriptDelayFraction.Get()) {
-      SetV8FlagsFormatted("--script-delay-fraction=%f", fraction);
-    }
-  }
-
-  if (!base::FeatureList::IsEnabled(features::kV8ShortBuiltinCalls)) {
-    // The --short-builtin-calls flag is enabled by default on x64 and arm64
-    // desktop configurations, so we need to explicitly disable it if
-    // kV8ShortBuiltinCalls is disabled.
-    // On other configurations it's not supported, so we don't try to enable
-    // it if the feature flag is on.
-    SetV8Flags("--no-short-builtin-calls");
-  }
-
-  if (IsolateHolder::kStrictMode == mode) {
-    SetV8Flags("--use_strict");
-  }
+  v8::V8::SetCrashKeyCallbacks(&AllocateCrashKey, &SetCrashKey);
 
 #if defined(V8_USE_EXTERNAL_STARTUP_DATA)
   if (g_mapped_snapshot) {
@@ -380,10 +594,60 @@ void V8Initializer::Initialize(IsolateHolder::ScriptMode mode) {
   }
 #endif  // V8_USE_EXTERNAL_STARTUP_DATA
 
-  v8::V8::SetEntropySource(&GenerateEntropy);
   v8::V8::Initialize();
 
   v8_is_initialized = true;
+
+#if defined(V8_ENABLE_SANDBOX)
+  // Record some sandbox statistics into UMA.
+  // The main reason for capturing these histograms here instead of having V8
+  // do it is that there are no Isolates available yet, which are required
+  // for recording histograms in V8.
+
+  base::UmaHistogramEnumeration("V8.SandboxMode", v8::V8::GetSandboxMode());
+
+  // Record the size of the address space reservation backing the sandbox.
+  // The size will always be one of a handful of values, so use a sparse
+  // histogram to capture it.
+  const size_t size = v8::V8::GetSandboxReservationSizeInBytes();
+  DCHECK_GT(size, 0U);
+  const size_t sizeInGB = size >> 30;
+  DCHECK_EQ(sizeInGB << 30, size);
+  base::UmaHistogramSparse("V8.SandboxReservationSizeGB", sizeInGB);
+
+  // When the sandbox is enabled, ArrayBuffers must be allocated inside of
+  // it. To achieve that, PA's ConfigurablePool is created inside the sandbox
+  // and Blink then creates the ArrayBuffer partition in that Pool.
+  v8::VirtualAddressSpace* sandbox_address_space =
+      v8::V8::GetSandboxAddressSpace();
+  const size_t max_pool_size = partition_alloc::internal::
+      PartitionAddressSpace::ConfigurablePoolMaxSize();
+  const size_t min_pool_size = partition_alloc::internal::
+      PartitionAddressSpace::ConfigurablePoolMinSize();
+  size_t pool_size = max_pool_size;
+  // Try to reserve the maximum size of the pool at first, then keep halving
+  // the size on failure until it succeeds.
+  uintptr_t pool_base = 0;
+  while (!pool_base && pool_size >= min_pool_size) {
+    pool_base = sandbox_address_space->AllocatePages(
+        0, pool_size, pool_size, v8::PagePermissions::kNoAccess);
+    if (!pool_base) {
+      pool_size /= 2;
+    }
+  }
+  // The V8 sandbox is guaranteed to be large enough to host the pool.
+  CHECK(pool_base);
+  partition_alloc::internal::PartitionAddressSpace::InitConfigurablePool(
+      pool_base, pool_size,
+      sandbox_address_space->ActiveMemoryProtectionKey().value_or(
+          partition_alloc::internal::kInvalidPkey));
+  // TODO(saelo) maybe record the size of the Pool into UMA.
+#endif  // V8_ENABLE_SANDBOX
+
+  // Initialize the partition used by gin::ArrayBufferAllocator instances. This
+  // needs to happen now, after the V8 sandbox has been initialized, so that
+  // the partition is placed inside the configurable pool initialized above.
+  ArrayBufferAllocator::InitializePartition();
 }
 
 // static
@@ -405,7 +669,7 @@ void V8Initializer::GetV8ExternalSnapshotData(const char** snapshot_data_out,
 // static
 void V8Initializer::LoadV8Snapshot(V8SnapshotFileType snapshot_file_type) {
   if (g_mapped_snapshot) {
-    // TODO(crbug.com/802962): Confirm not loading different type of snapshot
+    // TODO(crbug.com/40558459): Confirm not loading different type of snapshot
     // files in a process.
     return;
   }
@@ -426,9 +690,9 @@ void V8Initializer::LoadV8SnapshotFromFile(
 
   if (!snapshot_file.IsValid()) {
     LOG(FATAL) << "Error loading V8 startup snapshot file";
-    return;
   }
 
+  g_snapshot_file_type = snapshot_file_type;
   base::MemoryMappedFile::Region region =
       base::MemoryMappedFile::Region::kWholeFile;
   if (snapshot_file_region) {
@@ -437,11 +701,10 @@ void V8Initializer::LoadV8SnapshotFromFile(
 
   if (!MapV8File(std::move(snapshot_file), region, &g_mapped_snapshot)) {
     LOG(FATAL) << "Error mapping V8 startup snapshot file";
-    return;
   }
 }
 
-#if defined(OS_ANDROID)
+#if BUILDFLAG(IS_ANDROID)
 // static
 base::FilePath V8Initializer::GetSnapshotFilePath(
     bool abi_32_bit,
@@ -449,10 +712,10 @@ base::FilePath V8Initializer::GetSnapshotFilePath(
   base::FilePath path;
   const char* filename = nullptr;
   switch (snapshot_file_type) {
-    case V8Initializer::V8SnapshotFileType::kDefault:
+    case V8SnapshotFileType::kDefault:
       filename = abi_32_bit ? kSnapshotFileName32 : kSnapshotFileName64;
       break;
-    case V8Initializer::V8SnapshotFileType::kWithAdditionalContext:
+    case V8SnapshotFileType::kWithAdditionalContext:
       filename = abi_32_bit ? kV8ContextSnapshotFileName32
                             : kV8ContextSnapshotFileName64;
       break;
@@ -462,7 +725,27 @@ base::FilePath V8Initializer::GetSnapshotFilePath(
   GetV8FilePath(filename, &path);
   return path;
 }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
+
+#if BUILDFLAG(IS_WIN)
+// static
+base::FilePath V8Initializer::GetV8FilePathForTesting(const char* file_name) {
+  base::FilePath path;
+  GetV8FilePath(file_name, &path);
+  return path;
+}
+
+// static
+void V8Initializer::ResetV8FilePathForTesting() {
+  g_use_module_dir_for_v8_files.reset();
+}
+#endif  // BUILDFLAG(IS_WIN)
+
+V8SnapshotFileType GetLoadedSnapshotFileType() {
+  DCHECK(g_snapshot_file_type.has_value());
+  return *g_snapshot_file_type;
+}
+
 #endif  // defined(V8_USE_EXTERNAL_STARTUP_DATA)
 
 }  // namespace gin

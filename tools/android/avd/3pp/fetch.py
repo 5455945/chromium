@@ -1,5 +1,5 @@
-#!/usr/bin/env python
-# Copyright 2021 The Chromium Authors. All rights reserved.
+#!/usr/bin/env python3
+# Copyright 2021 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Print a version and prepare the artifacts for "avd" CIPD package.
@@ -17,8 +17,6 @@ This script is normally called by 3pp framework from chromium_3pp recipe module.
 
 """
 
-from __future__ import print_function
-
 import argparse
 import hashlib
 import os
@@ -27,39 +25,43 @@ import shutil
 import subprocess
 
 _SRC_PATH = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), os.path.pardir, os.path.pardir,
-                 os.path.pardir, os.path.pardir))
+  os.path.join(
+    os.path.dirname(__file__),
+    os.path.pardir,
+    os.path.pardir,
+    os.path.pardir,
+    os.path.pardir,
+  )
+)
 # The src-relative files and dirs we would like to include in the CIPD.
 _BASE_DEPS = [
-    # vpython, binaries and avd configs used by //tools/android/avd/avd.py
-    '.vpython',
-    '.vpython3',
-    'third_party/android_sdk/public/cmdline-tools/',
-    'third_party/android_sdk/public/platform-tools/',
-    'tools/android/avd/proto/',
-
-    # Should be the same as python_library("devil_chromium_py") in
-    # //build/android/BUILD.gn
-    'build/android/devil_chromium.json',
-    'third_party/catapult/devil/devil/devil_dependencies.json',
-    'third_party/catapult/third_party/gsutil/',
-
-    # Read by gn_helpers.BuildWithChromium()
-    # Needed to recognize the adb binary in third_party/android_sdk
-    'build/config/gclient_args.gni',
+  # vpython, binaries and avd configs used by //tools/android/avd/avd.py
+  'vpython.toml',
+  'vpython.toml.uv.lock',
+  'third_party/android_sdk/public/cmdline-tools/',
+  'third_party/android_sdk/public/platform-tools/',
+  'tools/android/avd/proto/',
+  # Should be the same as python_library("devil_chromium_py") in
+  # //build/android/BUILD.gn
+  'build/android/devil_chromium.json',
+  'third_party/catapult/devil/devil/devil_dependencies.json',
+  'third_party/catapult/third_party/gsutil/',
+  # Read by gn_helpers.BuildWithChromium()
+  # Needed to recognize the adb binary in third_party/android_sdk
+  'build/config/gclient_args.gni',
 ]
 
 
 def _file_hash(sha, rel_path, base_path):
   path = os.path.join(base_path, rel_path)
   with open(path, 'rb') as f:
-    sha.update(str(len(rel_path)))
-    sha.update(rel_path)
+    sha.update(str(len(rel_path)).encode('utf-8'))
+    sha.update(rel_path.encode('utf-8'))
     while True:
       f_stream = f.read(4096)
       if not f_stream:
         break
-      sha.update(str(len(f_stream)))
+      sha.update(str(len(f_stream)).encode('utf-8'))
       sha.update(f_stream)
 
 
@@ -78,20 +80,24 @@ def _compute_hash_paths(base_path, *rel_paths):
         dirs.sort()  # ensure we walk dirs in sorted order
         files.sort()
         for f_name in files:
-          rel_file_path = os.path.relpath(os.path.join(root, f_name), base_path)
-          _file_hash(sha, rel_file_path, base_path)
+          f_path = os.path.join(root, f_name)
+          # Check if it's a file to prevent following symlinks.
+          if os.path.isfile(f_path):
+            rel_file_path = os.path.relpath(f_path, base_path)
+            _file_hash(sha, rel_file_path, base_path)
 
   return sha.hexdigest()
 
 
 # Return a list of src-relative paths for the dependent files and dirs for avd
 def _get_deps(chromium_src_path):
-  deps_output = subprocess.check_output([
-      os.path.join(chromium_src_path, 'build', 'print_python_deps.py'),
-      '--root',
-      chromium_src_path,
-      os.path.join(chromium_src_path, 'tools', 'android', 'avd', 'avd.py'),
-  ])
+  deps_cmds = [
+    os.path.join(chromium_src_path, 'build', 'print_python_deps.py'),
+    '--root',
+    chromium_src_path,
+    os.path.join(chromium_src_path, 'tools', 'android', 'avd', 'avd.py'),
+  ]
+  deps_output = subprocess.check_output(deps_cmds, universal_newlines=True)
   # Filter out comments in deps_output
   deps_lines = deps_output.strip().split('\n')
   deps_entries = [dep for dep in deps_lines if not dep.startswith('#')]
@@ -112,7 +118,8 @@ def do_checkout(checkout_path):
     checkout_dep_path = os.path.join(checkout_path, 'src', *dep_pieces)
 
     checkout_dep_par_path = os.path.abspath(
-        os.path.join(checkout_dep_path, os.path.pardir))
+      os.path.join(checkout_dep_path, os.path.pardir)
+    )
     if not os.path.exists(checkout_dep_par_path):
       os.makedirs(checkout_dep_par_path)
 
@@ -128,7 +135,8 @@ def do_checkout(checkout_path):
 
 def main():
   ap = argparse.ArgumentParser(
-      description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+  )
   sub = ap.add_subparsers()
 
   latest = sub.add_parser("latest")

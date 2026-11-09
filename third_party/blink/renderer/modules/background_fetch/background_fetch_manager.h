@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,12 @@
 #include "base/time/time.h"
 #include "third_party/blink/public/mojom/background_fetch/background_fetch.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
+#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_typedefs.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
 
 class SkBitmap;
 
@@ -24,7 +24,6 @@ class BackgroundFetchIconLoader;
 class BackgroundFetchOptions;
 class BackgroundFetchRegistration;
 class ExceptionState;
-class ScriptPromiseResolver;
 class ScriptState;
 class ServiceWorkerRegistration;
 
@@ -40,51 +39,68 @@ class MODULES_EXPORT BackgroundFetchManager final
   ~BackgroundFetchManager() override = default;
 
   // Web Exposed methods defined in the IDL file.
-  ScriptPromise fetch(
+  ScriptPromise<BackgroundFetchRegistration> fetch(
       ScriptState* script_state,
       const String& id,
       const V8UnionRequestInfoOrRequestOrUSVStringSequence* requests,
       const BackgroundFetchOptions* options,
       ExceptionState& exception_state);
-  ScriptPromise get(ScriptState* script_state,
-                    const String& id,
-                    ExceptionState& exception_state);
-  ScriptPromise getIds(ScriptState* script_state);
+  ScriptPromise<IDLNullable<BackgroundFetchRegistration>> get(
+      ScriptState* script_state,
+      const String& id,
+      ExceptionState& exception_state);
+  ScriptPromise<IDLArray<IDLString>> getIds(ScriptState*, ExceptionState&);
 
   void Trace(Visitor* visitor) const override;
 
   // ExecutionContextLifecycleObserver interface
   void ContextDestroyed() override;
 
+  // These values are persisted to logs. Entries should not be renumbered and
+  // numeric values should never be reused.
+  // LINT.IfChange(ServiceWorkerBackgroundFetchStatus)
+  enum class ServiceWorkerFetchStatus {
+    kNotServiceWorker = 0,
+    kDisallowed = 1,
+    kAllowedByFeatureFlag = 2,
+    kAllowedByCommandLineOrPolicy = 3,
+    kAllowedByOriginAllowlist = 4,
+    kMaxValue = kAllowedByOriginAllowlist,
+  };
+  // LINT.ThenChange(//tools/metrics/histograms/metadata/service/enums.xml:ServiceWorkerBackgroundFetchStatus)
+
+  static HashSet<scoped_refptr<const SecurityOrigin>> ParseAllowlist(
+      const std::string& allowlist_str);
+
+  static ServiceWorkerFetchStatus GetServiceWorkerFetchStatus(
+      ExecutionContext* execution_context);
+
  private:
   friend class BackgroundFetchManagerTest;
 
   // Creates a vector of mojom::blink::FetchAPIRequestPtr objects for the given
   // set of |requests|, which can be either Request objects or URL strings.
-  // |has_requests_with_body| will be set if any of the |requests| has a body.
   static Vector<mojom::blink::FetchAPIRequestPtr> CreateFetchAPIRequestVector(
       ScriptState* script_state,
       const V8UnionRequestInfoOrRequestOrUSVStringSequence* requests,
-      ExceptionState& exception_state,
-      bool* has_requests_with_body);
+      ExceptionState& exception_state);
 
-  void DidLoadIcons(const String& id,
-                    Vector<mojom::blink::FetchAPIRequestPtr> requests,
-                    mojom::blink::BackgroundFetchOptionsPtr options,
-                    ScriptPromiseResolver* resolver,
-                    BackgroundFetchIconLoader* loader,
-                    const SkBitmap& icon,
-                    int64_t ideal_to_chosen_icon_size);
-  void DidFetch(ScriptPromiseResolver* resolver,
-                base::Time time_started,
+  void DidLoadIcons(
+      const String& id,
+      Vector<mojom::blink::FetchAPIRequestPtr> requests,
+      mojom::blink::BackgroundFetchOptionsPtr options,
+      BackgroundFetchIconLoader* loader,
+      ScriptPromiseResolver<BackgroundFetchRegistration>* resolver,
+      const SkBitmap& icon,
+      int64_t ideal_to_chosen_icon_size);
+  void DidFetch(ScriptPromiseResolver<BackgroundFetchRegistration>* resolver,
                 mojom::blink::BackgroundFetchError error,
                 BackgroundFetchRegistration* registration);
-  void DidGetRegistration(ScriptPromiseResolver* script_state,
-                          base::Time time_started,
-                          mojom::blink::BackgroundFetchError error,
-                          BackgroundFetchRegistration* registration);
-  void DidGetDeveloperIds(ScriptPromiseResolver* script_state,
-                          base::Time time_started,
+  void DidGetRegistration(
+      ScriptPromiseResolver<IDLNullable<BackgroundFetchRegistration>>* resolver,
+      mojom::blink::BackgroundFetchError error,
+      BackgroundFetchRegistration* registration);
+  void DidGetDeveloperIds(ScriptPromiseResolver<IDLArray<IDLString>>* resolver,
                           mojom::blink::BackgroundFetchError error,
                           const Vector<String>& developer_ids);
 

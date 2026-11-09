@@ -1,12 +1,14 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_UI_VIEWS_CHROME_WEB_DIALOG_VIEW_H_
 #define CHROME_BROWSER_UI_VIEWS_CHROME_WEB_DIALOG_VIEW_H_
 
-#include "third_party/abseil-cpp/absl/types/optional.h"
-#include "ui/gfx/native_widget_types.h"
+#include <optional>
+
+#include "components/captive_portal/core/captive_portal_types.h"
+#include "ui/gfx/native_ui_types.h"
 #include "ui/views/widget/widget.h"
 
 namespace content {
@@ -24,8 +26,10 @@ gfx::NativeWindow ShowWebDialogWithParams(
     gfx::NativeView parent,
     content::BrowserContext* context,
     ui::WebDialogDelegate* delegate,
-    absl::optional<views::Widget::InitParams> extra_params,
-    bool show = true);
+    std::optional<views::Widget::InitParams> extra_params,
+    bool show = true,
+    captive_portal::CaptivePortalWindowType captive_portal_window_type =
+        captive_portal::CaptivePortalWindowType::kNone);
 
 }  // namespace chrome
 

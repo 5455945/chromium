@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 
 #include <algorithm>
 
+#include "base/containers/span.h"
 #include "base/logging.h"
 #include "base/numerics/safe_conversions.h"
 #include "components/zucchini/abs32_utils.h"
@@ -24,7 +25,6 @@ namespace {
 // Decides whether |image| points to a Win32 PE file. If this is a possibility,
 // assigns |source| to enable further parsing, and returns true. Otherwise
 // leaves |source| at an undefined state and returns false.
-template <class Traits>
 bool ReadWin32Header(ConstBufferView image, BufferSource* source) {
   *source = BufferSource(image);
 
@@ -39,7 +39,7 @@ bool ReadWin32Header(ConstBufferView image, BufferSource* source) {
     return false;
   }
   // Offset to PE header is in DOS header.
-  *source = std::move(BufferSource(image).Skip(dos_header->e_lfanew));
+  *source = BufferSource(image, dos_header->e_lfanew);
   // Check 'PE\0\0' magic from PE header.
   if (!source->ConsumeBytes({'P', 'E', 0, 0}))
     return false;
@@ -47,17 +47,8 @@ bool ReadWin32Header(ConstBufferView image, BufferSource* source) {
   return true;
 }
 
-template <class Traits>
-const pe::ImageDataDirectory* ReadDataDirectory(
-    const typename Traits::ImageOptionalHeader* optional_header,
-    size_t index) {
-  if (index >= optional_header->number_of_rva_and_sizes)
-    return nullptr;
-  return &optional_header->data_directory[index];
-}
-
 // Decides whether |section| (assumed value) is a section that contains code.
-template <class Traits>
+template <class TRAITS>
 bool IsWin32CodeSection(const pe::ImageSectionHeader& section) {
   return (section.characteristics & kCodeCharacteristics) ==
          kCodeCharacteristics;
@@ -82,31 +73,31 @@ const char Win32X64Traits::kExeTypeString[] = "Windows PE x64";
 /******** DisassemblerWin32 ********/
 
 // static.
-template <class Traits>
-bool DisassemblerWin32<Traits>::QuickDetect(ConstBufferView image) {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::QuickDetect(ConstBufferView image) {
   BufferSource source;
-  return ReadWin32Header<Traits>(image, &source);
+  return ReadWin32Header(image, &source);
 }
 
 // |num_equivalence_iterations_| = 2 for reloc -> abs32.
-template <class Traits>
-DisassemblerWin32<Traits>::DisassemblerWin32() : Disassembler(2) {}
+template <class TRAITS>
+DisassemblerWin32<TRAITS>::DisassemblerWin32() : Disassembler(2) {}
 
-template <class Traits>
-DisassemblerWin32<Traits>::~DisassemblerWin32() = default;
+template <class TRAITS>
+DisassemblerWin32<TRAITS>::~DisassemblerWin32() = default;
 
-template <class Traits>
-ExecutableType DisassemblerWin32<Traits>::GetExeType() const {
+template <class TRAITS>
+ExecutableType DisassemblerWin32<TRAITS>::GetExeType() const {
   return Traits::kExeType;
 }
 
-template <class Traits>
-std::string DisassemblerWin32<Traits>::GetExeTypeString() const {
+template <class TRAITS>
+std::string DisassemblerWin32<TRAITS>::GetExeTypeString() const {
   return Traits::kExeTypeString;
 }
 
-template <class Traits>
-std::vector<ReferenceGroup> DisassemblerWin32<Traits>::MakeReferenceGroups()
+template <class TRAITS>
+std::vector<ReferenceGroup> DisassemblerWin32<TRAITS>::MakeReferenceGroups()
     const {
   return {
       {ReferenceTypeTraits{2, TypeTag(kReloc), PoolTag(kReloc)},
@@ -118,8 +109,8 @@ std::vector<ReferenceGroup> DisassemblerWin32<Traits>::MakeReferenceGroups()
   };
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadRelocs(
+template <class TRAITS>
+std::unique_ptr<ReferenceReader> DisassemblerWin32<TRAITS>::MakeReadRelocs(
     offset_t lo,
     offset_t hi) {
   if (!ParseAndStoreRelocBlocks())
@@ -135,8 +126,8 @@ std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadRelocs(
                                             translator_);
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadAbs32(
+template <class TRAITS>
+std::unique_ptr<ReferenceReader> DisassemblerWin32<TRAITS>::MakeReadAbs32(
     offset_t lo,
     offset_t hi) {
   ParseAndStoreAbs32();
@@ -146,8 +137,8 @@ std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadAbs32(
                                             translator_);
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadRel32(
+template <class TRAITS>
+std::unique_ptr<ReferenceReader> DisassemblerWin32<TRAITS>::MakeReadRel32(
     offset_t lo,
     offset_t hi) {
   ParseAndStoreRel32();
@@ -155,8 +146,8 @@ std::unique_ptr<ReferenceReader> DisassemblerWin32<Traits>::MakeReadRel32(
                                           translator_);
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceWriter> DisassemblerWin32<Traits>::MakeWriteRelocs(
+template <class TRAITS>
+std::unique_ptr<ReferenceWriter> DisassemblerWin32<TRAITS>::MakeWriteRelocs(
     MutableBufferView image) {
   if (!ParseAndStoreRelocBlocks())
     return std::make_unique<EmptyReferenceWriter>();
@@ -166,30 +157,30 @@ std::unique_ptr<ReferenceWriter> DisassemblerWin32<Traits>::MakeWriteRelocs(
                                             translator_);
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceWriter> DisassemblerWin32<Traits>::MakeWriteAbs32(
+template <class TRAITS>
+std::unique_ptr<ReferenceWriter> DisassemblerWin32<TRAITS>::MakeWriteAbs32(
     MutableBufferView image) {
   return std::make_unique<Abs32WriterWin32>(
       image, AbsoluteAddress(Traits::kBitness, image_base_), translator_);
 }
 
-template <class Traits>
-std::unique_ptr<ReferenceWriter> DisassemblerWin32<Traits>::MakeWriteRel32(
+template <class TRAITS>
+std::unique_ptr<ReferenceWriter> DisassemblerWin32<TRAITS>::MakeWriteRel32(
     MutableBufferView image) {
   return std::make_unique<Rel32WriterX86>(image, translator_);
 }
 
-template <class Traits>
-bool DisassemblerWin32<Traits>::Parse(ConstBufferView image) {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::Parse(ConstBufferView image) {
   image_ = image;
   return ParseHeader();
 }
 
-template <class Traits>
-bool DisassemblerWin32<Traits>::ParseHeader() {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::ParseHeader() {
   BufferSource source;
 
-  if (!ReadWin32Header<Traits>(image_, &source))
+  if (!ReadWin32Header(image_, &source))
     return false;
 
   constexpr size_t kDataDirBase =
@@ -217,10 +208,12 @@ bool DisassemblerWin32<Traits>::ParseHeader() {
     return false;
   }
 
-  base_relocation_table_ = ReadDataDirectory<Traits>(
-      optional_header, pe::kIndexOfBaseRelocationTable);
-  if (!base_relocation_table_)
+  auto data_dirs =
+      base::span(optional_header->data_directory).first(num_data_dir);
+  if (data_dirs.size() <= pe::kIndexOfBaseRelocationTable) {
     return false;
+  }
+  base_relocation_table_ = data_dirs.get_at(pe::kIndexOfBaseRelocationTable);
 
   image_base_ = optional_header->image_base;
 
@@ -236,21 +229,21 @@ bool DisassemblerWin32<Traits>::ParseHeader() {
       base::checked_cast<offset_t>(source.begin() - image_.begin());
 
   // Extract |sections_|.
-  size_t sections_count = coff_header->number_of_sections;
-  auto* sections_array =
-      source.GetArray<pe::ImageSectionHeader>(sections_count);
-  if (!sections_array)
+  auto sections =
+      source.GetArray<pe::ImageSectionHeader>(coff_header->number_of_sections);
+  if (sections.empty()) {
     return false;
-  sections_.assign(sections_array, sections_array + sections_count);
+  }
+  sections_.assign_range(sections);
 
   // Prepare |units| for offset-RVA translation.
   std::vector<AddressTranslator::Unit> units;
-  units.reserve(sections_count);
+  units.reserve(sections_.size());
 
   // Visit each section, validate, and add address translation data to |units|.
   bool has_text_section = false;
   decltype(pe::ImageSectionHeader::virtual_address) prev_virtual_address = 0;
-  for (size_t i = 0; i < sections_count; ++i) {
+  for (size_t i = 0; i < sections_.size(); ++i) {
     const pe::ImageSectionHeader& section = sections_[i];
     // Apply strict checks on section bounds.
     if (!image_.covers(
@@ -297,8 +290,8 @@ bool DisassemblerWin32<Traits>::ParseHeader() {
   return true;
 }
 
-template <class Traits>
-bool DisassemblerWin32<Traits>::ParseAndStoreRelocBlocks() {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::ParseAndStoreRelocBlocks() {
   if (has_parsed_relocs_)
     return reloc_region_.lo() != kInvalidOffset;
 
@@ -324,8 +317,8 @@ bool DisassemblerWin32<Traits>::ParseAndStoreRelocBlocks() {
   return true;
 }
 
-template <class Traits>
-bool DisassemblerWin32<Traits>::ParseAndStoreAbs32() {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::ParseAndStoreAbs32() {
   if (has_parsed_abs32_)
     return true;
   has_parsed_abs32_ = true;
@@ -355,8 +348,8 @@ bool DisassemblerWin32<Traits>::ParseAndStoreAbs32() {
   return true;
 }
 
-template <class Traits>
-bool DisassemblerWin32<Traits>::ParseAndStoreRel32() {
+template <class TRAITS>
+bool DisassemblerWin32<TRAITS>::ParseAndStoreRel32() {
   if (has_parsed_rel32_)
     return true;
   has_parsed_rel32_ = true;

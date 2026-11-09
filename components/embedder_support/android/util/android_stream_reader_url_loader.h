@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,20 @@
 #define COMPONENTS_EMBEDDER_SUPPORT_ANDROID_UTIL_ANDROID_STREAM_READER_URL_LOADER_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "base/threading/thread_checker.h"
+#include "base/time/time.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "mojo/public/cpp/bindings/remote.h"
 #include "mojo/public/cpp/system/simple_watcher.h"
 #include "net/http/http_byte_range.h"
 #include "services/network/public/cpp/net_adapters.h"
+#include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "services/network/public/mojom/url_response_head.mojom.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 namespace embedder_support {
 class InputStream;
@@ -37,7 +39,7 @@ class AndroidStreamReaderURLLoader : public network::mojom::URLLoader {
   // Delegate abstraction for obtaining input streams.
   class ResponseDelegate {
    public:
-    virtual ~ResponseDelegate() {}
+    virtual ~ResponseDelegate() = default;
 
     // This method is called from a worker thread, not from the IO thread.
     virtual std::unique_ptr<embedder_support::InputStream> OpenInputStream(
@@ -83,26 +85,39 @@ class AndroidStreamReaderURLLoader : public network::mojom::URLLoader {
     bool allow_cors_to_same_scheme = false;
   };
 
+  // Delegate that ensures that the provided `value` is set as a Set-Cookie
+  // response to the given `request`.
+  using SetCookieHeader = base::RepeatingCallback<void(
+      const network::ResourceRequest& request,
+      std::string_view value,
+      const std::optional<base::Time>& server_time)>;
+
   AndroidStreamReaderURLLoader(
       const network::ResourceRequest& resource_request,
       mojo::PendingRemote<network::mojom::URLLoaderClient> client,
       const net::MutableNetworkTrafficAnnotationTag& traffic_annotation,
       std::unique_ptr<ResponseDelegate> response_delegate,
-      absl::optional<SecurityOptions> security_options);
+      std::optional<SecurityOptions> security_options,
+      std::optional<SetCookieHeader> set_cookie_header = std::nullopt);
+
+  AndroidStreamReaderURLLoader(const AndroidStreamReaderURLLoader&) = delete;
+  AndroidStreamReaderURLLoader& operator=(const AndroidStreamReaderURLLoader&) =
+      delete;
+
   ~AndroidStreamReaderURLLoader() override;
 
-  void Start();
+  void Start(std::unique_ptr<InputStream> input_stream);
 
   // network::mojom::URLLoader overrides:
   void FollowRedirect(
-      const std::vector<std::string>& removed_headers,
-      const net::HttpRequestHeaders& modified_headers,
-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
-      const absl::optional<GURL>& new_url) override;
+      network::HttpRequestHeadersUpdateParams headers_update_params,
+      const std::optional<GURL>& new_url) override;
   void SetPriority(net::RequestPriority priority,
                    int intra_priority_value) override;
-  void PauseReadingBodyFromNet() override;
-  void ResumeReadingBodyFromNet() override;
+
+  network::ResourceRequest* ResourceRequestForTesting() {
+    return &resource_request_;
+  }
 
  private:
   bool ParseRange(const net::HttpRequestHeaders& headers);
@@ -127,6 +142,11 @@ class AndroidStreamReaderURLLoader : public network::mojom::URLLoader {
   // Reads some bytes from the stream. Calls |DidRead| after each read (also, in
   // the case where it fails to read due to an error).
   void ReadMore();
+  // The Set-Cookie header can't be sent over IPC. Because this stream reader
+  // bypasses the network stack, the Set-Cookie is ignored entirely.
+  // This is called before sending the response to give the embedder
+  // an opportunity to save headers.
+  void SetCookies();
   // Send response headers and the data pipe consumer handle (for the body) to
   // the URLLoaderClient. Requires |consumer_handle_| to be valid, and will make
   // |consumer_handle_| invalid after running.
@@ -152,11 +172,10 @@ class AndroidStreamReaderURLLoader : public network::mojom::URLLoader {
   mojo::ScopedDataPipeProducerHandle producer_handle_;
   scoped_refptr<network::NetToMojoPendingBuffer> pending_buffer_;
   mojo::SimpleWatcher writable_handle_watcher_;
+  std::optional<SetCookieHeader> set_cookie_header_;
   base::ThreadChecker thread_checker_;
 
   base::WeakPtrFactory<AndroidStreamReaderURLLoader> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(AndroidStreamReaderURLLoader);
 };
 
 }  // namespace embedder_support

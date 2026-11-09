@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -48,9 +48,6 @@ class CORE_EXPORT CSSPositionValue final : public CSSStyleValue {
     visitor->Trace(y_);
     CSSStyleValue::Trace(visitor);
   }
-
- private:
-  static bool IsValidCoordinate(CSSNumericValue* coord);
 
  protected:
   Member<CSSNumericValue> x_;

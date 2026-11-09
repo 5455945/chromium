@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,11 +6,11 @@
 #define CHROME_BROWSER_UI_VIEWS_STATUS_BUBBLE_VIEWS_BROWSERTEST_MAC_H_
 
 #include "build/build_config.h"
-#include "ui/gfx/native_widget_types.h"
+#include "ui/gfx/native_ui_types.h"
 
 namespace test {
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 // Returns [window alphaValue]. Widget doesn't offer a GetOpacity(), only
 // SetOpacity(). Currently this is only defined for Mac. Obtaining this for
 // other platforms is convoluted.

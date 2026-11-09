@@ -34,7 +34,9 @@
 #include <memory>
 #include <utility>
 
+#include "base/compiler_specific.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/stack_allocated.h"
 #include "third_party/blink/renderer/platform/platform_export.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
@@ -46,14 +48,9 @@
 
 namespace blink {
 
-class JSONValue;
-
-}  // namespace blink
-
-namespace blink {
-
 class JSONArray;
 class JSONObject;
+class JSONValue;
 
 class PLATFORM_EXPORT JSONValue {
   USING_FAST_MALLOC(JSONValue);
@@ -94,7 +91,7 @@ class PLATFORM_EXPORT JSONValue {
   virtual void PrettyWriteJSON(StringBuilder* output) const;
   virtual std::unique_ptr<JSONValue> Clone() const;
 
-  static String QuoteString(const String&);
+  static String QuoteString(const StringView&);
 
  protected:
   JSONValue() : type_(kTypeNull) {}
@@ -152,13 +149,13 @@ class PLATFORM_EXPORT JSONObject : public JSONValue {
 
   JSONObject();
 
-  static JSONObject* Cast(JSONValue* value) {
+  static JSONObject* Cast(JSONValue* value LIFETIME_BOUND) {
     if (!value || value->GetType() != kTypeObject)
       return nullptr;
     return static_cast<JSONObject*>(value);
   }
 
-  static const JSONObject* Cast(const JSONValue* value) {
+  static const JSONObject* Cast(const JSONValue* value LIFETIME_BOUND) {
     if (!value || value->GetType() != kTypeObject)
       return nullptr;
     return static_cast<const JSONObject*>(value);
@@ -179,13 +176,14 @@ class PLATFORM_EXPORT JSONObject : public JSONValue {
 
   wtf_size_t size() const { return data_.size(); }
 
-  void SetBoolean(const String& name, bool);
-  void SetInteger(const String& name, int);
-  void SetDouble(const String& name, double);
-  void SetString(const String& name, const String&);
-  void SetValue(const String& name, std::unique_ptr<JSONValue>);
-  void SetObject(const String& name, std::unique_ptr<JSONObject>);
-  void SetArray(const String& name, std::unique_ptr<JSONArray>);
+  // Return true if the key was newly added (it did not already exist).
+  bool SetBoolean(const String& name, bool);
+  bool SetInteger(const String& name, int);
+  bool SetDouble(const String& name, double);
+  bool SetString(const String& name, const String&);
+  bool SetValue(const String& name, std::unique_ptr<JSONValue>);
+  bool SetObject(const String& name, std::unique_ptr<JSONObject>);
+  bool SetArray(const String& name, std::unique_ptr<JSONArray>);
 
   bool GetBoolean(const String& name, bool* output) const;
   bool GetInteger(const String& name, int* output) const;
@@ -194,10 +192,10 @@ class PLATFORM_EXPORT JSONObject : public JSONValue {
 
   // This function is not "GetObject" in order to avoid replacement by
   // windows.h.
-  JSONObject* GetJSONObject(const String& name) const;
-  JSONArray* GetArray(const String& name) const;
-  JSONValue* Get(const String& name) const;
-  Entry at(wtf_size_t index) const;
+  JSONObject* GetJSONObject(const String& name) const LIFETIME_BOUND;
+  JSONArray* GetArray(const String& name) const LIFETIME_BOUND;
+  JSONValue* Get(const String& name) const LIFETIME_BOUND;
+  Entry at(wtf_size_t index) const LIFETIME_BOUND;
 
   bool BooleanProperty(const String& name, bool default_value) const;
   int IntegerProperty(const String& name, int default_value) const;
@@ -211,10 +209,13 @@ class PLATFORM_EXPORT JSONObject : public JSONValue {
 
  private:
   template <typename T>
-  void Set(const String& key, std::unique_ptr<T>& value) {
+  bool Set(const String& key, std::unique_ptr<T>& value) {
     DCHECK(value);
-    if (data_.Set(key, std::move(value)).is_new_entry)
+    if (data_.Set(key, std::move(value)).is_new_entry) {
       order_.push_back(key);
+      return true;
+    }
+    return false;
   }
 
   using Dictionary = HashMap<String, std::unique_ptr<JSONValue>>;
@@ -224,11 +225,16 @@ class PLATFORM_EXPORT JSONObject : public JSONValue {
 
 class PLATFORM_EXPORT JSONArray : public JSONValue {
  public:
-
-  static JSONArray* Cast(JSONValue* value) {
+  static JSONArray* Cast(JSONValue* value LIFETIME_BOUND) {
     if (!value || value->GetType() != kTypeArray)
       return nullptr;
     return static_cast<JSONArray*>(value);
+  }
+
+  static const JSONArray* Cast(const JSONValue* value LIFETIME_BOUND) {
+    if (!value || value->GetType() != kTypeArray)
+      return nullptr;
+    return static_cast<const JSONArray*>(value);
   }
 
   static std::unique_ptr<JSONArray> From(std::unique_ptr<JSONValue> value) {
@@ -255,8 +261,43 @@ class PLATFORM_EXPORT JSONArray : public JSONValue {
   void PushObject(std::unique_ptr<JSONObject>);
   void PushArray(std::unique_ptr<JSONArray>);
 
-  JSONValue* at(wtf_size_t index) const;
+  JSONValue* at(wtf_size_t index) const LIFETIME_BOUND;
   wtf_size_t size() const { return data_.size(); }
+
+  class ConstIterator {
+    STACK_ALLOCATED();
+
+   public:
+    explicit ConstIterator(const JSONArray* value)
+        : value_(value), index_(value_ && value_->size() > 0 ? 0 : kNotFound) {}
+
+    static ConstIterator End() { return ConstIterator(nullptr); }
+
+    bool operator==(const ConstIterator& other) const {
+      DCHECK(!value_ || !other.value_ || value_ == other.value_);
+      return index_ == other.index_;
+    }
+
+    ConstIterator& operator++() {
+      if (index_ == kNotFound || !value_) {
+        return *this;
+      }
+      index_++;
+      if (index_ >= value_->size()) {
+        index_ = kNotFound;
+      }
+      return *this;
+    }
+
+    const JSONValue& operator*() const { return *value_->at(index_); }
+
+   private:
+    const JSONArray* value_;
+    wtf_size_t index_;
+  };
+
+  ConstIterator begin() const { return ConstIterator(this); }
+  ConstIterator end() const { return ConstIterator::End(); }
 
  protected:
   void PrettyWriteJSONInternal(StringBuilder* output, int depth) const override;
@@ -265,12 +306,12 @@ class PLATFORM_EXPORT JSONArray : public JSONValue {
   Vector<std::unique_ptr<JSONValue>> data_;
 };
 
-extern const char kJSONNullString[];
-extern const char kJSONTrueString[];
-extern const char kJSONFalseString[];
+inline constexpr char kJSONNullString[] = "null";
+inline constexpr char kJSONTrueString[] = "true";
+inline constexpr char kJSONFalseString[] = "false";
 
-PLATFORM_EXPORT void EscapeStringForJSON(const String&, StringBuilder*);
-void DoubleQuoteStringForJSON(const String&, StringBuilder*);
+PLATFORM_EXPORT void EscapeStringForJSON(const StringView&, StringBuilder*);
+void DoubleQuoteStringForJSON(const StringView&, StringBuilder*);
 
 }  // namespace blink
 

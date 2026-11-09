@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,8 @@
 
 #include <memory>
 
-#include "base/macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "components/ntp_tiles/custom_links_pref_names.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -33,11 +33,12 @@ class CustomLinksStoreTest : public testing::Test {
     CustomLinksStore::RegisterProfilePrefs(prefs_.registry());
   }
 
+  CustomLinksStoreTest(const CustomLinksStoreTest&) = delete;
+  CustomLinksStoreTest& operator=(const CustomLinksStoreTest&) = delete;
+
  protected:
   sync_preferences::TestingPrefServiceSyncable prefs_;
   std::unique_ptr<CustomLinksStore> custom_links_store_;
-
-  DISALLOW_COPY_AND_ASSIGN(CustomLinksStoreTest);
 };
 
 TEST_F(CustomLinksStoreTest, StoreAndRetrieveLinks) {
@@ -94,6 +95,56 @@ TEST_F(CustomLinksStoreTest, LinksSavedAfterShutdown) {
   custom_links_store_ = std::make_unique<CustomLinksStore>(&prefs_);
   retrieved_links = custom_links_store_->RetrieveLinks();
   EXPECT_EQ(initial_links, retrieved_links);
+}
+
+TEST_F(CustomLinksStoreTest, MobileScopeUsesMobilePrefKey) {
+  auto mobile_store =
+      std::make_unique<CustomLinksStore>(&prefs_, CustomLinksScope::kMobile);
+
+  std::vector<CustomLinksManager::Link> links(
+      {CustomLinksManager::Link{GURL(kTestUrl1), kTestTitle1, true}});
+
+  // Store links using mobile store.
+  mobile_store->StoreLinks(links);
+
+  // Verify data is in the mobile pref key.
+  EXPECT_FALSE(prefs_.GetList(prefs::kCustomLinksListMobile).empty());
+
+  // Verify desktop pref key is unaffected.
+  EXPECT_TRUE(prefs_.GetList(prefs::kCustomLinksList).empty());
+
+  // Retrieve from mobile store should return the links.
+  std::vector<CustomLinksManager::Link> retrieved =
+      mobile_store->RetrieveLinks();
+  EXPECT_EQ(links, retrieved);
+}
+
+TEST_F(CustomLinksStoreTest, DesktopAndMobilePrefsAreIsolated) {
+  // |custom_links_store_| is the fixture's default-scope (desktop) store.
+  auto mobile_store =
+      std::make_unique<CustomLinksStore>(&prefs_, CustomLinksScope::kMobile);
+
+  std::vector<CustomLinksManager::Link> desktop_links(
+      {CustomLinksManager::Link{GURL(kTestUrl1), kTestTitle1, true}});
+  std::vector<CustomLinksManager::Link> mobile_links(
+      {CustomLinksManager::Link{GURL(kTestUrl2), kTestTitle2, false}});
+
+  // Store different links in each store.
+  custom_links_store_->StoreLinks(desktop_links);
+  mobile_store->StoreLinks(mobile_links);
+
+  // Each store should only see its own links.
+  EXPECT_EQ(desktop_links, custom_links_store_->RetrieveLinks());
+  EXPECT_EQ(mobile_links, mobile_store->RetrieveLinks());
+}
+
+TEST_F(CustomLinksStoreTest, DefaultScopeUsesDesktopPrefKey) {
+  // Callers that omit the scope get the desktop storage domain.
+  CustomLinksStore default_store(&prefs_);
+  EXPECT_STREQ(prefs::kCustomLinksList, default_store.list_pref_name());
+
+  CustomLinksStore mobile_store(&prefs_, CustomLinksScope::kMobile);
+  EXPECT_STREQ(prefs::kCustomLinksListMobile, mobile_store.list_pref_name());
 }
 
 }  // namespace ntp_tiles

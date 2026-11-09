@@ -1,10 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_CAST_MESSAGE_PORT_CAST_MESSAGE_PORT_CAST_H_
 #define COMPONENTS_CAST_MESSAGE_PORT_CAST_MESSAGE_PORT_CAST_H_
 
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
 #include "components/cast/message_port/message_port.h"
 #include "third_party/blink/public/common/messaging/web_message_port.h"
 
@@ -41,9 +44,9 @@ class MessagePortCast : public cast_api_bindings::MessagePort,
 
  private:
   // cast_api_bindings::MessagePort implementation
-  bool PostMessage(base::StringPiece message) final;
+  bool PostMessage(std::string_view message) final;
   bool PostMessageWithTransferables(
-      base::StringPiece message,
+      std::string_view message,
       std::vector<std::unique_ptr<MessagePort>> ports) final;
   void SetReceiver(cast_api_bindings::MessagePort::Receiver* receiver) final;
   void Close() final;
@@ -53,7 +56,7 @@ class MessagePortCast : public cast_api_bindings::MessagePort,
   bool OnMessage(blink::WebMessagePort::Message message) final;
   void OnPipeError() final;
 
-  cast_api_bindings::MessagePort::Receiver* receiver_;
+  raw_ptr<cast_api_bindings::MessagePort::Receiver> receiver_;
   blink::WebMessagePort port_;
 };
 

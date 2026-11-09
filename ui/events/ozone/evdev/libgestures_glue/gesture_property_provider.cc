@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,11 +13,13 @@
 #include <algorithm>
 #include <unordered_map>
 
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
+#include "base/containers/fixed_flat_set.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
+#include "base/memory/raw_ptr.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_tokenizer.h"
@@ -37,52 +39,42 @@ GesturesProp::GesturesProp(const std::string& name,
 
 std::vector<int> GesturesProp::GetIntValue() const {
   NOTREACHED();
-  return std::vector<int>();
 }
 
 bool GesturesProp::SetIntValue(const std::vector<int>& value) {
   NOTREACHED();
-  return false;
 }
 
 std::vector<int16_t> GesturesProp::GetShortValue() const {
   NOTREACHED();
-  return std::vector<int16_t>();
 }
 
 bool GesturesProp::SetShortValue(const std::vector<int16_t>& value) {
   NOTREACHED();
-  return false;
 }
 
 std::vector<bool> GesturesProp::GetBoolValue() const {
   NOTREACHED();
-  return std::vector<bool>();
 }
 
 bool GesturesProp::SetBoolValue(const std::vector<bool>& value) {
   NOTREACHED();
-  return false;
 }
 
 std::string GesturesProp::GetStringValue() const {
   NOTREACHED();
-  return std::string();
 }
 
 bool GesturesProp::SetStringValue(const std::string& value) {
   NOTREACHED();
-  return false;
 }
 
 std::vector<double> GesturesProp::GetDoubleValue() const {
   NOTREACHED();
-  return std::vector<double>();
 }
 
 bool GesturesProp::SetDoubleValue(const std::vector<double>& value) {
   NOTREACHED();
-  return false;
 }
 
 void GesturesProp::SetHandlers(GesturesPropGetHandler get,
@@ -110,12 +102,10 @@ void GesturesProp::OnSet() const {
 
 const char** GesturesProp::GetStringWritebackPtr() const {
   NOTREACHED();
-  return NULL;
 }
 
 bool GesturesProp::IsAllocated() const {
   NOTREACHED();
-  return false;
 }
 
 // Type-templated GesturesProp.
@@ -149,7 +139,7 @@ class TypedGesturesProp : public GesturesProp {
   std::vector<U> GetNumericalPropertyValue() const {
     // Nothing should be modified so it is OK to call the get handler first.
     OnGet();
-    return this->template GetNumericalValue<U>();
+    return this->GetNumericalValue<U>();
   }
 
   template <typename U>
@@ -162,7 +152,7 @@ class TypedGesturesProp : public GesturesProp {
     // value of different size?).
     if (is_read_only_ || value.size() != count())
       return false;
-    bool ret = this->template SetNumericalValue(value);
+    bool ret = this->SetNumericalValue(value);
     OnSet();
     return ret;
   }
@@ -173,17 +163,17 @@ class TypedGesturesProp : public GesturesProp {
                                    const GesturesProp* default_property) {
     if (IsDefaultPropertyUsable(default_property)) {
       DVLOG(2) << "Default property found. Using its value ...";
-      this->template SetNumericalValue(default_property->GetDoubleValue());
+      this->SetNumericalValue(default_property->GetDoubleValue());
     } else {
       // To work with the interface exposed by the gesture lib, we have no
       // choice but to trust that the init array has sufficient size.
-      std::vector<T> temp(init, init + count());
-      this->template SetNumericalValue(temp);
+      std::vector<T> temp(init, UNSAFE_TODO(init + count()));
+      this->SetNumericalValue(temp);
     }
   }
 
   // Data pointer.
-  T* value_;
+  raw_ptr<T, AllowPtrArithmetic> value_;
 
   // If the flag is on, it means the GesturesProp is created by passing a NULL
   // data pointer to the creator functions. We define the property as a
@@ -212,15 +202,17 @@ class TypedGesturesProp : public GesturesProp {
     // as double because we can't identify their original type lexically.
     // TODO(sheckylin): Handle value out-of-range (e.g., double to int).
     std::vector<U> result(count());
-    for (size_t i = 0; i < count(); ++i)
-      result[i] = static_cast<U>(value_[i]);
+    for (size_t i = 0; i < count(); ++i) {
+      UNSAFE_TODO(result[i] = static_cast<U>(value_[i]));
+    }
     return result;
   }
 
   template <typename U>
   bool SetNumericalValue(const std::vector<U>& value) {
-    for (size_t i = 0; i < count(); ++i)
-      value_[i] = static_cast<T>(value[i]);
+    for (size_t i = 0; i < count(); ++i) {
+      UNSAFE_TODO(value_[i] = static_cast<T>(value[i]));
+    }
     return true;
   }
 
@@ -253,10 +245,10 @@ class GesturesIntProp : public TypedGesturesProp<int> {
     InitializeNumericalProperty(init, default_property);
   }
   std::vector<int> GetIntValue() const override {
-    return this->template GetNumericalPropertyValue<int>();
+    return this->GetNumericalPropertyValue<int>();
   }
   bool SetIntValue(const std::vector<int>& value) override {
-    return this->template SetNumericalPropertyValue(value);
+    return this->SetNumericalPropertyValue(value);
   }
 };
 
@@ -271,10 +263,10 @@ class GesturesShortProp : public TypedGesturesProp<short> {
     InitializeNumericalProperty(init, default_property);
   }
   std::vector<int16_t> GetShortValue() const override {
-    return this->template GetNumericalPropertyValue<int16_t>();
+    return this->GetNumericalPropertyValue<int16_t>();
   }
   bool SetShortValue(const std::vector<int16_t>& value) override {
-    return this->template SetNumericalPropertyValue(value);
+    return this->SetNumericalPropertyValue(value);
   }
 };
 
@@ -292,10 +284,10 @@ class GesturesBoolProp : public TypedGesturesProp<GesturesPropBool> {
     InitializeNumericalProperty(init, default_property);
   }
   std::vector<bool> GetBoolValue() const override {
-    return this->template GetNumericalPropertyValue<bool>();
+    return this->GetNumericalPropertyValue<bool>();
   }
   bool SetBoolValue(const std::vector<bool>& value) override {
-    return this->template SetNumericalPropertyValue(value);
+    return this->SetNumericalPropertyValue(value);
   }
 };
 
@@ -310,10 +302,10 @@ class GesturesDoubleProp : public TypedGesturesProp<double> {
     InitializeNumericalProperty(init, default_property);
   }
   std::vector<double> GetDoubleValue() const override {
-    return this->template GetNumericalPropertyValue<double>();
+    return this->GetNumericalPropertyValue<double>();
   }
   bool SetDoubleValue(const std::vector<double>& value) override {
-    return this->template SetNumericalPropertyValue(value);
+    return this->SetNumericalPropertyValue(value);
   }
 };
 
@@ -328,8 +320,11 @@ class GesturesStringProp : public TypedGesturesProp<std::string> {
                      const char** value,
                      const char* init,
                      const GesturesProp* default_property)
-      : TypedGesturesProp<std::string>(name, PropertyType::PT_STRING, 1, NULL),
-        write_back_(NULL) {
+      : TypedGesturesProp<std::string>(name,
+                                       PropertyType::PT_STRING,
+                                       1,
+                                       nullptr),
+        write_back_(nullptr) {
     InitializeStringProperty(value, init, default_property);
   }
   std::string GetStringValue() const override {
@@ -389,7 +384,7 @@ class GesturesStringProp : public TypedGesturesProp<std::string> {
   // the case of string). We thus need to store the write back pointer so that
   // we can update the value in the gesture lib if the property value gets
   // changed.
-  const char** write_back_;
+  raw_ptr<const char*> write_back_;
 };
 
 // Anonymous namespace for utility functions and internal constants.
@@ -398,29 +393,9 @@ namespace {
 // The path that we will look for conf files.
 const char kConfigurationFilePath[] = "/etc/gesture";
 
-// We support only match types that have already been used. One should change
-// this if we start using new types in the future. Note that most unsupported
-// match types are either useless in CrOS or inapplicable to the non-X
-// environment.
-const char* kSupportedMatchTypes[] = {"MatchProduct",
-                                      "MatchDevicePath",
-                                      "MatchUSBID",
-                                      "MatchIsPointer",
-                                      "MatchIsTouchpad",
-                                      "MatchIsTouchscreen"};
-const char* kUnsupportedMatchTypes[] = {"MatchVendor",
-                                        "MatchOS",
-                                        "MatchPnPID",
-                                        "MatchDriver",
-                                        "MatchTag",
-                                        "MatchLayout",
-                                        "MatchIsKeyboard",
-                                        "MatchIsJoystick",
-                                        "MatchIsTablet"};
-
 // Special keywords for boolean values.
-const char* kTrue[] = {"on", "true", "yes"};
-const char* kFalse[] = {"off", "false", "no"};
+constexpr const char* kTrue[] = {"on", "true", "yes"};
+constexpr const char* kFalse[] = {"off", "false", "no"};
 
 // Check if a device falls into one device type category.
 bool IsDeviceOfType(const ui::GesturePropertyProvider::DevicePtr device,
@@ -479,36 +454,49 @@ std::string GetDeviceNodePath(
   return path.value();
 }
 
-// Check if a match criteria is currently implemented. Note that we didn't
-// implemented all of them as some are inapplicable in the non-X world.
 bool IsMatchTypeSupported(const std::string& match_type) {
-  for (size_t i = 0; i < base::size(kSupportedMatchTypes); ++i)
-    if (match_type == kSupportedMatchTypes[i])
-      return true;
-  for (size_t i = 0; i < base::size(kUnsupportedMatchTypes); ++i) {
-    if (match_type == kUnsupportedMatchTypes[i]) {
-      LOG(ERROR) << "Unsupported gestures input class match type: "
-                 << match_type;
-      return false;
-    }
+  // Check if a match criteria is currently implemented. We support only match
+  // types that have already been used. One should change this if we start using
+  // new types in the future. Note that most unsupported match types are either
+  // useless in CrOS or inapplicable to the non-X environment.
+  constexpr auto kSupportedMatchTypes =
+      base::MakeFixedFlatSet<std::string_view>(
+          {"MatchProduct", "MatchDevicePath", "MatchUSBID", "MatchDMIProduct",
+           "MatchIsPointer", "MatchIsTouchpad", "MatchIsTouchscreen"});
+  constexpr auto kUnsupportedMatchTypes =
+      base::MakeFixedFlatSet<std::string_view>(
+          {"MatchVendor", "MatchOS", "MatchPnPID", "MatchDriver", "MatchTag",
+           "MatchLayout", "MatchIsKeyboard", "MatchIsJoystick",
+           "MatchIsTablet"});
+
+  if (kSupportedMatchTypes.contains(match_type)) {
+    return true;
   }
+
+  if (kUnsupportedMatchTypes.contains(match_type)) {
+    LOG(ERROR) << "Unsupported gestures input class match type: " << match_type;
+    return false;
+  }
+
   return false;
 }
 
 // Check if a match criteria is a device type one.
 bool IsMatchDeviceType(const std::string& match_type) {
-  return base::StartsWith(match_type, "MatchIs", base::CompareCase::SENSITIVE);
+  return match_type.starts_with("MatchIs");
 }
 
 // Parse a boolean value keyword (e.g., on/off, true/false).
 int ParseBooleanKeyword(const std::string& value) {
-  for (size_t i = 0; i < base::size(kTrue); ++i) {
-    if (base::LowerCaseEqualsASCII(value, kTrue[i]))
+  for (const char* keyword : kTrue) {
+    if (base::EqualsCaseInsensitiveASCII(value, keyword)) {
       return 1;
+    }
   }
-  for (size_t i = 0; i < base::size(kFalse); ++i) {
-    if (base::LowerCaseEqualsASCII(value, kFalse[i]))
+  for (const char* keyword : kFalse) {
+    if (base::EqualsCaseInsensitiveASCII(value, keyword)) {
       return -1;
+    }
   }
   return 0;
 }
@@ -541,7 +529,6 @@ std::ostream& operator<<(std::ostream& out,
     TYPE_CASE(PT_REAL);
     default:
       NOTREACHED();
-      break;
   }
 #undef TYPE_CASE
   return out << s;
@@ -589,9 +576,7 @@ std::ostream& operator<<(std::ostream& os, const GesturesProp& prop) {
       LogArrayProperty(os, property->GetDoubleValue());
       break;
     default:
-      LOG(ERROR) << "Unknown gesture property type: " << property->type();
-      NOTREACHED();
-      break;
+      NOTREACHED() << "Unknown gesture property type: " << property->type();
   }
   return os;
 }
@@ -653,6 +638,23 @@ class MatchUSBID : public MatchCriteria {
   bool IsValidPattern(const std::string& pattern);
   std::vector<std::string> vid_patterns_;
   std::vector<std::string> pid_patterns_;
+};
+
+// Match a device based on the system's DMI Product Name. Useful for internal
+// devices that don't report a very unique vendor and product ID.
+class MatchDmiProduct : public MatchCriteria {
+ public:
+  // Setting load_error to true indicates that the product name couldn't be
+  // loaded, producing a matcher that will never match.
+  explicit MatchDmiProduct(const std::string& dmi_product_name,
+                           const std::string& arg,
+                           bool load_error = false);
+  ~MatchDmiProduct() override {}
+  bool Match(const DevicePtr device) override;
+
+ private:
+  std::string dmi_product_name_;
+  bool load_error_;
 };
 
 // Generic base class for device type math criteria.
@@ -785,6 +787,28 @@ bool MatchUSBID::IsValidPattern(const std::string& pattern) {
          (pos_of_colon != pattern.size() - 1);
 }
 
+MatchDmiProduct::MatchDmiProduct(const std::string& dmi_product_name,
+                                 const std::string& arg,
+                                 bool load_error)
+    : MatchCriteria(arg),
+      dmi_product_name_(dmi_product_name),
+      load_error_(load_error) {}
+
+bool MatchDmiProduct::Match(const DevicePtr device) {
+  // Default value of a match criteria is true.
+  if (args_.empty())
+    return true;
+
+  if (load_error_)
+    return false;
+
+  for (size_t i = 0; i < args_.size(); ++i) {
+    if (dmi_product_name_ == args_[i])
+      return true;
+  }
+  return false;
+}
+
 MatchDeviceType::MatchDeviceType(const std::string& arg)
     : MatchCriteria(arg), value_(true), is_valid_(false) {
   // Default value of a match criteria is true.
@@ -844,6 +868,9 @@ bool ConfigurationSection::Match(DevicePtr device) {
 
 }  // namespace internal
 
+GestureDeviceProperties::GestureDeviceProperties() = default;
+GestureDeviceProperties::~GestureDeviceProperties() = default;
+
 GesturePropertyProvider::GesturePropertyProvider() {
   LoadDeviceConfigurations();
 }
@@ -890,9 +917,8 @@ std::vector<std::string> GesturePropertyProvider::GetPropertyNamesById(
 
   // Dump all property names of the device.
   std::vector<std::string> names;
-  for (auto it = device_data->properties.begin();
-       it != device_data->properties.end(); ++it)
-    names.push_back(it->first);
+  for (const auto& pair : device_data->properties)
+    names.push_back(pair.first);
   return names;
 }
 
@@ -1182,6 +1208,14 @@ GesturePropertyProvider::CreateMatchCriteria(const std::string& match_type,
     return std::make_unique<internal::MatchDevicePath>(arg);
   if (match_type == "MatchUSBID")
     return std::make_unique<internal::MatchUSBID>(arg);
+  if (match_type == "MatchDMIProduct") {
+    if (!dmi_product_name_loaded_ && !LoadDmiProductName()) {
+      // Avoid matching all MatchDMIProduct configs on machines with bad DMI
+      // info, by returning a matcher that will never match.
+      return std::make_unique<internal::MatchDmiProduct>("", arg, true);
+    }
+    return std::make_unique<internal::MatchDmiProduct>(dmi_product_name_, arg);
+  }
   if (match_type == "MatchIsPointer")
     return std::make_unique<internal::MatchIsPointer>(arg);
   if (match_type == "MatchIsTouchpad")
@@ -1189,7 +1223,20 @@ GesturePropertyProvider::CreateMatchCriteria(const std::string& match_type,
   if (match_type == "MatchIsTouchscreen")
     return std::make_unique<internal::MatchIsTouchscreen>(arg);
   NOTREACHED();
-  return NULL;
+}
+
+bool GesturePropertyProvider::LoadDmiProductName() {
+  const auto path = base::FilePath("/sys/class/dmi/id/product_name");
+
+  if (!base::ReadFileToString(path, &dmi_product_name_)) {
+    LOG(WARNING) << "Unable to read the DMI product_name.";
+    return false;
+  }
+
+  base::TrimWhitespaceASCII(dmi_product_name_, base::TRIM_ALL,
+                            &dmi_product_name_);
+  dmi_product_name_loaded_ = true;
+  return true;
 }
 
 std::unique_ptr<GesturesProp> GesturePropertyProvider::CreateDefaultProperty(
@@ -1240,10 +1287,11 @@ std::unique_ptr<GesturesProp> GesturePropertyProvider::CreateDefaultProperty(
   // number and may contain numbers only.
   std::unique_ptr<GesturesProp> property;
   if (is_all_numeric && numbers.size()) {
-    property.reset(new GesturesDoubleProp(name, numbers.size(), NULL,
-                                          numbers.data(), NULL));
+    property.reset(new GesturesDoubleProp(name, numbers.size(), nullptr,
+                                          numbers.data(), nullptr));
   } else {
-    property.reset(new GesturesStringProp(name, NULL, value.c_str(), NULL));
+    property.reset(
+        new GesturesStringProp(name, nullptr, value.c_str(), nullptr));
   }
 
   DVLOG(2) << "Prop: " << *property;
@@ -1313,9 +1361,9 @@ GesturesProp* GesturesPropFunctionsWrapper::CreateString(void* device_data,
                                                          const char* name,
                                                          const char** value,
                                                          const char* init) {
-  GesturesProp* default_property = NULL;
+  GesturesProp* default_property = nullptr;
   if (!PreCreateProperty(device_data, name, &default_property))
-    return NULL;
+    return nullptr;
   GesturesProp* property =
       new GesturesStringProp(name, value, init, default_property);
   PostCreateProperty(device_data, name, base::WrapUnique(property));
@@ -1357,12 +1405,12 @@ bool GesturesPropFunctionsWrapper::InitializeDeviceProperties(
   /* Create Device Properties */
 
   // Read Only properties.
-  CreateString(
-      device_data, "Device Node", NULL, GetDeviceNodePath(device).c_str());
+  CreateString(device_data, "Device Node", nullptr,
+               GetDeviceNodePath(device).c_str());
   short vid = static_cast<short>(device->info.id.vendor);
-  CreateShort(device_data, "Device Vendor ID", NULL, 1, &vid);
+  CreateShort(device_data, "Device Vendor ID", nullptr, 1, &vid);
   short pid = static_cast<short>(device->info.id.product);
-  CreateShort(device_data, "Device Product ID", NULL, 1, &pid);
+  CreateShort(device_data, "Device Product ID", nullptr, 1, &pid);
 
   // Useable trackpad area. If not configured in .conf file,
   // use x/y valuator min/max as reported by kernel driver.
@@ -1409,7 +1457,7 @@ bool GesturesPropFunctionsWrapper::InitializeDeviceProperties(
   // set.
   GesturesProp* dump_debug_log_prop = CreateBoolSingle(
       device_data, "Dump Debug Log", &properties->dump_debug_log, false);
-  RegisterHandlers(device_data, dump_debug_log_prop, device, NULL,
+  RegisterHandlers(device_data, dump_debug_log_prop, device, nullptr,
                    DumpTouchEvdevDebugLog);
 
   // Whether to do the gesture recognition or just passing the multi-touch data
@@ -1433,9 +1481,9 @@ GesturesProp* GesturesPropFunctionsWrapper::CreateProperty(void* device_data,
                                                            size_t count,
                                                            const T* init) {
   // Create the property. Use the default property value if possible.
-  GesturesProp* default_property = NULL;
+  GesturesProp* default_property = nullptr;
   if (!PreCreateProperty(device_data, name, &default_property))
-    return NULL;
+    return nullptr;
   GesturesProp* property =
       new PROPTYPE(name, count, value, init, default_property);
 

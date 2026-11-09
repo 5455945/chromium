@@ -1,12 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "third_party/blink/renderer/modules/csspaint/paint_worklet_global_scope_proxy.h"
 
+#include "base/task/single_thread_task_runner.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "third_party/blink/public/mojom/script/script_type.mojom-blink.h"
-#include "third_party/blink/renderer/bindings/core/v8/script_source_code.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_binding_for_core.h"
 #include "third_party/blink/renderer/core/frame/local_dom_window.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
@@ -15,8 +15,10 @@
 #include "third_party/blink/renderer/core/origin_trials/origin_trial_context.h"
 #include "third_party/blink/renderer/core/script/script.h"
 #include "third_party/blink/renderer/core/workers/global_scope_creation_params.h"
+#include "third_party/blink/renderer/core/workers/outside_settings_csp_violation_reporter.h"
 #include "third_party/blink/renderer/core/workers/worklet_module_responses_map.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
+#include "third_party/blink/renderer/platform/wtf/text/format.h"
 #include "third_party/blink/renderer/platform/wtf/wtf.h"
 
 namespace blink {
@@ -34,27 +36,28 @@ PaintWorkletGlobalScopeProxy::PaintWorkletGlobalScopeProxy(
   LocalDOMWindow* window = frame->DomWindow();
   reporting_proxy_ = std::make_unique<MainThreadWorkletReportingProxy>(window);
 
-  String global_scope_name =
-      StringView("PaintWorklet #") + String::Number(global_scope_number);
+  String global_scope_name = Format("PaintWorklet {}", global_scope_number);
 
+  LocalFrameClient* frame_client = frame->Client();
   auto creation_params = std::make_unique<GlobalScopeCreationParams>(
       window->Url(), mojom::blink::ScriptType::kModule, global_scope_name,
-      window->UserAgent(), frame->Client()->UserAgentMetadata(),
-      frame->Client()->CreateWorkerFetchContext(),
+      frame_client->UserAgent(), frame_client->UserAgentMetadata(),
+      frame_client->CreateWorkletFetchContext(),
       mojo::Clone(window->GetContentSecurityPolicy()->GetParsedPolicies()),
+      OutsideSettingsCSPViolationReporter::BindNewRemote(*window),
       window->GetReferrerPolicy(), window->GetSecurityOrigin(),
       window->IsSecureContext(), window->GetHttpsState(),
       nullptr /* worker_clients */,
-      frame->Client()->CreateWorkerContentSettingsClient(),
-      window->AddressSpace(), OriginTrialContext::GetTokens(window).get(),
+      frame_client->CreateWorkerContentSettingsClient(),
+      OriginTrialContext::GetInheritedTrialFeatures(window).get(),
       base::UnguessableToken::Create(), nullptr /* worker_settings */,
       mojom::blink::V8CacheOptions::kDefault, module_responses_map,
       mojo::NullRemote() /* browser_interface_broker */,
-      BeginFrameProviderParams(), nullptr /* parent_permissions_policy */,
-      window->GetAgentClusterID(), ukm::kInvalidSourceId,
-      window->GetExecutionContextToken(),
-      window->CrossOriginIsolatedCapability(),
-      window->DirectSocketCapability());
+      window->GetFrame()->Loader().CreateWorkerCodeCacheHost(),
+      mojo::NullRemote() /* blob_url_store */, BeginFrameProviderParams(),
+      nullptr /* parent_permissions_policy */, window->GetAgentClusterID(),
+      ukm::kInvalidSourceId, window->GetExecutionContextToken(),
+      window->CrossOriginIsolatedCapability(), window->IsIsolatedContext());
   global_scope_ = PaintWorkletGlobalScope::Create(
       frame, std::move(creation_params), *reporting_proxy_);
 }

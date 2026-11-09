@@ -1,4 +1,4 @@
-// Copyright (c) 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -21,7 +21,7 @@ namespace blink {
 // same thread that the stats report callback occurs on without blocking the
 // callback.
 class TestWebRTCStatsReportObtainer
-    : public WTF::ThreadSafeRefCounted<TestWebRTCStatsReportObtainer> {
+    : public ThreadSafeRefCounted<TestWebRTCStatsReportObtainer> {
  public:
   TestWebRTCStatsReportObtainer();
 
@@ -31,7 +31,7 @@ class TestWebRTCStatsReportObtainer
   RTCStatsReportPlatform* WaitForReport();
 
  private:
-  friend class WTF::ThreadSafeRefCounted<TestWebRTCStatsReportObtainer>;
+  friend class ThreadSafeRefCounted<TestWebRTCStatsReportObtainer>;
   friend class CallbackWrapper;
   virtual ~TestWebRTCStatsReportObtainer();
 

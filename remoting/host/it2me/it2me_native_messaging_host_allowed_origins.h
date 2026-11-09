@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 #ifndef REMOTING_HOST_IT2ME_IT2ME_NATIVE_MESSAGING_HOST_ALLOWED_ORIGINS_H_
@@ -9,13 +9,15 @@
 namespace remoting {
 
 // The set of origins which are allowed to instantiate an It2Me host.
-extern const char* const kIt2MeOrigins[];
-
-// The number of entries defined in |kIt2MeOrigins|.
-extern const size_t kIt2MeOriginsSize;
+// LINT.IfChange(it2me_origins)
+inline constexpr const char* kIt2MeOrigins[] = {
+    "chrome-extension://inomeogfingihgjfjlpeplalcfajhgai/",
+    "chrome-extension://pbnaomcgbfiofkfobmlhmdobjchjkphi/"};
+// LINT.ThenChange(/remoting/host/BUILD.gn:extension_ids)
 
 // The name used to register the It2Me native message host.
-extern const char kIt2MeNativeMessageHostName[];
+inline constexpr char kIt2MeNativeMessageHostName[] =
+    "com.google.chrome.remote_assistance";
 
 }  // namespace remoting
 

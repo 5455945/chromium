@@ -1,74 +1,164 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/file_system_access/file_system_access_file_handle_impl.h"
 
-#include "base/feature_list.h"
-#include "base/guid.h"
+#include "base/files/file_error_or.h"
+#include "base/files/file_util.h"
+#include "base/files/safe_base_name.h"
+#include "base/functional/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/stringprintf.h"
+#include "base/task/task_traits.h"
+#include "base/task/thread_pool.h"
+#include "base/uuid.h"
+#include "build/build_config.h"
+#include "components/file_access/scoped_file_access_delegate.h"
+#include "content/browser/blob_storage/chrome_blob_storage_context.h"
+#include "content/browser/file_system_access/features.h"
+#include "content/browser/file_system_access/file_system_access_access_handle_host_impl.h"
 #include "content/browser/file_system_access/file_system_access_error.h"
 #include "content/browser/file_system_access/file_system_access_handle_base.h"
+#include "content/browser/file_system_access/file_system_access_lock_manager.h"
+#include "content/browser/file_system_access/file_system_access_manager_impl.h"
 #include "content/browser/file_system_access/file_system_access_transfer_token_impl.h"
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
-#include "content/public/common/content_features.h"
+#include "content/public/browser/render_frame_host.h"
+#include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "net/base/mime_util.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_impl.h"
 #include "storage/browser/blob/blob_storage_context.h"
+#include "storage/browser/file_system/copy_or_move_hook_delegate.h"
 #include "storage/browser/file_system/file_system_operation_runner.h"
+#include "storage/common/file_system/file_system_types.h"
 #include "third_party/blink/public/mojom/blob/blob.mojom.h"
 #include "third_party/blink/public/mojom/blob/serialized_blob.mojom.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_cloud_identifier.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_error.mojom.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_file_handle.mojom.h"
+#include "third_party/blink/public/mojom/file_system_access/file_system_access_file_modification_host.mojom.h"
 #include "third_party/blink/public/mojom/file_system_access/file_system_access_transfer_token.mojom.h"
+
+#if BUILDFLAG(IS_ANDROID)
+#include "base/strings/string_view_util.h"
+#include "crypto/obsolete/sha1.h"
+#include "base/path_service.h"
+#include "base/strings/string_number_conversions.h"
+#include "content/public/common/content_paths.h"
+#endif
+
+#if BUILDFLAG(IS_WIN)
+#include <windows.h>
+#endif
+
+#if BUILDFLAG(IS_MAC)
+#include <sys/clonefile.h>
+
+#include "base/files/file.h"
+#endif
 
 using blink::mojom::FileSystemAccessStatus;
 using storage::BlobDataHandle;
 using storage::BlobImpl;
 using storage::FileSystemOperation;
 using storage::FileSystemOperationRunner;
-using storage::IsolatedContext;
 
 namespace content {
 
+#if BUILDFLAG(IS_ANDROID)
+// Computes a SHA-1 hash of |url_path_value| and returns it as a hex string.
+// This function is intentionally declared in a separate header file
+// "crypto/obsolete/sha1.h", so as to easily monitor current usage of SHA-1 in
+// Chrome, since SHA-1 is now discouraged for new code.
+std::string GetHashedUrlPath(std::string_view url_path_value) {
+  return base::HexEncode(
+            base::as_string_view(crypto::obsolete::Sha1::Hash(url_path_value)));
+}
+#endif
+
 namespace {
 
-void CreateBlobOnIOThread(
-    scoped_refptr<storage::FileSystemContext> file_system_context,
-    const scoped_refptr<ChromeBlobStorageContext>& blob_context,
-    mojo::PendingReceiver<blink::mojom::Blob> blob_receiver,
-    const storage::FileSystemURL& url,
-    const std::string& blob_uuid,
-    const std::string& content_type,
-    const base::File::Info& info) {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-
-  auto blob_builder = std::make_unique<storage::BlobDataBuilder>(blob_uuid);
-  // Only append if the file has data.
-  if (info.size > 0) {
-    // Use AppendFileSystemFile here, since we're streaming the file directly
-    // from the file system backend, and the file thus might not actually be
-    // backed by a file on disk.
-    blob_builder->AppendFileSystemFile(url, 0, info.size, info.last_modified,
-                                       std::move(file_system_context));
+std::pair<base::File, base::FileErrorOr<int64_t>> GetFileLengthOnBlockingThread(
+    base::File file) {
+  int64_t file_length = file.GetLength();
+  if (file_length < 0) {
+    return {std::move(file), base::unexpected(base::File::GetLastFileError())};
   }
-  blob_builder->set_content_type(content_type);
-
-  std::unique_ptr<BlobDataHandle> blob_handle =
-      blob_context->context()->AddFinishedBlob(std::move(blob_builder));
-
-  // Since the blob we're creating doesn't depend on other blobs, and doesn't
-  // require blob memory/disk quota, creating the blob can't fail.
-  DCHECK(!blob_handle->IsBroken());
-
-  BlobImpl::Create(std::move(blob_handle), std::move(blob_receiver));
+  return {std::move(file), std::move(file_length)};
 }
 
-bool IsAccessHandleEnabled() {
-  return base::FeatureList::IsEnabled(features::kFileSystemAccessAccessHandle);
+#if BUILDFLAG(IS_ANDROID)
+void EnsureSwapDirExists(base::FilePath swap_dir) {
+  if (!base::PathExists(swap_dir)) {
+    if (!base::CreateDirectory(swap_dir)) {
+      DLOG(ERROR) << "Error creating swap dir " << swap_dir;
+    }
+  }
+}
+#endif
+
+bool HasWritePermission(const base::FilePath& path) {
+  if (!base::PathExists(path)) {
+    return true;
+  }
+
+#if BUILDFLAG(IS_POSIX)
+  int mode;
+  if (!base::GetPosixFilePermissions(path, &mode)) {
+    return true;
+  }
+
+  if (!(mode & base::FILE_PERMISSION_WRITE_BY_USER)) {
+    return false;
+  }
+#elif BUILDFLAG(IS_WIN)
+  DWORD attrs = ::GetFileAttributes(path.value().c_str());
+  if (attrs == INVALID_FILE_ATTRIBUTES) {
+    return true;
+  }
+  if (attrs & FILE_ATTRIBUTE_READONLY) {
+    return false;
+  }
+#endif  // BUILDFLAG(IS_POSIX)
+
+  return true;
+}
+
+#if BUILDFLAG(IS_MAC)
+// Creates a copy-on-write file at `swap_url`. This will fail if the file
+// already exists. Must be called on a sequence which allows blocking.
+base::File::Error CreateCowSwapFile(const storage::FileSystemURL& source_url,
+                                    const storage::FileSystemURL& swap_url) {
+  // `clonefile()` operates directly on raw paths and follows symlinks when
+  // `flags` is 0, whereas `LocalFileUtil` hides symlinks by mapping them to
+  // `FILE_ERROR_NOT_FOUND`. Reject symlinks on `source_url` as not found, and
+  // treat a symlink (including a dangling symlink) at `swap_url` as an
+  // existing file so swap creation advances to the next candidate swap name
+  // instead of creating the clone at the symlink's target.
+  if (base::IsLink(source_url.path())) {
+    return base::File::Error::FILE_ERROR_NOT_FOUND;
+  }
+  if (base::IsLink(swap_url.path())) {
+    return base::File::Error::FILE_ERROR_EXISTS;
+  }
+  return clonefile(source_url.path().value().c_str(),
+                   swap_url.path().value().c_str(),
+                   /*flags=*/0) == 0
+             ? base::File::Error::FILE_OK
+             : base::File::GetLastFileError();
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+file_access::ScopedFileAccessDelegate::RequestFilesAccessIOCallback
+CreateFileAccessCallback(const GURL& destination) {
+  if (auto* file_access = file_access::ScopedFileAccessDelegate::Get()) {
+    return file_access->CreateFileAccessCallback(destination);
+  }
+  return base::NullCallback();
 }
 
 }  // namespace
@@ -77,55 +167,83 @@ FileSystemAccessFileHandleImpl::FileSystemAccessFileHandleImpl(
     FileSystemAccessManagerImpl* manager,
     const BindingContext& context,
     const storage::FileSystemURL& url,
+    const std::string& display_name,
     const SharedHandleState& handle_state)
-    : FileSystemAccessHandleBase(manager, context, url, handle_state) {}
+    : FileSystemAccessHandleBase(manager, context, url, handle_state),
+      display_name_(display_name) {}
 
 FileSystemAccessFileHandleImpl::~FileSystemAccessFileHandleImpl() = default;
 
 void FileSystemAccessFileHandleImpl::GetPermissionStatus(
-    bool writable,
+    blink::mojom::FileSystemAccessPermissionMode mode,
     GetPermissionStatusCallback callback) {
-  DoGetPermissionStatus(writable, std::move(callback));
+  DoGetPermissionStatus(mode, std::move(callback));
 }
 
 void FileSystemAccessFileHandleImpl::RequestPermission(
-    bool writable,
+    blink::mojom::FileSystemAccessPermissionMode mode,
     RequestPermissionCallback callback) {
-  DoRequestPermission(writable, std::move(callback));
+  DoRequestPermission(mode, std::move(callback));
 }
 
 void FileSystemAccessFileHandleImpl::AsBlob(AsBlobCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  if (GetReadPermissionStatus() != PermissionStatus::GRANTED) {
-    std::move(callback).Run(file_system_access_error::FromStatus(
-                                FileSystemAccessStatus::kPermissionDenied),
-                            base::File::Info(), nullptr);
+  if (auto read_access = CheckReadAccess(); !read_access.has_value()) {
+    std::move(callback).Run(std::move(read_access.error()), base::File::Info(),
+                            nullptr);
     return;
   }
 
+  if (base::FeatureList::IsEnabled(
+          features::kFileSystemAccessDirectoryIterationBlocklistCheck)) {
+    RunWithSensitiveEntryAccess(
+        url(), display_name(), HandleType::kFile,
+        AccessTrigger::kProgrammaticRead,
+        base::BindOnce(&FileSystemAccessFileHandleImpl::DoAsBlob,
+                       weak_factory_.GetWeakPtr()),
+        base::BindOnce([](AsBlobCallback callback) {
+          std::move(callback).Run(file_system_access_error::FromStatus(
+                                      FileSystemAccessStatus::kSecurityError),
+                                  base::File::Info(), nullptr);
+        }),
+        std::move(callback));
+    return;
+  }
+
+  DoAsBlob(std::move(callback));
+}
+
+void FileSystemAccessFileHandleImpl::DoAsBlob(AsBlobCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
   // TODO(mek): Check backend::SupportsStreaming and create snapshot file if
   // streaming is not supported.
-  DoFileSystemOperation(
+  manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::GetMetadata,
       base::BindOnce(&FileSystemAccessFileHandleImpl::DidGetMetaDataForBlob,
                      weak_factory_.GetWeakPtr(), std::move(callback)),
       url(),
-      FileSystemOperation::GET_METADATA_FIELD_IS_DIRECTORY |
-          FileSystemOperation::GET_METADATA_FIELD_SIZE |
-          FileSystemOperation::GET_METADATA_FIELD_LAST_MODIFIED);
+      FileSystemOperation::GetMetadataFieldSet(
+          {FileSystemOperation::GetMetadataField::kIsDirectory,
+           FileSystemOperation::GetMetadataField::kSize,
+           FileSystemOperation::GetMetadataField::kLastModified}));
 }
 
 void FileSystemAccessFileHandleImpl::CreateFileWriter(
     bool keep_existing_data,
     bool auto_close,
+    blink::mojom::FileSystemAccessWritableFileStreamLockMode mode,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  RunWithWritePermission(
+  RunWithPermission(
+      keep_existing_data
+          ? blink::mojom::FileSystemAccessPermissionMode::kReadWrite
+          : FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
       base::BindOnce(&FileSystemAccessFileHandleImpl::CreateFileWriterImpl,
-                     weak_factory_.GetWeakPtr(), keep_existing_data,
-                     auto_close),
+                     weak_factory_.GetWeakPtr(), keep_existing_data, auto_close,
+                     mode),
       base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
                         CreateFileWriterCallback callback) {
         std::move(callback).Run(std::move(result), mojo::NullRemote());
@@ -133,10 +251,53 @@ void FileSystemAccessFileHandleImpl::CreateFileWriter(
       std::move(callback));
 }
 
+void FileSystemAccessFileHandleImpl::Move(
+    mojo::PendingRemote<blink::mojom::FileSystemAccessTransferToken>
+        destination_directory,
+    const std::string& new_entry_name,
+    MoveCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  RenderFrameHost* rfh = RenderFrameHost::FromID(context().frame_id);
+  bool has_transient_user_activation = rfh && rfh->HasTransientUserActivation();
+
+  RunWithPermission(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
+      base::BindOnce(&FileSystemAccessHandleBase::DoMove,
+                     weak_factory_.GetWeakPtr(),
+                     std::move(destination_directory), new_entry_name,
+                     has_transient_user_activation),
+      base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
+                        MoveCallback callback) {
+        std::move(callback).Run(std::move(result));
+      }),
+      std::move(callback));
+}
+
+void FileSystemAccessFileHandleImpl::Rename(const std::string& new_entry_name,
+                                            RenameCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  RenderFrameHost* rfh = RenderFrameHost::FromID(context().frame_id);
+  bool has_transient_user_activation = rfh && rfh->HasTransientUserActivation();
+
+  RunWithPermission(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
+      base::BindOnce(&FileSystemAccessHandleBase::DoRename,
+                     weak_factory_.GetWeakPtr(), new_entry_name,
+                     has_transient_user_activation),
+      base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
+                        MoveCallback callback) {
+        std::move(callback).Run(std::move(result));
+      }),
+      std::move(callback));
+}
+
 void FileSystemAccessFileHandleImpl::Remove(RemoveCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
-  RunWithWritePermission(
+  RunWithPermission(
+      FileSystemAccessManagerImpl::GetEffectiveWritePermissionMode(),
       base::BindOnce(&FileSystemAccessHandleBase::DoRemove,
                      weak_factory_.GetWeakPtr(), url(), /*recurse=*/false),
       base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
@@ -147,60 +308,188 @@ void FileSystemAccessFileHandleImpl::Remove(RemoveCallback callback) {
 }
 
 void FileSystemAccessFileHandleImpl::OpenAccessHandle(
+    blink::mojom::FileSystemAccessAccessHandleLockMode mode,
     OpenAccessHandleCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-
-  if (!IsAccessHandleEnabled()) {
-    mojo::ReportBadMessage("File System Access Access Handle not enabled");
-    std::move(callback).Run(file_system_access_error::FromStatus(
-                                FileSystemAccessStatus::kInvalidState,
-                                "File System Access Access Handle not enabled"),
-                            base::File());
-    return;
-  }
 
   if (url().type() != storage::kFileSystemTypeTemporary) {
     std::move(callback).Run(
         file_system_access_error::FromStatus(
             FileSystemAccessStatus::kInvalidState,
-            "Access handles may only be created on temporary file systems"),
-        base::File());
+            "Access Handles may only be created on temporary file systems"),
+        blink::mojom::FileSystemAccessAccessHandleFilePtr(),
+        mojo::NullRemote());
     return;
   }
 
-  RunWithWritePermission(
-      base::BindOnce(&FileSystemAccessFileHandleImpl::DoOpenFile,
-                     weak_factory_.GetWeakPtr()),
+  FileSystemAccessLockManager::LockType lock_type;
+
+  switch (mode) {
+    case blink::mojom::FileSystemAccessAccessHandleLockMode::kReadwrite:
+      lock_type = manager()->GetExclusiveLockType();
+      break;
+    case blink::mojom::FileSystemAccessAccessHandleLockMode::kReadOnly:
+      lock_type = manager()->GetSAHReadOnlyLockType();
+      break;
+    case blink::mojom::FileSystemAccessAccessHandleLockMode::kReadwriteUnsafe:
+      lock_type = manager()->GetSAHReadwriteUnsafeLockType();
+      break;
+  }
+
+  manager()->TakeLock(
+      context(), url(), lock_type,
+      base::BindOnce(&FileSystemAccessFileHandleImpl::DidTakeAccessHandleLock,
+                     weak_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void FileSystemAccessFileHandleImpl::DidTakeAccessHandleLock(
+    OpenAccessHandleCallback callback,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  if (!lock) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            FileSystemAccessStatus::kNoModificationAllowedError,
+            "Access Handles cannot be created if there is another open Access "
+            "Handle or Writable stream associated with the same file."),
+        blink::mojom::FileSystemAccessAccessHandleFilePtr(),
+        mojo::NullRemote());
+    return;
+  }
+
+  auto open_file_callback =
+      file_system_context()->is_incognito()
+          ? base::BindOnce(&FileSystemAccessFileHandleImpl::DoOpenIncognitoFile,
+                           weak_factory_.GetWeakPtr(), std::move(lock))
+          : base::BindOnce(&FileSystemAccessFileHandleImpl::DoOpenFile,
+                           weak_factory_.GetWeakPtr(), std::move(lock));
+  // TODO(crbug.com/40276567): Review whether to switch to write-only.
+  RunWithPermission(
+      blink::mojom::FileSystemAccessPermissionMode::kReadWrite,
+      std::move(open_file_callback),
       base::BindOnce([](blink::mojom::FileSystemAccessErrorPtr result,
                         OpenAccessHandleCallback callback) {
-        std::move(callback).Run(std::move(result), base::File());
+        std::move(callback).Run(
+            std::move(result),
+            blink::mojom::FileSystemAccessAccessHandleFilePtr(),
+            mojo::NullRemote());
       }),
       std::move(callback));
 }
 
-void FileSystemAccessFileHandleImpl::DoOpenFile(
+void FileSystemAccessFileHandleImpl::DoOpenIncognitoFile(
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
     OpenAccessHandleCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  // TODO(crbug.com/40276567): Update if this only needs write-only permission
+  CHECK_EQ(GetReadWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
-  DoFileSystemOperation(
+  mojo::PendingRemote<blink::mojom::FileSystemAccessFileDelegateHost>
+      file_delegate_host_remote;
+  mojo::PendingRemote<blink::mojom::FileSystemAccessAccessHandleHost>
+      access_handle_host_remote = manager()->CreateAccessHandleHost(
+          url(), file_delegate_host_remote.InitWithNewPipeAndPassReceiver(),
+          mojo::NullReceiver(), 0, std::move(lock),
+          base::ScopedClosureRunner());
+
+  std::move(callback).Run(
+      file_system_access_error::Ok(),
+      blink::mojom::FileSystemAccessAccessHandleFile::NewIncognitoFileDelegate(
+          std::move(file_delegate_host_remote)),
+      std::move(access_handle_host_remote));
+}
+
+void FileSystemAccessFileHandleImpl::DoOpenFile(
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    OpenAccessHandleCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  // TODO(crbug.com/40276567): Update if this only needs write-only permission
+  CHECK_EQ(GetReadWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
+
+  manager()->DoFileSystemOperation(
       FROM_HERE, &FileSystemOperationRunner::OpenFile,
-      base::BindOnce(&FileSystemAccessFileHandleImpl::DidOpenFile,
-                     weak_factory_.GetWeakPtr(), std::move(callback)),
+      base::BindOnce(&FileSystemAccessFileHandleImpl::DoGetLengthAfterOpenFile,
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     std::move(lock)),
       url(),
       base::File::FLAG_OPEN | base::File::FLAG_READ | base::File::FLAG_WRITE);
 }
 
-void FileSystemAccessFileHandleImpl::DidOpenFile(
+void FileSystemAccessFileHandleImpl::DoGetLengthAfterOpenFile(
     OpenAccessHandleCallback callback,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
     base::File file,
-    base::OnceClosure /*on_close_callback*/) {
+    base::ScopedClosureRunner on_close_callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
 
   blink::mojom::FileSystemAccessErrorPtr result =
       file_system_access_error::FromFileError(file.error_details());
-  std::move(callback).Run(std::move(result), std::move(file));
+  if (result->status != FileSystemAccessStatus::kOk) {
+    std::move(callback).Run(std::move(result),
+                            blink::mojom::FileSystemAccessAccessHandleFilePtr(),
+                            mojo::NullRemote());
+    return;
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE,
+      {
+          // Needed for file I/O.
+          base::MayBlock(),
+
+          // Reasonable compromise, given that applications may block on file
+          // operations.
+          base::TaskPriority::USER_VISIBLE,
+
+          // BLOCK_SHUTDOWN is definitely not appropriate. We might be able to
+          // move to CONTINUE_ON_SHUTDOWN after very careful analysis.
+          base::TaskShutdownBehavior::SKIP_ON_SHUTDOWN,
+      },
+      base::BindOnce(&GetFileLengthOnBlockingThread, std::move(file)),
+      base::BindOnce(&FileSystemAccessFileHandleImpl::DidOpenFileAndGetLength,
+                     weak_factory_.GetWeakPtr(), std::move(callback),
+                     std::move(lock), std::move(on_close_callback)));
+}
+
+void FileSystemAccessFileHandleImpl::DidOpenFileAndGetLength(
+    OpenAccessHandleCallback callback,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    base::ScopedClosureRunner on_close_callback,
+    std::pair<base::File, base::FileErrorOr<int64_t>> file_and_length) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  base::File file = std::move(file_and_length.first);
+  base::FileErrorOr<int64_t> length_or_error =
+      std::move(file_and_length.second);
+
+  if (!length_or_error.has_value()) {
+    std::move(callback).Run(
+        file_system_access_error::FromFileError(length_or_error.error()),
+        blink::mojom::FileSystemAccessAccessHandleFilePtr(),
+        mojo::NullRemote());
+    return;
+  }
+  CHECK_GE(length_or_error.value(), 0, base::NotFatalUntil::M159);
+
+  mojo::PendingRemote<blink::mojom::FileSystemAccessFileModificationHost>
+      file_modification_host_remote;
+  mojo::PendingRemote<blink::mojom::FileSystemAccessAccessHandleHost>
+      access_handle_host_remote = manager()->CreateAccessHandleHost(
+          url(), mojo::NullReceiver(),
+          file_modification_host_remote.InitWithNewPipeAndPassReceiver(),
+          length_or_error.value(), std::move(lock),
+          std::move(on_close_callback));
+
+  std::move(callback).Run(
+      file_system_access_error::Ok(),
+      blink::mojom::FileSystemAccessAccessHandleFile::NewRegularFile(
+          blink::mojom::FileSystemAccessRegularFile::New(
+              std::move(file), length_or_error.value(),
+              std::move(file_modification_host_remote))),
+      std::move(access_handle_host_remote));
 }
 
 void FileSystemAccessFileHandleImpl::IsSameEntry(
@@ -217,7 +506,8 @@ void FileSystemAccessFileHandleImpl::IsSameEntry(
 void FileSystemAccessFileHandleImpl::IsSameEntryImpl(
     IsSameEntryCallback callback,
     FileSystemAccessTransferTokenImpl* other) {
-  if (!other) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!other || other->origin() != context().storage_key.origin()) {
     std::move(callback).Run(
         file_system_access_error::FromStatus(
             blink::mojom::FileSystemAccessStatus::kOperationFailed),
@@ -225,24 +515,18 @@ void FileSystemAccessFileHandleImpl::IsSameEntryImpl(
     return;
   }
 
-  if (other->type() != FileSystemAccessPermissionContext::HandleType::kFile) {
+  if (other->cross_origin_storage_data().has_value()) {
     std::move(callback).Run(file_system_access_error::Ok(), false);
     return;
   }
 
-  const storage::FileSystemURL& url1 = url();
-  const storage::FileSystemURL& url2 = other->url();
-
-  // If two URLs are of a different type they are definitely not related.
-  if (url1.type() != url2.type()) {
-    std::move(callback).Run(file_system_access_error::Ok(), false);
-    return;
-  }
-
-  // Otherwise compare path.
-  const base::FilePath& path1 = url1.path();
-  const base::FilePath& path2 = url2.path();
-  std::move(callback).Run(file_system_access_error::Ok(), path1 == path2);
+  // The two handles are the same if they serialize to the same value.
+  auto serialization = manager()->SerializeURL(
+      url(), FileSystemAccessPermissionContext::HandleType::kFile);
+  auto other_serialization =
+      manager()->SerializeURL(other->url(), other->type());
+  std::move(callback).Run(file_system_access_error::Ok(),
+                          serialization == other_serialization);
 }
 
 void FileSystemAccessFileHandleImpl::Transfer(
@@ -264,21 +548,44 @@ void FileSystemAccessFileHandleImpl::DidGetMetaDataForBlob(
     return;
   }
 
-  std::string uuid = base::GenerateGUID();
-  std::string content_type;
-
-  base::FilePath::StringType extension = url().path().Extension();
-  if (!extension.empty()) {
+  base::FilePath display_name = base::FilePath::FromUTF8Unsafe(display_name_);
+  if (url().type() == storage::kFileSystemTypeTemporary) {
+    // Skip platform MIME type lookup for OPFS. OPFS names are chosen by the
+    // site, and platform MIME associations could expose which applications
+    // the user has installed.
+    std::string content_type;
     std::string mime_type;
-    // TODO(https://crbug.com/962306): Using GetMimeTypeFromExtension and
-    // including platform defined mime type mappings might be nice/make sense,
-    // however that method can potentially block and thus can't be called from
-    // the IO thread.
-    if (net::GetWellKnownMimeTypeFromExtension(extension.substr(1), &mime_type))
+    if (net::GetWellKnownMimeTypeFromFile(display_name, &mime_type)) {
       content_type = std::move(mime_type);
+    }
+    DidResolveMimeTypeForBlob(std::move(callback), info,
+                              std::move(content_type));
+    return;
   }
-  // TODO(https://crbug.com/962306): Consider some kind of fallback type when
-  // the above mime type detection fails.
+
+  // Platform MIME lookup can block while consulting the OS MIME database.
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_VISIBLE},
+      base::BindOnce(
+          [](const base::FilePath& name) {
+            std::string content_type;
+            if (!net::GetMimeTypeFromFile(name, &content_type)) {
+              return std::string();
+            }
+            return content_type;
+          },
+          std::move(display_name)),
+      base::BindOnce(&FileSystemAccessFileHandleImpl::DidResolveMimeTypeForBlob,
+                     weak_factory_.GetWeakPtr(), std::move(callback), info));
+}
+
+void FileSystemAccessFileHandleImpl::DidResolveMimeTypeForBlob(
+    AsBlobCallback callback,
+    const base::File::Info& info,
+    std::string content_type) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  std::string uuid = base::Uuid::GenerateRandomV4().AsLowercaseString();
 
   mojo::PendingRemote<blink::mojom::Blob> blob_remote;
   mojo::PendingReceiver<blink::mojom::Blob> blob_receiver =
@@ -291,116 +598,382 @@ void FileSystemAccessFileHandleImpl::DidGetMetaDataForBlob(
 
   GetIOThreadTaskRunner({})->PostTask(
       FROM_HERE,
-      base::BindOnce(&CreateBlobOnIOThread,
-                     base::WrapRefCounted(file_system_context()),
-                     base::WrapRefCounted(manager()->blob_context()),
-                     std::move(blob_receiver), url(), std::move(uuid),
-                     std::move(content_type), info));
+      base::BindOnce(
+          &ChromeBlobStorageContext::CreateFileSystemBlobWithFileAccess,
+          base::WrapRefCounted(manager()->blob_context()),
+          base::WrapRefCounted(file_system_context()), std::move(blob_receiver),
+          url(), std::move(uuid), std::move(content_type), info.size,
+          info.last_modified, CreateFileAccessCallback(context().url)));
 }
 
 void FileSystemAccessFileHandleImpl::CreateFileWriterImpl(
     bool keep_existing_data,
     bool auto_close,
+    blink::mojom::FileSystemAccessWritableFileStreamLockMode mode,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK_EQ(GetWritePermissionStatus(),
-            blink::mojom::PermissionStatus::GRANTED);
+  CHECK_EQ(keep_existing_data ? GetReadWritePermissionStatus()
+                              : GetEffectiveWritePermissionStatus(),
+           blink::mojom::PermissionStatus::GRANTED, base::NotFatalUntil::M159);
 
-  // We first attempt to create the swap file, even if we might do a subsequent
-  // operation to copy a file to the same path if keep_existing_data is set.
-  // This file creation has to be `exclusive`, meaning, it will fail if a file
-  // already exists. Using the filesystem for synchronization, a successful
-  // creation of the file ensures that this File Writer creation request owns
-  // the file and eliminates possible race conditions.
-  CreateSwapFile(
-      /*count=*/0, keep_existing_data, auto_close, std::move(callback));
+  if (base::FeatureList::IsEnabled(
+          features::kFileSystemAccessWriteBlocklistCheck)) {
+    RunWithSensitiveEntryAccess(
+        url(), display_name(), HandleType::kFile,
+        AccessTrigger::kProgrammaticWrite,
+        base::BindOnce(
+            &FileSystemAccessFileHandleImpl::DidVerifySensitiveEntryAccess,
+            weak_factory_.GetWeakPtr(), keep_existing_data, auto_close, mode),
+        base::BindOnce([](CreateFileWriterCallback callback) {
+          std::move(callback).Run(file_system_access_error::FromStatus(
+                                      FileSystemAccessStatus::kSecurityError),
+                                  mojo::NullRemote());
+        }),
+        std::move(callback));
+    return;
+  }
+
+  DidVerifySensitiveEntryAccess(keep_existing_data, auto_close, mode,
+                                std::move(callback));
 }
 
-void FileSystemAccessFileHandleImpl::CreateSwapFile(
-    int count,
+void FileSystemAccessFileHandleImpl::DidVerifySensitiveEntryAccess(
     bool keep_existing_data,
     bool auto_close,
+    blink::mojom::FileSystemAccessWritableFileStreamLockMode mode,
     CreateFileWriterCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  DCHECK(count >= 0);
-  DCHECK(max_swap_files_ >= 0);
 
-  if (GetWritePermissionStatus() != blink::mojom::PermissionStatus::GRANTED) {
+  // TODO(crbug.com/40194651): Expand this check to all backends.
+  if (url().type() == storage::kFileSystemTypeLocal) {
+    auto checks = base::BindOnce(&HasWritePermission, url().path());
+#if BUILDFLAG(IS_ANDROID)
+    if (url().path().IsContentUri()) {
+      swap_dir_ =
+          base::PathService::CheckedGet(content::DIR_FILE_SYSTEM_API_SWAP);
+      checks = base::BindOnce(&EnsureSwapDirExists, swap_dir_)
+                   .Then(std::move(checks));
+    }
+#endif
+    base::ThreadPool::PostTaskAndReplyWithResult(
+        FROM_HERE, {base::MayBlock()}, std::move(checks),
+        base::BindOnce(
+            &FileSystemAccessFileHandleImpl::DidVerifyHasWritePermissions,
+            weak_factory_.GetWeakPtr(), keep_existing_data, auto_close, mode,
+            std::move(callback)));
+    return;
+  }
+
+  DidVerifyHasWritePermissions(keep_existing_data, auto_close, mode,
+                               std::move(callback), /*can_write=*/true);
+}
+
+void FileSystemAccessFileHandleImpl::DidVerifyHasWritePermissions(
+    bool keep_existing_data,
+    bool auto_close,
+    blink::mojom::FileSystemAccessWritableFileStreamLockMode mode,
+    CreateFileWriterCallback callback,
+    bool can_write) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  if (!can_write) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            FileSystemAccessStatus::kNoModificationAllowedError,
+            "Cannot write to a read-only file."),
+        mojo::NullRemote());
+    return;
+  }
+
+  FileSystemAccessLockManager::LockType lock_type =
+      mode == blink::mojom::FileSystemAccessWritableFileStreamLockMode::kSiloed
+          ? manager()->GetWFSSiloedLockType()
+          : manager()->GetExclusiveLockType();
+
+  manager()->TakeLock(
+      context(), url(), lock_type,
+      base::BindOnce(&FileSystemAccessFileHandleImpl::StartCreateSwapFile,
+                     weak_factory_.GetWeakPtr(), 0, keep_existing_data,
+                     auto_close, std::move(callback)));
+}
+
+void FileSystemAccessFileHandleImpl::StartCreateSwapFile(
+    int start_count,
+    bool keep_existing_data,
+    bool auto_close,
+    CreateFileWriterCallback callback,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(start_count >= 0);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
+
+  // We should not have gotten any farther than zero without a lock on the file.
+  CHECK(start_count == 0 || lock);
+
+  if (!lock) {
+    std::move(callback).Run(
+        file_system_access_error::FromStatus(
+            FileSystemAccessStatus::kNoModificationAllowedError),
+        mojo::NullRemote());
+    return;
+  }
+
+  if ((keep_existing_data ? GetReadWritePermissionStatus()
+                          : GetEffectiveWritePermissionStatus()) !=
+      PermissionStatus::GRANTED) {
     std::move(callback).Run(file_system_access_error::FromStatus(
                                 FileSystemAccessStatus::kPermissionDenied),
                             mojo::NullRemote());
     return;
   }
 
-  auto swap_path =
-      base::FilePath(url().virtual_path()).AddExtensionASCII(".crswap");
-  auto swap_file_system = file_system();
+  for (int count = start_count; count < max_swap_files_; count++) {
+    auto swap_name =
+        url().virtual_path().BaseName().AddExtensionASCII(".crswap");
 
-  if (count >= max_swap_files_) {
-    DLOG(ERROR) << "Error Creating Swap File, count: " << count
-                << " exceeds max unique files of: " << max_swap_files_
-                << " base path: " << swap_path;
-    std::move(callback).Run(file_system_access_error::FromStatus(
-                                FileSystemAccessStatus::kOperationFailed,
-                                "Failed to create swap file."),
-                            mojo::NullRemote());
-    return;
-  }
-
-  if (count > 0) {
-    swap_path =
-        swap_path.InsertBeforeExtensionASCII(base::StringPrintf(".%d", count));
-  }
-
-  // First attempt to just create the swap file in the same file system as this
-  // file.
-  storage::FileSystemURL swap_url =
-      manager()->context()->CreateCrackedFileSystemURL(
-          url().origin(), url().mount_type(), swap_path);
-
-  // If that failed, it means this file was part of an isolated file system,
-  // and specifically, a single file isolated file system. In that case we'll
-  // need to register a new isolated file system for the swap file, and use that
-  // for the writer.
-  if (!swap_url.is_valid()) {
-    DCHECK_EQ(url().mount_type(), storage::kFileSystemTypeIsolated);
-
-    swap_path = base::FilePath(url().path()).AddExtensionASCII(".crswap");
     if (count > 0) {
-      swap_path = swap_path.InsertBeforeExtensionASCII(
+      swap_name = swap_name.InsertBeforeExtensionASCII(
           base::StringPrintf(".%d", count));
     }
 
-    auto handle = manager()->CreateFileSystemURLFromPath(
-        context().origin, FileSystemAccessEntryFactory::PathType::kLocal,
-        swap_path);
-    swap_url = std::move(handle.url);
-    swap_file_system = std::move(handle.file_system);
+    // First attempt to just create the swap file in the same directory (and
+    // file system) as this file.
+    std::optional<base::SafeBaseName> opt_swap_name =
+        base::SafeBaseName::Create(swap_name);
+    CHECK(opt_swap_name.has_value());
+#if BUILDFLAG(IS_ANDROID)
+    //  For content-URIs (e.g. content://com.android.../doc/msf%3A123), we will
+    //  write the swap file to the local cache dir
+    //  (e.g. /data/user/0/com.chrome.dev/cache/FileSystemAPISwap) and then
+    //  copy back to the original content-URI when done.
+    storage::FileSystemURL swap_url;
+    if (url().path().IsContentUri()) {
+      // Use SHA1 hash instead of escape to avoid exceeding filename length
+      // limits.
+      std::string file_name = GetHashedUrlPath(url().path().value());
+      if (count > 0) {
+        file_name += base::StringPrintf(".%d", count);
+      }
+      swap_url = manager()->CreateFileSystemURLFromPath(
+          PathInfo(swap_dir_.Append(file_name).AddExtension(".crswap")));
+    } else {
+      swap_url = url().CreateSibling(*opt_swap_name);
+    }
+#else
+    storage::FileSystemURL swap_url = url().CreateSibling(*opt_swap_name);
+#endif
+    CHECK(swap_url.is_valid());
+
+    // Check if this swap file is not in use. If it isn't, take a lock on it.
+    if (!manager()->IsContentious(swap_url,
+                                  manager()->GetExclusiveLockType())) {
+      manager()->TakeLock(
+          context(), swap_url, manager()->GetExclusiveLockType(),
+          base::BindOnce(&FileSystemAccessFileHandleImpl::DidTakeSwapLock,
+                         weak_factory_.GetWeakPtr(), count, swap_url,
+                         keep_existing_data, auto_close, std::move(lock),
+                         std::move(callback)));
+      return;
+    }
   }
 
-  DoFileSystemOperation(
-      FROM_HERE, &FileSystemOperationRunner::CreateFile,
+  DLOG(ERROR) << "Error Creating Swap File, exceeded max unique files of: "
+              << max_swap_files_
+              << " base name: " << url().virtual_path().BaseName();
+  std::move(callback).Run(file_system_access_error::FromStatus(
+                              FileSystemAccessStatus::kOperationFailed,
+                              "Failed to create swap file."),
+                          mojo::NullRemote());
+}
+
+void FileSystemAccessFileHandleImpl::DidTakeSwapLock(
+    int count,
+    const storage::FileSystemURL& swap_url,
+    bool keep_existing_data,
+    bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    CreateFileWriterCallback callback,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(lock);
+
+  // Taking `swap_lock` should succeed since we checked for contention ahead of
+  // time.
+  CHECK(swap_lock);
+
+  if (keep_existing_data) {
+    // Check whether a file exists at the intended path of the swap file.
+
+    // TOCTOU errors are possible if a file at the path is created between the
+    // existence check and when file contents are copied to the new file.
+    // However, since we've acquired an exclusive lock to the swap file, this
+    // is only possible if the file is created external to this API.
+    // TODO(crbug.com/40245515): Consider requiring a lock to create an
+    // empty file, e.g. parent.getFileHandle(swapFileName, {create: true}).
+    manager()->DoFileSystemOperation(
+        FROM_HERE, &FileSystemOperationRunner::FileExists,
+        base::BindOnce(&FileSystemAccessFileHandleImpl::DidCheckSwapFileExists,
+                       weak_factory_.GetWeakPtr(), count, swap_url, auto_close,
+                       std::move(lock), std::move(swap_lock),
+                       std::move(callback)),
+        swap_url);
+  } else {
+    // Create an empty file. Passing the `exclusive` flag means this will fail
+    // if a file already exists.
+    manager()->DoFileSystemOperation(
+        FROM_HERE, &FileSystemOperationRunner::CreateFile,
+        base::BindOnce(&FileSystemAccessFileHandleImpl::DidCreateSwapFile,
+                       weak_factory_.GetWeakPtr(), count, swap_url,
+                       /*keep_existing_data=*/false, auto_close,
+                       std::move(lock), std::move(swap_lock),
+                       std::move(callback)),
+        swap_url,
+        /*exclusive=*/true);
+  }
+}
+
+void FileSystemAccessFileHandleImpl::DidCheckSwapFileExists(
+    int count,
+    const storage::FileSystemURL& swap_url,
+    bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
+    CreateFileWriterCallback callback,
+    base::File::Error result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
+
+  if (result != base::File::FILE_ERROR_NOT_FOUND) {
+    // File already exists. We need to find an unused filename.
+    StartCreateSwapFile(count + 1, /*keep_existing_data=*/true, auto_close,
+                        std::move(callback), std::move(lock));
+    return;
+  }
+
+#if BUILDFLAG(IS_MAC)
+  // TODO(crbug.com/40255657): Expand use of copy-on-write swap files
+  // to other file systems which support it.
+  if (CanUseCowSwapFile()) {
+    CreateClonedSwapFile(count, swap_url, auto_close, std::move(lock),
+                         std::move(swap_lock), std::move(callback));
+    return;
+  }
+#endif  // BUILDFLAG(IS_MAC)
+
+  CreateSwapFileFromCopy(count, swap_url, auto_close, std::move(lock),
+                         std::move(swap_lock), std::move(callback));
+}
+
+void FileSystemAccessFileHandleImpl::CreateSwapFileFromCopy(
+    int count,
+    const storage::FileSystemURL& swap_url,
+    bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
+    CreateFileWriterCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
+
+  manager()->DoFileSystemOperation(
+      FROM_HERE, &FileSystemOperationRunner::Copy,
       base::BindOnce(&FileSystemAccessFileHandleImpl::DidCreateSwapFile,
                      weak_factory_.GetWeakPtr(), count, swap_url,
-                     swap_file_system, keep_existing_data, auto_close,
-                     std::move(callback)),
-      swap_url,
-      /*exclusive=*/true);
+                     /*keep_existing_data=*/true, auto_close, std::move(lock),
+                     std::move(swap_lock), std::move(callback)),
+      url(), swap_url,
+      storage::FileSystemOperation::CopyOrMoveOptionSet(
+          {storage::FileSystemOperation::CopyOrMoveOption::
+               kPreserveLastModified}),
+      storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
+      std::make_unique<storage::CopyOrMoveHookDelegate>());
 }
+
+#if BUILDFLAG(IS_MAC)
+void FileSystemAccessFileHandleImpl::CreateClonedSwapFile(
+    int count,
+    const storage::FileSystemURL& swap_url,
+    bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
+    CreateFileWriterCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(count >= 0, base::NotFatalUntil::M159);
+  CHECK(max_swap_files_ >= 0, base::NotFatalUntil::M159);
+  CHECK(CanUseCowSwapFile(), base::NotFatalUntil::M159);
+
+  auto after_clone_callback = base::BindOnce(
+      &FileSystemAccessFileHandleImpl::DidCloneSwapFile,
+      weak_factory_.GetWeakPtr(), count, swap_url, auto_close, std::move(lock),
+      std::move(swap_lock), std::move(callback));
+
+  if (swap_file_cloning_will_fail_for_testing_) {
+    std::move(after_clone_callback).Run(base::File::Error::FILE_ERROR_ABORT);
+    return;
+  }
+
+  base::ThreadPool::PostTaskAndReplyWithResult(
+      FROM_HERE, {base::MayBlock()},
+      base::BindOnce(&CreateCowSwapFile, url(), swap_url),
+      std::move(after_clone_callback));
+}
+
+void FileSystemAccessFileHandleImpl::DidCloneSwapFile(
+    int count,
+    const storage::FileSystemURL& swap_url,
+    bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
+    CreateFileWriterCallback callback,
+    base::File::Error result) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  CHECK(CanUseCowSwapFile(), base::NotFatalUntil::M159);
+
+  swap_file_clone_result_for_testing_ = result;
+
+  if (result == base::File::FILE_ERROR_EXISTS) {
+    // Cloning fails if the destination file exists. The file must have been
+    // created between the FileExists check and the clone attempt. Attempt to
+    // find another unused filename.
+    StartCreateSwapFile(count + 1, /*keep_existing_data=*/true, auto_close,
+                        std::move(callback), std::move(lock));
+    return;
+  }
+
+  if (result != base::File::FILE_OK) {
+    // Cloning could fail if the file's underlying file system does not support
+    // copy-on-write, such as when accessing FAT formatted external USB drives
+    // (which do not support copy-on-write) from a Mac (which otherwise does).
+    // In that case, fall back on the create + copy technique.
+    CreateSwapFileFromCopy(count, swap_url, auto_close, std::move(lock),
+                           std::move(swap_lock), std::move(callback));
+    return;
+  }
+
+  std::move(callback).Run(
+      file_system_access_error::Ok(),
+      manager()->CreateFileWriter(
+          context(), url(), swap_url, std::move(lock), std::move(swap_lock),
+          FileSystemAccessManagerImpl::SharedHandleState(
+              handle_state().read_grant, handle_state().write_grant),
+          auto_close));
+}
+#endif  // BUILDFLAG(IS_MAC)
 
 void FileSystemAccessFileHandleImpl::DidCreateSwapFile(
     int count,
     const storage::FileSystemURL& swap_url,
-    storage::IsolatedContext::ScopedFSHandle swap_file_system,
     bool keep_existing_data,
     bool auto_close,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> lock,
+    scoped_refptr<FileSystemAccessLockManager::LockHandle> swap_lock,
     CreateFileWriterCallback callback,
     base::File::Error result) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (result == base::File::FILE_ERROR_EXISTS) {
     // Creation attempt failed. We need to find an unused filename.
-    CreateSwapFile(count + 1, keep_existing_data, auto_close,
-                   std::move(callback));
+    StartCreateSwapFile(count + 1, keep_existing_data, auto_close,
+                        std::move(callback), std::move(lock));
     return;
   }
 
@@ -414,56 +987,40 @@ void FileSystemAccessFileHandleImpl::DidCreateSwapFile(
     return;
   }
 
-  if (!keep_existing_data) {
-    std::move(callback).Run(
-        file_system_access_error::Ok(),
-        manager()->CreateFileWriter(
-            context(), url(), swap_url,
-            FileSystemAccessManagerImpl::SharedHandleState(
-                handle_state().read_grant, handle_state().write_grant,
-                swap_file_system),
-            auto_close));
-    return;
-  }
-
-  DoFileSystemOperation(
-      FROM_HERE, &FileSystemOperationRunner::Copy,
-      base::BindOnce(&FileSystemAccessFileHandleImpl::DidCopySwapFile,
-                     weak_factory_.GetWeakPtr(), swap_url, swap_file_system,
-                     auto_close, std::move(callback)),
-      url(), swap_url,
-      storage::FileSystemOperation::OPTION_PRESERVE_LAST_MODIFIED,
-      storage::FileSystemOperation::ERROR_BEHAVIOR_ABORT,
-      storage::FileSystemOperation::CopyOrMoveProgressCallback());
+  std::move(callback).Run(
+      file_system_access_error::Ok(),
+      manager()->CreateFileWriter(
+          context(), url(), swap_url, std::move(lock), std::move(swap_lock),
+          FileSystemAccessManagerImpl::SharedHandleState(
+              handle_state().read_grant, handle_state().write_grant),
+          auto_close));
 }
 
-void FileSystemAccessFileHandleImpl::DidCopySwapFile(
-    const storage::FileSystemURL& swap_url,
-    storage::IsolatedContext::ScopedFSHandle swap_file_system,
-    bool auto_close,
-    CreateFileWriterCallback callback,
-    base::File::Error result) {
+void FileSystemAccessFileHandleImpl::GetUniqueId(GetUniqueIdCallback callback) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
-  if (result != base::File::FILE_OK) {
-    DLOG(ERROR) << "Error Creating Swap File, status: "
-                << base::File::ErrorToString(result)
-                << " path: " << swap_url.path();
-    std::move(callback).Run(file_system_access_error::FromFileError(
-                                result, "Error copying to swap file."),
-                            mojo::NullRemote());
-    return;
-  }
+
+  auto id = manager()->GetUniqueId(*this);
+  CHECK(id.is_valid(), base::NotFatalUntil::M159);
   std::move(callback).Run(file_system_access_error::Ok(),
-                          manager()->CreateFileWriter(
-                              context(), url(), swap_url,
-                              FileSystemAccessManagerImpl::SharedHandleState(
-                                  handle_state().read_grant,
-                                  handle_state().write_grant, swap_file_system),
-                              auto_close));
+                          id.AsLowercaseString());
+}
+
+#if BUILDFLAG(IS_MAC)
+bool FileSystemAccessFileHandleImpl::CanUseCowSwapFile() const {
+  return url().type() == storage::kFileSystemTypeLocal;
+}
+#endif  // BUILDFLAG(IS_MAC)
+
+void FileSystemAccessFileHandleImpl::GetCloudIdentifiers(
+    GetCloudIdentifiersCallback callback) {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+  DoGetCloudIdentifiers(FileSystemAccessPermissionContext::HandleType::kFile,
+                        std::move(callback));
 }
 
 base::WeakPtr<FileSystemAccessHandleBase>
 FileSystemAccessFileHandleImpl::AsWeakPtr() {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   return weak_factory_.GetWeakPtr();
 }
 

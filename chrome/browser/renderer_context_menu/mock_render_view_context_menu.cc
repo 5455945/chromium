@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,6 +13,7 @@
 #include "components/prefs/pref_service.h"
 #include "components/renderer_context_menu/render_view_context_menu_observer.h"
 #include "content/public/browser/browser_context.h"
+#include "services/screen_ai/buildflags/buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/gfx/color_palette.h"
@@ -24,7 +25,7 @@ MockRenderViewContextMenu::MockMenuItem::MockMenuItem()
 MockRenderViewContextMenu::MockMenuItem::MockMenuItem(
     const MockMenuItem& other) = default;
 
-MockRenderViewContextMenu::MockMenuItem::~MockMenuItem() {}
+MockRenderViewContextMenu::MockMenuItem::~MockMenuItem() = default;
 
 MockRenderViewContextMenu::MockMenuItem&
 MockRenderViewContextMenu::MockMenuItem::operator=(const MockMenuItem& other) =
@@ -37,7 +38,7 @@ MockRenderViewContextMenu::MockRenderViewContextMenu(bool incognito)
                                /*create_if_needed=*/true)
                          : original_profile_.get()) {}
 
-MockRenderViewContextMenu::~MockRenderViewContextMenu() {}
+MockRenderViewContextMenu::~MockRenderViewContextMenu() = default;
 
 bool MockRenderViewContextMenu::IsCommandIdChecked(int command_id) const {
   return observer_->IsCommandIdChecked(command_id);
@@ -136,7 +137,7 @@ void MockRenderViewContextMenu::AppendSubMenuItems(ui::MenuModel* model) {
   // them. This works in non-mock because of toolkit_delegate_ in RVCMBase.
   // TODO(yusukes,lazyboy): This is a hack. RVCMProxy should neither directly
   // know about but submenu items nor it should update them.
-  for (int i = 0; i < model->GetItemCount(); ++i) {
+  for (size_t i = 0; i < model->GetItemCount(); ++i) {
     MockMenuItem sub_item;
     sub_item.command_id = model->GetCommandIdAt(i);
     sub_item.enabled = model->IsEnabledAt(i);
@@ -175,25 +176,20 @@ void MockRenderViewContextMenu::UpdateMenuIcon(int command_id,
 }
 
 void MockRenderViewContextMenu::RemoveMenuItem(int command_id) {
-  auto old_end = items_.end();
-  auto new_end = std::remove_if(
-      items_.begin(), old_end,
+  size_t deleted_item_count = std::erase_if(
+      items_,
       [command_id](const auto& item) { return item.command_id == command_id; });
 
-  if (new_end == old_end) {
+  if (deleted_item_count == 0) {
     FAIL() << "Menu observer is trying to remove a menu item it doesn't own."
            << " command_id: " << command_id;
   }
-
-  items_.erase(new_end, old_end);
 }
 
 void MockRenderViewContextMenu::RemoveAdjacentSeparators() {}
 
 void MockRenderViewContextMenu::RemoveSeparatorBeforeMenuItem(int command_id) {
-  auto iter = std::find_if(
-      items_.begin(), items_.end(),
-      [command_id](const auto& item) { return item.command_id == command_id; });
+  auto iter = std::ranges::find(items_, command_id, &MockMenuItem::command_id);
 
   if (iter == items_.end()) {
     FAIL() << "Menu observer is trying to remove a separator before a "
@@ -239,7 +235,8 @@ void MockRenderViewContextMenu::AddAccessibilityLabelsServiceItem(
   }
 }
 
-content::RenderViewHost* MockRenderViewContextMenu::GetRenderViewHost() const {
+content::RenderFrameHost* MockRenderViewContextMenu::GetRenderFrameHost()
+    const {
   return nullptr;
 }
 

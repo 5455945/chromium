@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <string>
 
 #include "base/component_export.h"
-#include "base/gtest_prod_util.h"
-#include "base/macros.h"
 #include "base/observer_list.h"
 #include "ui/base/ime/virtual_keyboard_controller.h"
 #include "ui/gfx/geometry/rect.h"
@@ -26,6 +24,12 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN)
     : public VirtualKeyboardController {
  public:
   OnScreenKeyboardDisplayManagerTabTip(HWND hwnd);
+
+  OnScreenKeyboardDisplayManagerTabTip(
+      const OnScreenKeyboardDisplayManagerTabTip&) = delete;
+  OnScreenKeyboardDisplayManagerTabTip& operator=(
+      const OnScreenKeyboardDisplayManagerTabTip&) = delete;
+
   ~OnScreenKeyboardDisplayManagerTabTip() override;
 
   // VirtualKeyboardController overrides.
@@ -46,16 +50,14 @@ class COMPONENT_EXPORT(UI_BASE_IME_WIN)
 
   void NotifyKeyboardVisible(const gfx::Rect& occluded_rect);
   void NotifyKeyboardHidden();
+  bool IsKeyboardAttachedToDevice(HWND hwnd);
 
   std::unique_ptr<OnScreenKeyboardDetector> keyboard_detector_;
-  base::ObserverList<VirtualKeyboardControllerObserver, false>::Unchecked
-      observers_;
+  base::ObserverList<VirtualKeyboardControllerObserver, false> observers_;
   HWND hwnd_;
 
   // The location of TabTip.exe.
   std::wstring osk_path_;
-
-  DISALLOW_COPY_AND_ASSIGN(OnScreenKeyboardDisplayManagerTabTip);
 };
 
 }  // namespace ui

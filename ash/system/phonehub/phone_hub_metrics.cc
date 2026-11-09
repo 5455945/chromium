@@ -1,4 +1,4 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,8 +7,7 @@
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/user_metrics.h"
 
-namespace ash {
-namespace phone_hub_metrics {
+namespace ash::phone_hub_metrics {
 
 namespace {
 
@@ -72,10 +71,6 @@ void LogScreenOnSettingsButtonClicked(Screen screen) {
                                 screen);
 }
 
-void LogNotificationOptInEvent(InterstitialScreenEvent event) {
-  base::UmaHistogramEnumeration("PhoneHub.NotificationOptInEvents", event);
-}
-
 void LogTabContinuationChipClicked(int tab_index) {
   base::UmaHistogramCounts100("PhoneHub.TabContinuationChipClicked", tab_index);
 }
@@ -93,5 +88,166 @@ void LogNotificationInteraction(NotificationInteraction interaction) {
                                 interaction);
 }
 
-}  // namespace phone_hub_metrics
-}  // namespace ash
+void LogNotificationMessageLength(int length) {
+  base::UmaHistogramCounts10000("PhoneHub.NotificationMessageLength", length);
+}
+
+std::string GetCameraRollMediaTypeSubcategoryName(
+    CameraRollMediaType mediaType) {
+  switch (mediaType) {
+    case CameraRollMediaType::kPhoto:
+      return ".Photo";
+    case CameraRollMediaType::kVideo:
+      return ".Video";
+    default:
+      DCHECK(false) << "Invalid Camera Roll media type";
+      return "";
+  }
+}
+
+void LogCameraRollContentShown(int index, CameraRollMediaType mediaType) {
+  std::string subcategory = GetCameraRollMediaTypeSubcategoryName(mediaType);
+  switch (index) {
+    case 0:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Shown" + subcategory,
+          static_cast<int>(CameraRollContentShown::kContentShown1));
+      break;
+    case 1:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Shown" + subcategory,
+          static_cast<int>(CameraRollContentShown::kContentShown2));
+      break;
+    case 2:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Shown" + subcategory,
+          static_cast<int>(CameraRollContentShown::kContentShown3));
+      break;
+    case 3:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Shown" + subcategory,
+          static_cast<int>(CameraRollContentShown::kContentShown4));
+      break;
+    default:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Shown" + subcategory,
+          static_cast<int>(CameraRollContentShown::kContentShownGTE5));
+      break;
+  }
+}
+
+void LogCameraRollContentClicked(int index, CameraRollMediaType mediaType) {
+  std::string subcategory = GetCameraRollMediaTypeSubcategoryName(mediaType);
+  switch (index) {
+    case 0:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Clicked" + subcategory,
+          static_cast<int>(CameraRollContentClicked::kContentClicked1));
+      break;
+    case 1:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Clicked" + subcategory,
+          static_cast<int>(CameraRollContentClicked::kContentClicked2));
+      break;
+    case 2:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Clicked" + subcategory,
+          static_cast<int>(CameraRollContentClicked::kContentClicked3));
+      break;
+    case 3:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Clicked" + subcategory,
+          static_cast<int>(CameraRollContentClicked::kContentClicked4));
+      break;
+    default:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.Content.Clicked" + subcategory,
+          static_cast<int>(CameraRollContentClicked::kContentClickedGTE5));
+      break;
+  }
+}
+
+void LogCameraRollContextMenuDownload(int index,
+                                      CameraRollMediaType mediaType) {
+  std::string subcategory = GetCameraRollMediaTypeSubcategoryName(mediaType);
+  switch (index) {
+    case 0:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.ContextMenu.Download" + subcategory,
+          static_cast<int>(CameraRollContextMenuDownload::kDownload1));
+      break;
+    case 1:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.ContextMenu.Download" + subcategory,
+          static_cast<int>(CameraRollContextMenuDownload::kDownload2));
+      break;
+    case 2:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.ContextMenu.Download" + subcategory,
+          static_cast<int>(CameraRollContextMenuDownload::kDownload3));
+      break;
+    case 3:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.ContextMenu.Download" + subcategory,
+          static_cast<int>(CameraRollContextMenuDownload::kDownload4));
+      break;
+    default:
+      base::UmaHistogramSparse(
+          "PhoneHub.CameraRoll.ContextMenu.Download" + subcategory,
+          static_cast<int>(CameraRollContextMenuDownload::kDownloadGTE5));
+      break;
+  }
+}
+
+void LogCameraRollContentPresent() {
+  base::UmaHistogramBoolean("PhoneHub.CameraRoll.Content.Present", true);
+}
+
+void LogMoreAppsButtonAnimationOnShow(
+    MoreAppsButtonLoadingState loading_state) {
+  base::UmaHistogramEnumeration("PhoneHub.MoreAppsButton.LoadingState",
+                                loading_state);
+}
+
+void LogMoreAppsButtonFullAppsLatency(const base::TimeDelta latency) {
+  base::UmaHistogramTimes("PhoneHub.LauncherButton.Loading.Latency", latency);
+}
+
+void LogRecentAppsStateOnBubbleOpened(RecentAppsUiState ui_state) {
+  switch (ui_state) {
+    case RecentAppsUiState::HIDDEN:
+      [[fallthrough]];
+    case RecentAppsUiState::PLACEHOLDER_VIEW:
+      break;
+    case RecentAppsUiState::LOADING:
+      base::UmaHistogramEnumeration("PhoneHub.RecentApps.State.OnBubbleOpened",
+                                    RecentAppsViewUiState::kLoading);
+      break;
+    case RecentAppsUiState::CONNECTION_FAILED:
+      base::UmaHistogramEnumeration("PhoneHub.RecentApps.State.OnBubbleOpened",
+                                    RecentAppsViewUiState::kError);
+      break;
+    case RecentAppsUiState::ITEMS_VISIBLE:
+      base::UmaHistogramEnumeration("PhoneHub.RecentApps.State.OnBubbleOpened",
+                                    RecentAppsViewUiState::kApps);
+      break;
+    default:
+      break;
+  }
+}
+
+void LogRecentAppsTransitionToFailedLatency(const base::TimeDelta latency) {
+  base::UmaHistogramTimes("PhoneHub.RecentApps.TransitionToFailed.Latency",
+                          latency);
+}
+
+void LogRecentAppsTransitionToSuccessLatency(const base::TimeDelta latency) {
+  base::UmaHistogramTimes("PhoneHub.RecentApps.TransitionToSuccess.Latency",
+                          latency);
+}
+
+void LogMultiDeviceSetupNotificationInteraction() {
+  base::UmaHistogramCounts100("MultiDeviceSetup.NotificationInteracted", 1);
+}
+
+}  // namespace ash::phone_hub_metrics

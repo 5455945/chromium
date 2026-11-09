@@ -1,11 +1,13 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "content/browser/wake_lock/wake_lock_service_impl.h"
 
+#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "services/device/public/mojom/wake_lock_context.mojom.h"
+#include "services/network/public/mojom/permissions_policy/permissions_policy_feature.mojom.h"
 
 namespace content {
 
@@ -13,8 +15,9 @@ namespace content {
 void WakeLockServiceImpl::Create(
     RenderFrameHost* render_frame_host,
     mojo::PendingReceiver<blink::mojom::WakeLockService> receiver) {
-  DCHECK(render_frame_host);
-  new WakeLockServiceImpl(render_frame_host, std::move(receiver));
+  CHECK(render_frame_host);
+  base::MakeSelfDeleting<WakeLockServiceImpl>(*render_frame_host,
+                                              std::move(receiver));
 }
 
 void WakeLockServiceImpl::GetWakeLock(
@@ -22,8 +25,22 @@ void WakeLockServiceImpl::GetWakeLock(
     device::mojom::WakeLockReason reason,
     const std::string& description,
     mojo::PendingReceiver<device::mojom::WakeLock> receiver) {
+  // Web content is only permitted to request screen wake locks.
+  if (type != device::mojom::WakeLockType::kPreventDisplaySleep) {
+    return;
+  }
+
+  // The `screen-wake-lock` permissions policy applies to the Web Wake Lock API
+  // and shouldn't affect internal video playback wake locks (e.g., in
+  // cross-origin iframes or Picture-in-Picture windows).
+  if (reason != device::mojom::WakeLockReason::kVideoPlayback &&
+      !render_frame_host().IsFeatureEnabled(
+          network::mojom::PermissionsPolicyFeature::kScreenWakeLock)) {
+    return;
+  }
+
   device::mojom::WakeLockContext* wake_lock_context =
-      WebContents::FromRenderFrameHost(render_frame_host())
+      WebContents::FromRenderFrameHost(&render_frame_host())
           ->GetWakeLockContext();
 
   if (!wake_lock_context)
@@ -34,8 +51,9 @@ void WakeLockServiceImpl::GetWakeLock(
 }
 
 WakeLockServiceImpl::WakeLockServiceImpl(
-    RenderFrameHost* render_frame_host,
-    mojo::PendingReceiver<blink::mojom::WakeLockService> receiver)
-    : DocumentServiceBase(render_frame_host, std::move(receiver)) {}
+    RenderFrameHost& render_frame_host,
+    mojo::PendingReceiver<blink::mojom::WakeLockService> receiver,
+    base::SelfDeletingPassKey key)
+    : DocumentService(render_frame_host, std::move(receiver), key) {}
 
 }  // namespace content

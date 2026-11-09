@@ -17,20 +17,22 @@
 #include <stddef.h>
 
 #include <cassert>
+#include <cstdint>
 #include <iomanip>
+#include <ios>
+#include <limits>
 #include <ostream>  // NOLINT(readability/streams)
 #include <sstream>
 #include <string>
 #include <type_traits>
 
+#include "absl/base/attributes.h"
+#include "absl/base/config.h"
 #include "absl/base/optimization.h"
 #include "absl/numeric/bits.h"
 
 namespace absl {
 ABSL_NAMESPACE_BEGIN
-
-ABSL_DLL const uint128 kuint128max = MakeUint128(
-    std::numeric_limits<uint64_t>::max(), std::numeric_limits<uint64_t>::max());
 
 namespace {
 
@@ -40,13 +42,13 @@ namespace {
 // For example:
 //   Given: 5 (decimal) == 101 (binary)
 //   Returns: 2
-inline ABSL_ATTRIBUTE_ALWAYS_INLINE int Fls128(uint128 n) {
+ABSL_ATTRIBUTE_ALWAYS_INLINE inline int Fls128(uint128 n) {
   if (uint64_t hi = Uint128High64(n)) {
-    ABSL_INTERNAL_ASSUME(hi != 0);
+    ABSL_ASSUME(hi != 0);
     return 127 - countl_zero(hi);
   }
   const uint64_t low = Uint128Low64(n);
-  ABSL_INTERNAL_ASSUME(low != 0);
+  ABSL_ASSUME(low != 0);
   return 63 - countl_zero(low);
 }
 
@@ -93,7 +95,7 @@ inline void DivModImpl(uint128 dividend, uint128 divisor, uint128* quotient_ret,
 
 template <typename T>
 uint128 MakeUint128FromFloat(T v) {
-  static_assert(std::is_floating_point<T>::value, "");
+  static_assert(std::is_floating_point_v<T>);
 
   // Rounding behavior is towards zero, same as for built-in types.
 
@@ -111,14 +113,14 @@ uint128 MakeUint128FromFloat(T v) {
   return MakeUint128(0, static_cast<uint64_t>(v));
 }
 
-#if defined(__clang__) && !defined(__SSE3__)
+#if defined(__clang__) && (__clang_major__ < 9) && !defined(__SSE3__)
 // Workaround for clang bug: https://bugs.llvm.org/show_bug.cgi?id=38289
 // Casting from long double to uint64_t is miscompiled and drops bits.
 // It is more work, so only use when we need the workaround.
 uint128 MakeUint128FromFloat(long double v) {
   // Go 50 bits at a time, that fits in a double
-  static_assert(std::numeric_limits<double>::digits >= 50, "");
-  static_assert(std::numeric_limits<long double>::digits <= 150, "");
+  static_assert(std::numeric_limits<double>::digits >= 50);
+  static_assert(std::numeric_limits<long double>::digits <= 150);
   // Undefined behavior if v is not finite or cannot fit into uint128.
   assert(std::isfinite(v) && v > -1 && v < std::ldexp(1.0L, 128));
 
@@ -131,35 +133,28 @@ uint128 MakeUint128FromFloat(long double v) {
   return (static_cast<uint128>(w0) << 100) | (static_cast<uint128>(w1) << 50) |
          static_cast<uint128>(w2);
 }
-#endif  // __clang__ && !__SSE3__
+#endif  // __clang__ && (__clang_major__ < 9) && !__SSE3__
 }  // namespace
 
 uint128::uint128(float v) : uint128(MakeUint128FromFloat(v)) {}
 uint128::uint128(double v) : uint128(MakeUint128FromFloat(v)) {}
 uint128::uint128(long double v) : uint128(MakeUint128FromFloat(v)) {}
 
+#if !defined(ABSL_HAVE_INTRINSIC_INT128)
 uint128 operator/(uint128 lhs, uint128 rhs) {
-#if defined(ABSL_HAVE_INTRINSIC_INT128)
-  return static_cast<unsigned __int128>(lhs) /
-         static_cast<unsigned __int128>(rhs);
-#else  // ABSL_HAVE_INTRINSIC_INT128
   uint128 quotient = 0;
   uint128 remainder = 0;
   DivModImpl(lhs, rhs, &quotient, &remainder);
   return quotient;
-#endif  // ABSL_HAVE_INTRINSIC_INT128
 }
+
 uint128 operator%(uint128 lhs, uint128 rhs) {
-#if defined(ABSL_HAVE_INTRINSIC_INT128)
-  return static_cast<unsigned __int128>(lhs) %
-         static_cast<unsigned __int128>(rhs);
-#else  // ABSL_HAVE_INTRINSIC_INT128
   uint128 quotient = 0;
   uint128 remainder = 0;
   DivModImpl(lhs, rhs, &quotient, &remainder);
   return remainder;
-#endif  // ABSL_HAVE_INTRINSIC_INT128
 }
+#endif  // !defined(ABSL_HAVE_INTRINSIC_INT128)
 
 namespace {
 
@@ -209,6 +204,10 @@ std::string Uint128ToFormattedString(uint128 v, std::ios_base::fmtflags flags) {
 
 }  // namespace
 
+std::string uint128::ToString() const {
+  return Uint128ToFormattedString(*this, std::ios_base::dec);
+}
+
 std::ostream& operator<<(std::ostream& os, uint128 v) {
   std::ios_base::fmtflags flags = os.flags();
   std::string rep = Uint128ToFormattedString(v, flags);
@@ -216,15 +215,16 @@ std::ostream& operator<<(std::ostream& os, uint128 v) {
   // Add the requisite padding.
   std::streamsize width = os.width(0);
   if (static_cast<size_t>(width) > rep.size()) {
+    const size_t count = static_cast<size_t>(width) - rep.size();
     std::ios::fmtflags adjustfield = flags & std::ios::adjustfield;
     if (adjustfield == std::ios::left) {
-      rep.append(width - rep.size(), os.fill());
+      rep.append(count, os.fill());
     } else if (adjustfield == std::ios::internal &&
                (flags & std::ios::showbase) &&
                (flags & std::ios::basefield) == std::ios::hex && v != 0) {
-      rep.insert(2, width - rep.size(), os.fill());
+      rep.insert(size_t{2}, count, os.fill());
     } else {
-      rep.insert(0, width - rep.size(), os.fill());
+      rep.insert(size_t{0}, count, os.fill());
     }
   }
 
@@ -291,6 +291,14 @@ int128 operator%(int128 lhs, int128 rhs) {
 }
 #endif  // ABSL_HAVE_INTRINSIC_INT128
 
+std::string int128::ToString() const {
+  std::string rep;
+  if (Int128High64(*this) < 0) rep = "-";
+  rep.append(Uint128ToFormattedString(UnsignedAbsoluteValue(*this),
+                                      std::ios_base::dec));
+  return rep;
+}
+
 std::ostream& operator<<(std::ostream& os, int128 v) {
   std::ios_base::fmtflags flags = os.flags();
   std::string rep;
@@ -313,22 +321,23 @@ std::ostream& operator<<(std::ostream& os, int128 v) {
   // Add the requisite padding.
   std::streamsize width = os.width(0);
   if (static_cast<size_t>(width) > rep.size()) {
+    const size_t count = static_cast<size_t>(width) - rep.size();
     switch (flags & std::ios::adjustfield) {
       case std::ios::left:
-        rep.append(width - rep.size(), os.fill());
+        rep.append(count, os.fill());
         break;
       case std::ios::internal:
         if (print_as_decimal && (rep[0] == '+' || rep[0] == '-')) {
-          rep.insert(1, width - rep.size(), os.fill());
+          rep.insert(size_t{1}, count, os.fill());
         } else if ((flags & std::ios::basefield) == std::ios::hex &&
                    (flags & std::ios::showbase) && v != 0) {
-          rep.insert(2, width - rep.size(), os.fill());
+          rep.insert(size_t{2}, count, os.fill());
         } else {
-          rep.insert(0, width - rep.size(), os.fill());
+          rep.insert(size_t{0}, count, os.fill());
         }
         break;
       default:  // std::ios::right
-        rep.insert(0, width - rep.size(), os.fill());
+        rep.insert(size_t{0}, count, os.fill());
         break;
     }
   }
@@ -338,53 +347,3 @@ std::ostream& operator<<(std::ostream& os, int128 v) {
 
 ABSL_NAMESPACE_END
 }  // namespace absl
-
-namespace std {
-constexpr bool numeric_limits<absl::uint128>::is_specialized;
-constexpr bool numeric_limits<absl::uint128>::is_signed;
-constexpr bool numeric_limits<absl::uint128>::is_integer;
-constexpr bool numeric_limits<absl::uint128>::is_exact;
-constexpr bool numeric_limits<absl::uint128>::has_infinity;
-constexpr bool numeric_limits<absl::uint128>::has_quiet_NaN;
-constexpr bool numeric_limits<absl::uint128>::has_signaling_NaN;
-constexpr float_denorm_style numeric_limits<absl::uint128>::has_denorm;
-constexpr bool numeric_limits<absl::uint128>::has_denorm_loss;
-constexpr float_round_style numeric_limits<absl::uint128>::round_style;
-constexpr bool numeric_limits<absl::uint128>::is_iec559;
-constexpr bool numeric_limits<absl::uint128>::is_bounded;
-constexpr bool numeric_limits<absl::uint128>::is_modulo;
-constexpr int numeric_limits<absl::uint128>::digits;
-constexpr int numeric_limits<absl::uint128>::digits10;
-constexpr int numeric_limits<absl::uint128>::max_digits10;
-constexpr int numeric_limits<absl::uint128>::radix;
-constexpr int numeric_limits<absl::uint128>::min_exponent;
-constexpr int numeric_limits<absl::uint128>::min_exponent10;
-constexpr int numeric_limits<absl::uint128>::max_exponent;
-constexpr int numeric_limits<absl::uint128>::max_exponent10;
-constexpr bool numeric_limits<absl::uint128>::traps;
-constexpr bool numeric_limits<absl::uint128>::tinyness_before;
-
-constexpr bool numeric_limits<absl::int128>::is_specialized;
-constexpr bool numeric_limits<absl::int128>::is_signed;
-constexpr bool numeric_limits<absl::int128>::is_integer;
-constexpr bool numeric_limits<absl::int128>::is_exact;
-constexpr bool numeric_limits<absl::int128>::has_infinity;
-constexpr bool numeric_limits<absl::int128>::has_quiet_NaN;
-constexpr bool numeric_limits<absl::int128>::has_signaling_NaN;
-constexpr float_denorm_style numeric_limits<absl::int128>::has_denorm;
-constexpr bool numeric_limits<absl::int128>::has_denorm_loss;
-constexpr float_round_style numeric_limits<absl::int128>::round_style;
-constexpr bool numeric_limits<absl::int128>::is_iec559;
-constexpr bool numeric_limits<absl::int128>::is_bounded;
-constexpr bool numeric_limits<absl::int128>::is_modulo;
-constexpr int numeric_limits<absl::int128>::digits;
-constexpr int numeric_limits<absl::int128>::digits10;
-constexpr int numeric_limits<absl::int128>::max_digits10;
-constexpr int numeric_limits<absl::int128>::radix;
-constexpr int numeric_limits<absl::int128>::min_exponent;
-constexpr int numeric_limits<absl::int128>::min_exponent10;
-constexpr int numeric_limits<absl::int128>::max_exponent;
-constexpr int numeric_limits<absl::int128>::max_exponent10;
-constexpr bool numeric_limits<absl::int128>::traps;
-constexpr bool numeric_limits<absl::int128>::tinyness_before;
-}  // namespace std

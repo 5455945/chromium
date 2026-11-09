@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -18,7 +18,7 @@ using Displays = std::vector<Display>;
 
 const Display* FindDisplayNearestPoint(const Displays& displays,
                                        const gfx::Point& point) {
-  DCHECK(!displays.empty());
+  CHECK(!displays.empty(), base::NotFatalUntil::M163);
   auto iter = FindDisplayContainingPoint(displays, point);
   if (iter != displays.end())
     return &(*iter);
@@ -33,13 +33,13 @@ const Display* FindDisplayNearestPoint(const Displays& displays,
     }
   }
   // There should always be at least one display that is less than INT_MAX away.
-  DCHECK(nearest_display);
+  CHECK(nearest_display, base::NotFatalUntil::M163);
   return nearest_display;
 }
 
 const Display* FindDisplayWithBiggestIntersection(const Displays& displays,
                                                   const gfx::Rect& rect) {
-  DCHECK(!displays.empty());
+  CHECK(!displays.empty(), base::NotFatalUntil::M163);
   int max_area = 0;
   const Display* matching = nullptr;
   for (const auto& display : displays) {
@@ -56,10 +56,10 @@ const Display* FindDisplayWithBiggestIntersection(const Displays& displays,
 Displays::const_iterator FindDisplayContainingPoint(
     const Displays& displays,
     const gfx::Point& point_in_screen) {
-  return std::find_if(displays.begin(), displays.end(),
-                      [point_in_screen](const Display& display) {
-                        return display.bounds().Contains(point_in_screen);
-                      });
+  return std::ranges::find_if(
+      displays, [point_in_screen](const Display& display) {
+        return display.bounds().Contains(point_in_screen);
+      });
 }
 
 }  // namespace display

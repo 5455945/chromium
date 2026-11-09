@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,11 +11,13 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/callback.h"
 #include "base/memory/unsafe_shared_memory_region.h"
 #include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
+#include "base/synchronization/waitable_event.h"
+#include "base/task/sequenced_task_runner.h"
 #include "components/chromeos_camera/mojo_mjpeg_decode_accelerator.h"
 #include "gpu/config/gpu_info.h"
 #include "media/capture/capture_export.h"
@@ -43,14 +45,18 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoderImpl
       scoped_refptr<base::SequencedTaskRunner> decoder_task_runner,
       DecodeDoneCB decode_done_cb,
       base::RepeatingCallback<void(const std::string&)> send_log_message_cb);
+
+  VideoCaptureJpegDecoderImpl(const VideoCaptureJpegDecoderImpl&) = delete;
+  VideoCaptureJpegDecoderImpl& operator=(const VideoCaptureJpegDecoderImpl&) =
+      delete;
+
   ~VideoCaptureJpegDecoderImpl() override;
 
   // Implementation of VideoCaptureJpegDecoder:
   void Initialize() override;
   STATUS GetStatus() const override;
   void DecodeCapturedData(
-      const uint8_t* data,
-      size_t in_buffer_size,
+      base::span<const uint8_t> data,
       const media::VideoCaptureFormat& frame_format,
       base::TimeTicks reference_time,
       base::TimeDelta timestamp,
@@ -70,16 +76,13 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoderImpl
   // Returns true if the decoding of last frame is not finished yet.
   bool IsDecoding_Locked() const;
 
-  // Records |decoder_status_| to histogram.
-  void RecordInitDecodeUMA_Locked();
-
   void DestroyDecoderOnIOThread(base::WaitableEvent* event);
 
   MojoMjpegDecodeAcceleratorFactoryCB jpeg_decoder_factory_;
   scoped_refptr<base::SequencedTaskRunner> decoder_task_runner_;
 
   // The underlying JPEG decode accelerator.
-  std::unique_ptr<chromeos_camera::MjpegDecodeAccelerator> decoder_;
+  std::unique_ptr<chromeos_camera::MojoMjpegDecodeAccelerator> decoder_;
 
   // The callback to run when decode succeeds.
   const DecodeDoneCB decode_done_cb_;
@@ -106,8 +109,6 @@ class CAPTURE_EXPORT VideoCaptureJpegDecoderImpl
   SEQUENCE_CHECKER(sequence_checker_);
 
   base::WeakPtrFactory<VideoCaptureJpegDecoderImpl> weak_ptr_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(VideoCaptureJpegDecoderImpl);
 };
 
 }  // namespace media

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,13 +15,14 @@ namespace policy {
 // This policy is for AMD GPUs running on Chrome OS.
 class SANDBOX_POLICY_EXPORT CrosAmdGpuProcessPolicy : public GpuProcessPolicy {
  public:
-  CrosAmdGpuProcessPolicy();
+  explicit CrosAmdGpuProcessPolicy(MremapPolicy mremap_policy);
+
+  CrosAmdGpuProcessPolicy(const CrosAmdGpuProcessPolicy&) = delete;
+  CrosAmdGpuProcessPolicy& operator=(const CrosAmdGpuProcessPolicy&) = delete;
+
   ~CrosAmdGpuProcessPolicy() override;
 
   bpf_dsl::ResultExpr EvaluateSyscall(int system_call_number) const override;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(CrosAmdGpuProcessPolicy);
 };
 
 }  // namespace policy

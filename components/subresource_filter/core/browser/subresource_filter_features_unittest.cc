@@ -1,17 +1,17 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/subresource_filter/core/browser/subresource_filter_features.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "base/containers/contains.h"
-#include "base/macros.h"
+#include "base/check.h"
 #include "base/strings/string_util.h"
 #include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
@@ -57,22 +57,22 @@ class ScopedExperimentalStateToggle {
 
       case base::FeatureList::OVERRIDE_USE_DEFAULT:
         NOTREACHED();
-        break;
     }
   }
 
-  ~ScopedExperimentalStateToggle() {
-  }
+  ScopedExperimentalStateToggle(const ScopedExperimentalStateToggle&) = delete;
+  ScopedExperimentalStateToggle& operator=(
+      const ScopedExperimentalStateToggle&) = delete;
+
+  ~ScopedExperimentalStateToggle() {}
 
  private:
   testing::ScopedSubresourceFilterConfigurator scoped_configurator_;
   base::test::ScopedFeatureList scoped_feature_list_;
-
-  DISALLOW_COPY_AND_ASSIGN(ScopedExperimentalStateToggle);
 };
 
 void ExpectAndRetrieveExactlyOneEnabledConfig(Configuration* actual_config) {
-  DCHECK(actual_config);
+  CHECK(actual_config);
   const auto config_list = GetEnabledConfigurations();
   ASSERT_EQ(1u, config_list->configs_by_decreasing_priority().size());
   *actual_config = config_list->configs_by_decreasing_priority().front();
@@ -80,7 +80,7 @@ void ExpectAndRetrieveExactlyOneEnabledConfig(Configuration* actual_config) {
 
 void ExpectAndRetrieveExactlyOneExtraEnabledConfig(
     Configuration* actual_config) {
-  DCHECK(actual_config);
+  CHECK(actual_config);
   const auto config_list = GetEnabledConfigurations();
   ASSERT_EQ(4u, config_list->configs_by_decreasing_priority().size());
   *actual_config = config_list->configs_by_decreasing_priority().back();
@@ -118,17 +118,19 @@ void ExpectParamsGeneratePreset(
 
 class SubresourceFilterFeaturesTest : public ::testing::Test {
  public:
-  SubresourceFilterFeaturesTest() {}
-  ~SubresourceFilterFeaturesTest() override {}
+  SubresourceFilterFeaturesTest() = default;
+
+  SubresourceFilterFeaturesTest(const SubresourceFilterFeaturesTest&) = delete;
+  SubresourceFilterFeaturesTest& operator=(
+      const SubresourceFilterFeaturesTest&) = delete;
+
+  ~SubresourceFilterFeaturesTest() override = default;
 
   void SetUp() override {
     // Reset the global configuration at the start so tests start without a
     // cached value from a previous in-process test run.
     testing::GetAndSetActivateConfigurations(nullptr);
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SubresourceFilterFeaturesTest);
 };
 
 TEST_F(SubresourceFilterFeaturesTest, ActivationLevel) {
@@ -282,16 +284,16 @@ TEST_F(SubresourceFilterFeaturesTest, ActivationLevelAndScope) {
 }
 
 TEST_F(SubresourceFilterFeaturesTest, ActivationList) {
-  const std::string activation_soc_eng(
-      kActivationListSocialEngineeringAdsInterstitial);
+  const std::string activation_better_ads(kActivationListBetterAds);
   const std::string activation_phishing(kActivationListPhishingInterstitial);
-  const std::string socEngPhising = activation_soc_eng + activation_phishing;
-  const std::string socEngCommaPhising =
-      activation_soc_eng + "," + activation_phishing;
-  const std::string phishingCommaSocEng =
-      activation_phishing + "," + activation_soc_eng;
-  const std::string socEngCommaPhisingCommaGarbage =
-      socEngCommaPhising + "," + "Garbage";
+  const std::string betterAdsPhishing =
+      activation_better_ads + activation_phishing;
+  const std::string betterAdsCommaPhishing =
+      activation_better_ads + "," + activation_phishing;
+  const std::string phishingCommaBetterAds =
+      activation_phishing + "," + activation_better_ads;
+  const std::string betterAdsCommaPhishingCommaGarbage =
+      betterAdsCommaPhishing + "," + "Garbage";
   const struct {
     bool feature_enabled;
     const char* activation_list_param;
@@ -305,16 +307,15 @@ TEST_F(SubresourceFilterFeaturesTest, ActivationList) {
       {true, "social eng ads intertitial", ActivationList::NONE},
       {true, "phishing interstitial", ActivationList::NONE},
       {true, "%$ garbage !%", ActivationList::NONE},
-      {true, kActivationListSocialEngineeringAdsInterstitial,
-       ActivationList::SOCIAL_ENG_ADS_INTERSTITIAL},
       {true, kActivationListBetterAds, ActivationList::BETTER_ADS},
       {true, kActivationListPhishingInterstitial,
        ActivationList::PHISHING_INTERSTITIAL},
-      {true, socEngPhising.c_str(), ActivationList::NONE},
-      {true, socEngCommaPhising.c_str(), ActivationList::PHISHING_INTERSTITIAL},
-      {true, phishingCommaSocEng.c_str(),
+      {true, betterAdsPhishing.c_str(), ActivationList::NONE},
+      {true, betterAdsCommaPhishing.c_str(),
        ActivationList::PHISHING_INTERSTITIAL},
-      {true, socEngCommaPhisingCommaGarbage.c_str(),
+      {true, phishingCommaBetterAds.c_str(),
+       ActivationList::PHISHING_INTERSTITIAL},
+      {true, betterAdsCommaPhishingCommaGarbage.c_str(),
        ActivationList::PHISHING_INTERSTITIAL},
       {true, "List1, List2", ActivationList::NONE}};
 
@@ -639,13 +640,13 @@ TEST_F(SubresourceFilterFeaturesTest,
       {{kEnablePresetsParameterName, kPhishing + "," + kPerfTest + "," + kBAS},
        {kActivationLevelParameterName, kActivationLevelDryRun},
        {kActivationScopeParameterName, kActivationScopeActivationList},
-       {kActivationListsParameterName, kActivationListSubresourceFilter},
+       {kActivationListsParameterName, kActivationListBetterAds},
        {kActivationPriorityParameterName, "750"},
        {kRulesetFlavorParameterName, kTestRulesetFlavor}});
 
   Configuration experimental_config(mojom::ActivationLevel::kDryRun,
                                     ActivationScope::ACTIVATION_LIST,
-                                    ActivationList::SUBRESOURCE_FILTER);
+                                    ActivationList::BETTER_ADS);
   experimental_config.activation_conditions.priority = 750;
   experimental_config.general_settings.ruleset_flavor = kTestRulesetFlavor;
 
@@ -666,7 +667,7 @@ TEST_F(SubresourceFilterFeaturesTest, AdTagging_EnablesDryRun) {
       Configuration::MakePresetForPerformanceTestingDryRunOnAllSites();
   base::test::ScopedFeatureList scoped_feature;
   scoped_feature.InitAndEnableFeature(kAdTagging);
-  EXPECT_TRUE(base::Contains(
+  EXPECT_TRUE(std::ranges::contains(
       GetEnabledConfigurations()->configs_by_decreasing_priority(), dryrun));
 }
 
@@ -675,7 +676,7 @@ TEST_F(SubresourceFilterFeaturesTest, AdTaggingDisabled_DisablesDryRun) {
       Configuration::MakePresetForPerformanceTestingDryRunOnAllSites();
   base::test::ScopedFeatureList scoped_feature;
   scoped_feature.InitAndDisableFeature(kAdTagging);
-  EXPECT_FALSE(base::Contains(
+  EXPECT_FALSE(std::ranges::contains(
       GetEnabledConfigurations()->configs_by_decreasing_priority(), dryrun));
 }
 

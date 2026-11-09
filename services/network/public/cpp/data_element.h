@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,19 +10,22 @@
 
 #include <limits>
 #include <memory>
+#include <string_view>
+#include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/component_export.h"
 #include "base/files/file_path.h"
-#include "base/strings/string_piece.h"
+#include "base/notreached.h"
 #include "base/time/time.h"
 #include "base/types/strong_alias.h"
 #include "mojo/public/cpp/bindings/pending_remote.h"
 #include "services/network/public/mojom/chunked_data_pipe_getter.mojom-forward.h"
 #include "services/network/public/mojom/data_pipe_getter.mojom-forward.h"
-#include "services/network/public/mojom/url_loader.mojom-shared.h"
-#include "third_party/abseil-cpp/absl/types/variant.h"
+#include "services/network/public/mojom/url_request.mojom-shared.h"
 
 namespace network {
 
@@ -41,10 +44,12 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElementBytes final {
 
   const std::vector<uint8_t>& bytes() const { return bytes_; }
 
-  base::StringPiece AsStringPiece() const {
-    return base::StringPiece(reinterpret_cast<const char*>(bytes_.data()),
-                             bytes_.size());
-  }
+  // DEPRECATED. Use AsStringView() instead.
+  std::string_view AsStringPiece() const { return AsStringView(); }
+
+  std::string_view AsStringView() const;
+
+  DataElementBytes Clone() const;
 
  private:
   std::vector<uint8_t> bytes_;
@@ -67,6 +72,8 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElementDataPipe final {
 
   mojo::PendingRemote<mojom::DataPipeGetter> ReleaseDataPipeGetter();
   mojo::PendingRemote<mojom::DataPipeGetter> CloneDataPipeGetter() const;
+
+  DataElementDataPipe Clone() const;
 
  private:
   mojo::PendingRemote<mojom::DataPipeGetter> data_pipe_getter_;
@@ -138,6 +145,13 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElementFile final {
 // Represents part of an upload body. This is a union of various types defined
 // above. See them for details.
 class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
+ private:
+  using Variant = std::variant<std::monostate,
+                               DataElementBytes,
+                               DataElementDataPipe,
+                               DataElementChunkedDataPipe,
+                               DataElementFile>;
+
  public:
   using Tag = mojom::DataElementDataView::Tag;
 
@@ -147,6 +161,7 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
   DataElement();
 
   template <typename T>
+    requires(std::is_constructible_v<Variant, T>)
   explicit DataElement(T&& t) : variant_(std::forward<T>(t)) {}
   DataElement(const DataElement&) = delete;
   DataElement& operator=(const DataElement&) = delete;
@@ -154,11 +169,14 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
   DataElement& operator=(DataElement&& other);
   ~DataElement();
 
+  // Returns a cloned element. This is callable only when the type is not
+  // `kChunkedDataPipe`.
+  DataElement Clone() const;
+
   Tag type() const {
     switch (variant_.index()) {
       case 0:
         NOTREACHED();
-        return Tag::kBytes;
       case 1:
         return Tag::kBytes;
       case 2:
@@ -169,27 +187,31 @@ class COMPONENT_EXPORT(NETWORK_CPP_BASE) DataElement {
         return Tag::kFile;
       default:
         NOTREACHED();
-        return Tag::kBytes;
     }
   }
 
   template <typename T>
-  const T& As() const {
-    return absl::get<T>(variant_);
+  const T& As() const LIFETIME_BOUND {
+    return std::get<T>(variant_);
   }
 
   template <typename T>
-  T& As() {
-    return absl::get<T>(variant_);
+  T& As() LIFETIME_BOUND {
+    return std::get<T>(variant_);
+  }
+
+  template <typename T>
+  const T* TryAs() const LIFETIME_BOUND {
+    return std::get_if<T>(&variant_);
+  }
+
+  template <typename T>
+  T* TryAs() LIFETIME_BOUND {
+    return std::get_if<T>(&variant_);
   }
 
  private:
-  absl::variant<absl::monostate,
-                DataElementBytes,
-                DataElementDataPipe,
-                DataElementChunkedDataPipe,
-                DataElementFile>
-      variant_;
+  Variant variant_;
 };
 
 }  // namespace network

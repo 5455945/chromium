@@ -1,19 +1,29 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/safe_browsing/download_protection/file_analyzer.h"
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include <stdint.h>
+
+#include <string>
+
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
+#include "base/test/metrics/histogram_tester.h"
+#include "base/test/scoped_feature_list.h"
 #include "build/build_config.h"
 #include "chrome/common/chrome_paths.h"
+#include "chrome/common/safe_browsing/archive_analyzer_results.h"
 #include "chrome/common/safe_browsing/mock_binary_feature_extractor.h"
-#include "components/safe_browsing/content/common/file_type_policies_test_util.h"
+#include "components/enterprise/obfuscation/core/download_obfuscator.h"
+#include "components/enterprise/obfuscation/core/utils.h"
+#include "components/safe_browsing/content/common/file_type_policies/file_type_policies_test_util.h"
+#include "components/safe_browsing/content/common/file_type_policies/proto/download_file_types.pb.h"
 #include "components/safe_browsing/core/common/features.h"
 #include "content/public/test/browser_task_environment.h"
 #include "content/public/test/test_utils.h"
@@ -33,7 +43,7 @@ using ::testing::StrEq;
 
 class FileAnalyzerTest : public testing::Test {
  public:
-  FileAnalyzerTest() {}
+  FileAnalyzerTest() = default;
   void DoneCallback(base::OnceCallback<void()> quit_callback,
                     FileAnalyzer::Results result) {
     result_ = result;
@@ -65,7 +75,7 @@ TEST_F(FileAnalyzerTest, TypeWinExecutable) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.exe"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.exe"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -74,13 +84,14 @@ TEST_F(FileAnalyzerTest, TypeWinExecutable) {
       .WillRepeatedly(Return(true));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::WIN_EXECUTABLE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
 TEST_F(FileAnalyzerTest, TypeChromeExtension) {
@@ -89,7 +100,7 @@ TEST_F(FileAnalyzerTest, TypeChromeExtension) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.crx"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.crx"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -98,13 +109,14 @@ TEST_F(FileAnalyzerTest, TypeChromeExtension) {
       .WillRepeatedly(Return(true));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::CHROME_EXTENSION);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
 TEST_F(FileAnalyzerTest, TypeAndroidApk) {
@@ -113,7 +125,7 @@ TEST_F(FileAnalyzerTest, TypeAndroidApk) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.apk"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.apk"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -122,44 +134,48 @@ TEST_F(FileAnalyzerTest, TypeAndroidApk) {
       .WillRepeatedly(Return(true));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::ANDROID_APK);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
+// Archive file analysis is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(FileAnalyzerTest, TypeZippedExecutable) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
       new testing::StrictMock<MockBinaryFeatureExtractor>();
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::ZIPPED_EXECUTABLE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
+#endif
 
 TEST_F(FileAnalyzerTest, TypeMacExecutable) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
@@ -167,7 +183,7 @@ TEST_F(FileAnalyzerTest, TypeMacExecutable) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.pkg"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.pkg"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -176,43 +192,46 @@ TEST_F(FileAnalyzerTest, TypeMacExecutable) {
       .WillRepeatedly(Return(true));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::MAC_EXECUTABLE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
+// Archive file analysis is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(FileAnalyzerTest, TypeZippedArchive) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
       new testing::StrictMock<MockBinaryFeatureExtractor>();
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.zip")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.zip")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::ZIPPED_ARCHIVE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, TypeInvalidZip) {
@@ -221,79 +240,57 @@ TEST_F(FileAnalyzerTest, TypeInvalidZip) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   std::string file_contents = "invalid contents";
-  ASSERT_EQ(
-      static_cast<int>(file_contents.size()),
-      base::WriteFile(tmp_path, file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(tmp_path, file_contents));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::INVALID_ZIP);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::UNKNOWN);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 // Since we only inspect contents of DMGs on OS X, we only get
 // MAC_ARCHIVE_FAILED_PARSING on OS X.
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 TEST_F(FileAnalyzerTest, TypeInvalidDmg) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
       new testing::StrictMock<MockBinaryFeatureExtractor>();
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.dmg"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.dmg"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   std::string file_contents = "invalid contents";
-  ASSERT_EQ(
-      static_cast<int>(file_contents.size()),
-      base::WriteFile(tmp_path, file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(tmp_path, file_contents));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::MAC_ARCHIVE_FAILED_PARSING);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::UNKNOWN);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::DMG);
 }
 #endif
 
 // TODO(drubery): Add tests verifying Rar inspection
-
-TEST_F(FileAnalyzerTest, ArchiveIsValidUnsetForNonArchive) {
-  scoped_refptr<MockBinaryFeatureExtractor> extractor =
-      new testing::StrictMock<MockBinaryFeatureExtractor>();
-  FileAnalyzer analyzer(extractor);
-  base::RunLoop run_loop;
-
-  base::FilePath target_path(FILE_PATH_LITERAL("target.exe"));
-  base::FilePath tmp_path =
-      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
-
-  EXPECT_CALL(*extractor, CheckSignature(tmp_path, _)).WillOnce(Return());
-  EXPECT_CALL(*extractor, ExtractImageFeatures(tmp_path, _, _, _))
-      .WillRepeatedly(Return(true));
-
-  analyzer.Start(
-      target_path, tmp_path,
-      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
-                     run_loop.QuitClosure()));
-  run_loop.Run();
-
-  ASSERT_TRUE(has_result_);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::UNSET);
-}
 
 TEST_F(FileAnalyzerTest, ArchiveIsValidSetForValidArchive) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
@@ -301,28 +298,29 @@ TEST_F(FileAnalyzerTest, ArchiveIsValidSetForValidArchive) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::VALID);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::VALID);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchiveIsValidSetForInvalidArchive) {
@@ -331,23 +329,23 @@ TEST_F(FileAnalyzerTest, ArchiveIsValidSetForInvalidArchive) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   std::string file_contents = "invalid zip";
-  ASSERT_EQ(
-      static_cast<int>(file_contents.size()),
-      base::WriteFile(tmp_path, file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(tmp_path, file_contents));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::INVALID);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::UNKNOWN);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedExecutableSetForZipWithExecutable) {
@@ -356,28 +354,28 @@ TEST_F(FileAnalyzerTest, ArchivedExecutableSetForZipWithExecutable) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_TRUE(result_.archived_executable);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedExecutableFalseForZipNoExecutable) {
@@ -386,28 +384,28 @@ TEST_F(FileAnalyzerTest, ArchivedExecutableFalseForZipNoExecutable) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_FALSE(result_.archived_executable);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedArchiveSetForZipWithArchive) {
@@ -416,28 +414,28 @@ TEST_F(FileAnalyzerTest, ArchivedArchiveSetForZipWithArchive) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.zip")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.zip")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_TRUE(result_.archived_archive);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedArchiveSetForZipNoArchive) {
@@ -446,28 +444,28 @@ TEST_F(FileAnalyzerTest, ArchivedArchiveSetForZipNoArchive) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_FALSE(result_.archived_archive);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedBinariesHasArchiveAndExecutable) {
@@ -476,32 +474,108 @@ TEST_F(FileAnalyzerTest, ArchivedBinariesHasArchiveAndExecutable) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.rar")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.rar")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_THAT(result_.archived_binaries, SizeIs(2));
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
+}
+
+TEST_F(FileAnalyzerTest, ArchivedBinariesUsesPhysicalZipPath) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath tmp_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
+  // Regression fixture for crbug.com/517074167. The ZIP's physical path is an
+  // executable, but its Info-ZIP Unicode Path Extra Field presents a benign
+  // filename. The fixture's filename CRC matches the physical path, so the
+  // Unicode Path Extra Field is honored.
+  base::FilePath zip_path;
+  ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &zip_path));
+  zip_path = zip_path.AppendASCII("safe_browsing")
+                 .AppendASCII("download_protection")
+                 .AppendASCII("zipfile_unicode_path_extra_field.zip");
+  ASSERT_TRUE(base::CopyFile(zip_path, tmp_path));
+
+  analyzer.Start(
+      target_file_name, tmp_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.type, ClientDownloadRequest::ZIPPED_EXECUTABLE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
+  ASSERT_EQ(result_.archived_binaries.size(), 1);
+  EXPECT_TRUE(result_.archived_binaries[0].is_executable());
+  EXPECT_EQ(result_.archived_binaries[0].file_path(), "malware.exe");
+}
+
+TEST_F(FileAnalyzerTest, ArchivedArchiveUsesPhysicalZipPath) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath tmp_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
+  // Regression fixture for crbug.com/517074167. The ZIP's physical path is a
+  // nested archive, but its Info-ZIP Unicode Path Extra Field presents a benign
+  // filename. The fixture's filename CRC matches the physical path, so the
+  // Unicode Path Extra Field is honored.
+  static constexpr uint8_t zip_data[] = {
+      0x50, 0x4b, 0x03, 0x04, 0x0a, 0x03, 0x00, 0x00, 0x00, 0x00, 0xd0, 0x71,
+      0x91, 0x4e, 0x11, 0x2c, 0xf9, 0x51, 0x09, 0x00, 0x00, 0x00, 0x09, 0x00,
+      0x00, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61,
+      0x64, 0x2e, 0x7a, 0x69, 0x70, 0x54, 0x65, 0x73, 0x74, 0x20, 0x64, 0x61,
+      0x74, 0x61, 0x50, 0x4b, 0x01, 0x02, 0x3f, 0x03, 0x0a, 0x03, 0x00, 0x00,
+      0x00, 0x00, 0xd0, 0x71, 0x91, 0x4e, 0x11, 0x2c, 0xf9, 0x51, 0x09, 0x00,
+      0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x14, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x20, 0x80, 0xc9, 0x81, 0x00, 0x00, 0x00, 0x00,
+      0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x2e, 0x7a, 0x69, 0x70, 0x75,
+      0x70, 0x10, 0x00, 0x01, 0x0c, 0xe9, 0x91, 0x5f, 0x72, 0x65, 0x63, 0x65,
+      0x69, 0x70, 0x74, 0x2e, 0x74, 0x78, 0x74, 0x50, 0x4b, 0x05, 0x06, 0x00,
+      0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x4d, 0x00, 0x00, 0x00, 0x32,
+      0x00, 0x00, 0x00, 0x00, 0x00};
+  ASSERT_TRUE(base::WriteFile(tmp_path, base::span(zip_data)));
+
+  analyzer.Start(
+      target_file_name, tmp_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.type, ClientDownloadRequest::ZIPPED_ARCHIVE);
+  EXPECT_TRUE(result_.archived_archive);
+  ASSERT_EQ(result_.archived_binaries.size(), 1);
+  EXPECT_TRUE(result_.archived_binaries[0].is_archive());
+  EXPECT_EQ(result_.archived_binaries[0].file_path(), "payload.zip");
 }
 
 TEST_F(FileAnalyzerTest, ArchivedBinariesSkipsSafeFiles) {
@@ -510,28 +584,28 @@ TEST_F(FileAnalyzerTest, ArchivedBinariesSkipsSafeFiles) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.txt")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_THAT(result_.archived_binaries, IsEmpty());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ArchivedBinariesRespectsPolicyMaximum) {
@@ -547,33 +621,33 @@ TEST_F(FileAnalyzerTest, ArchivedBinariesRespectsPolicyMaximum) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.rar")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.rar")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_THAT(result_.archived_binaries, SizeIs(1));
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 TEST_F(FileAnalyzerTest, ExtractsFileSignatureForExe) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
@@ -581,7 +655,7 @@ TEST_F(FileAnalyzerTest, ExtractsFileSignatureForExe) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.exe"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.exe"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -594,7 +668,7 @@ TEST_F(FileAnalyzerTest, ExtractsFileSignatureForExe) {
       .WillRepeatedly(Return(true));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
@@ -602,6 +676,7 @@ TEST_F(FileAnalyzerTest, ExtractsFileSignatureForExe) {
   ASSERT_TRUE(has_result_);
   EXPECT_THAT(result_.signature_info.signed_data(), SizeIs(1));
   EXPECT_THAT(result_.signature_info.signed_data(0), StrEq("signature"));
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
 TEST_F(FileAnalyzerTest, ExtractsImageHeadersForExe) {
@@ -610,7 +685,7 @@ TEST_F(FileAnalyzerTest, ExtractsImageHeadersForExe) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.exe"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.exe"));
   base::FilePath tmp_path(FILE_PATH_LITERAL("tmp.exe"));
 
   ClientDownloadRequest::ImageHeaders image_headers;
@@ -621,7 +696,7 @@ TEST_F(FileAnalyzerTest, ExtractsImageHeadersForExe) {
       .WillRepeatedly(DoAll(SetArgPointee<2>(image_headers), Return(true)));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
@@ -629,9 +704,10 @@ TEST_F(FileAnalyzerTest, ExtractsImageHeadersForExe) {
   ASSERT_TRUE(has_result_);
   EXPECT_TRUE(result_.image_headers.has_pe_headers());
   EXPECT_EQ(result_.image_headers.pe_headers().file_header(), "image header");
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::NONE);
 }
 
-#if defined(OS_MAC)
+#if BUILDFLAG(IS_MAC)
 
 TEST_F(FileAnalyzerTest, ExtractsSignatureForDmg) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
@@ -639,7 +715,7 @@ TEST_F(FileAnalyzerTest, ExtractsSignatureForDmg) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.dmg"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.dmg"));
   base::FilePath signed_dmg;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &signed_dmg));
   signed_dmg = signed_dmg.AppendASCII("safe_browsing")
@@ -647,13 +723,14 @@ TEST_F(FileAnalyzerTest, ExtractsSignatureForDmg) {
                    .AppendASCII("signed-archive.dmg");
 
   analyzer.Start(
-      target_path, signed_dmg,
+      target_file_name, signed_dmg, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(2215u, result_.disk_image_signature.size());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::DMG);
 
   base::FilePath signed_dmg_signature;
   EXPECT_TRUE(
@@ -675,7 +752,7 @@ TEST_F(FileAnalyzerTest, TypeSniffsDmgWithoutExtension) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.dmg"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.dmg"));
   base::FilePath dmg_no_extension;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &dmg_no_extension));
   dmg_no_extension = dmg_no_extension.AppendASCII("safe_browsing")
@@ -684,25 +761,29 @@ TEST_F(FileAnalyzerTest, TypeSniffsDmgWithoutExtension) {
                          .AppendASCII("mach_o_in_dmg.txt");
 
   analyzer.Start(
-      target_path, dmg_no_extension,
+      target_file_name, dmg_no_extension, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::MAC_EXECUTABLE);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::VALID);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::VALID);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::DMG);
 }
 
 #endif
 
+// Archive file analysis is not supported on Android.
+#if !BUILDFLAG(IS_ANDROID)
 TEST_F(FileAnalyzerTest, SmallRarHasContentInspection) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
       new testing::StrictMock<MockBinaryFeatureExtractor>();
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("has_exe.rar"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("has_exe.rar"));
   base::FilePath rar_path;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
   rar_path = rar_path.AppendASCII("safe_browsing")
@@ -711,21 +792,22 @@ TEST_F(FileAnalyzerTest, SmallRarHasContentInspection) {
 
   // Analyze the RAR with default size limit
   analyzer.Start(
-      target_path, rar_path,
+      target_file_name, rar_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::RAR_COMPRESSED_EXECUTABLE);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::VALID);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::VALID);
   ASSERT_EQ(1, result_.archived_binaries.size());
 
   // Since the file is small enough, we should have a sha256
   EXPECT_FALSE(result_.archived_binaries.Get(0).digests().sha256().empty());
 }
 
-// TODO(crbug.com/949399): The test is flaky (fail, timeout) on all platforms.
 TEST_F(FileAnalyzerTest, LargeRarSkipsContentInspection) {
   scoped_refptr<MockBinaryFeatureExtractor> extractor =
       new testing::StrictMock<MockBinaryFeatureExtractor>();
@@ -743,7 +825,7 @@ TEST_F(FileAnalyzerTest, LargeRarSkipsContentInspection) {
   }
   overlay.SwapConfig(config);
 
-  base::FilePath target_path(FILE_PATH_LITERAL("has_exe.rar"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("has_exe.rar"));
   base::FilePath rar_path;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
   rar_path = rar_path.AppendASCII("safe_browsing")
@@ -751,15 +833,17 @@ TEST_F(FileAnalyzerTest, LargeRarSkipsContentInspection) {
                  .AppendASCII("has_exe.rar");
 
   analyzer.Start(
-      target_path, rar_path,
+      target_file_name, rar_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::INVALID_RAR);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::INVALID);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
   ASSERT_EQ(0, result_.archived_binaries.size());
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::TOO_LARGE);
 }
 
 TEST_F(FileAnalyzerTest, ZipFilesGetFileCount) {
@@ -768,30 +852,30 @@ TEST_F(FileAnalyzerTest, ZipFilesGetFileCount) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */
                        false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(1, result_.file_count);
-  EXPECT_EQ(0, result_.directory_count);
+  EXPECT_EQ(1, result_.archive_summary.file_count());
+  EXPECT_EQ(0, result_.archive_summary.directory_count());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, ZipFilesGetDirectoryCount) {
@@ -800,7 +884,7 @@ TEST_F(FileAnalyzerTest, ZipFilesGetDirectoryCount) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
@@ -813,14 +897,15 @@ TEST_F(FileAnalyzerTest, ZipFilesGetDirectoryCount) {
                        false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(0, result_.file_count);
-  EXPECT_EQ(1, result_.directory_count);
+  EXPECT_EQ(0, result_.archive_summary.file_count());
+  EXPECT_EQ(1, result_.archive_summary.directory_count());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
 
 TEST_F(FileAnalyzerTest, RarFilesGetFileCount) {
@@ -829,7 +914,7 @@ TEST_F(FileAnalyzerTest, RarFilesGetFileCount) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("has_exe.rar"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("has_exe.rar"));
   base::FilePath rar_path;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
   rar_path = rar_path.AppendASCII("safe_browsing")
@@ -837,14 +922,15 @@ TEST_F(FileAnalyzerTest, RarFilesGetFileCount) {
                  .AppendASCII("has_exe.rar");
 
   analyzer.Start(
-      target_path, rar_path,
+      target_file_name, rar_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(1, result_.file_count);
-  EXPECT_EQ(0, result_.directory_count);
+  EXPECT_EQ(1, result_.archive_summary.file_count());
+  EXPECT_EQ(0, result_.archive_summary.directory_count());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
 }
 
 TEST_F(FileAnalyzerTest, RarFilesGetDirectoryCount) {
@@ -853,7 +939,7 @@ TEST_F(FileAnalyzerTest, RarFilesGetDirectoryCount) {
   FileAnalyzer analyzer(extractor);
   base::RunLoop run_loop;
 
-  base::FilePath target_path(FILE_PATH_LITERAL("has_folder.rar"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("has_folder.rar"));
   base::FilePath rar_path;
   EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
   rar_path = rar_path.AppendASCII("safe_browsing")
@@ -861,14 +947,15 @@ TEST_F(FileAnalyzerTest, RarFilesGetDirectoryCount) {
                  .AppendASCII("has_folder.rar");
 
   analyzer.Start(
-      target_path, rar_path,
+      target_file_name, rar_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
-  EXPECT_EQ(0, result_.file_count);
-  EXPECT_EQ(1, result_.directory_count);
+  EXPECT_EQ(0, result_.archive_summary.file_count());
+  EXPECT_EQ(1, result_.archive_summary.directory_count());
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
 }
 
 TEST_F(FileAnalyzerTest, LargeZipSkipsContentInspection) {
@@ -888,30 +975,297 @@ TEST_F(FileAnalyzerTest, LargeZipSkipsContentInspection) {
   }
   overlay.SwapConfig(config);
 
-  base::FilePath target_path(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
   base::FilePath tmp_path =
       temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
 
   base::ScopedTempDir zip_source_dir;
   ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
   std::string file_contents = "dummy file";
-  ASSERT_EQ(static_cast<int>(file_contents.size()),
-            base::WriteFile(
-                zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
-                file_contents.data(), file_contents.size()));
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
   ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
                        /* include_hidden_files= */ false));
 
   analyzer.Start(
-      target_path, tmp_path,
+      target_file_name, tmp_path, /*password=*/std::nullopt,
       base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
                      run_loop.QuitClosure()));
   run_loop.Run();
 
   ASSERT_TRUE(has_result_);
   EXPECT_EQ(result_.type, ClientDownloadRequest::INVALID_ZIP);
-  EXPECT_EQ(result_.archive_is_valid, FileAnalyzer::ArchiveValid::INVALID);
   ASSERT_EQ(0, result_.archived_binaries.size());
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::TOO_LARGE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
 }
+
+TEST_F(FileAnalyzerTest, ZipAnalysisResultMetric) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::HistogramTester histogram_tester;
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath tmp_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
+
+  base::ScopedTempDir zip_source_dir;
+  ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
+  std::string file_contents = "dummy file";
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
+  ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), tmp_path,
+                       /* include_hidden_files= */ false));
+
+  analyzer.Start(
+      target_file_name, tmp_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
+  histogram_tester.ExpectBucketCount(
+      "SBClientDownload.ZipArchiveAnalysisResult",
+      ArchiveAnalysisResult::kValid, 1);
+}
+
+TEST_F(FileAnalyzerTest, RarAnalysisResultMetric) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::HistogramTester histogram_tester;
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("has_exe.rar"));
+  base::FilePath rar_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
+  rar_path = rar_path.AppendASCII("safe_browsing")
+                 .AppendASCII("rar")
+                 .AppendASCII("has_exe.rar");
+
+  analyzer.Start(
+      target_file_name, rar_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
+  histogram_tester.ExpectBucketCount(
+      "SBClientDownload.RarArchiveAnalysisResult",
+      ArchiveAnalysisResult::kValid, 1);
+}
+
+#if BUILDFLAG(IS_MAC)
+TEST_F(FileAnalyzerTest, DmgAnalysisResultMetric) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::HistogramTester histogram_tester;
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.dmg"));
+  base::FilePath signed_dmg;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &signed_dmg));
+  signed_dmg = signed_dmg.AppendASCII("safe_browsing")
+                   .AppendASCII("mach_o")
+                   .AppendASCII("signed-archive.dmg");
+
+  analyzer.Start(
+      target_file_name, signed_dmg, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::DMG);
+  histogram_tester.ExpectBucketCount(
+      "SBClientDownload.DmgArchiveAnalysisResult",
+      ArchiveAnalysisResult::kValid, 1);
+}
+#endif
+
+TEST_F(FileAnalyzerTest, EncryptedEntriesDoNotHaveHashOrLength) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("encrypted.zip"));
+  base::FilePath zip_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &zip_path));
+  zip_path = zip_path.AppendASCII("safe_browsing")
+                 .AppendASCII("download_protection")
+                 .AppendASCII("encrypted.zip");
+
+  analyzer.Start(
+      target_file_name, zip_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.type, ClientDownloadRequest::ZIPPED_EXECUTABLE);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
+  ASSERT_EQ(1, result_.archived_binaries.size());
+  EXPECT_TRUE(result_.archived_binaries.Get(0).digests().sha256().empty());
+  EXPECT_FALSE(result_.archived_binaries.Get(0).has_length());
+}
+
+TEST_F(FileAnalyzerTest, RarDirectoriesNotReported) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("file_and_folder.rar"));
+  base::FilePath rar_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
+  rar_path = rar_path.AppendASCII("safe_browsing")
+                 .AppendASCII("rar")
+                 .AppendASCII("file_and_folder.rar");
+
+  analyzer.Start(
+      target_file_name, rar_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+
+  ASSERT_EQ(result_.archived_binaries.size(), 1);
+  EXPECT_EQ(result_.archived_binaries[0].file_path(), "file.exe");
+  EXPECT_EQ(result_.archived_binaries[0].length(), 24);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
+}
+
+TEST_F(FileAnalyzerTest, ZeroLengthSevenZipEntriesSupported) {
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("file_and_empty.7z"));
+  base::FilePath sevenz_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &sevenz_path));
+  sevenz_path = sevenz_path.AppendASCII("safe_browsing")
+                    .AppendASCII("seven_zip")
+                    .AppendASCII("file_and_empty.7z");
+
+  analyzer.Start(
+      target_file_name, sevenz_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  ASSERT_EQ(result_.archived_binaries.size(), 2);
+  EXPECT_EQ(result_.archived_binaries[0].file_path(), "large");
+  EXPECT_EQ(result_.archived_binaries[0].length(), 21);
+  EXPECT_EQ(result_.archived_binaries[1].file_path(), "empty");
+  EXPECT_EQ(result_.archived_binaries[1].length(), 0);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::SEVEN_ZIP);
+}
+
+TEST_F(FileAnalyzerTest, ObfuscatedZipAnalysis) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {enterprise_obfuscation::kEnterpriseFileObfuscation,
+       enterprise_obfuscation::kEnterpriseFileObfuscationArchiveAnalyzer},
+      {});
+
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor, /*is_obfuscated=*/true);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.zip"));
+  base::FilePath tmp_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
+
+  base::ScopedTempDir zip_source_dir;
+  ASSERT_TRUE(zip_source_dir.CreateUniqueTempDir());
+  std::string file_contents = "dummy file";
+  ASSERT_TRUE(base::WriteFile(
+      zip_source_dir.GetPath().Append(FILE_PATH_LITERAL("file.exe")),
+      file_contents));
+  base::FilePath zip_path = temp_dir_.GetPath().AppendASCII("original.zip");
+  ASSERT_TRUE(zip::Zip(zip_source_dir.GetPath(), zip_path,
+                       /* include_hidden_files= */ false));
+
+  // Obfuscate
+  std::string original_zip_content;
+  ASSERT_TRUE(base::ReadFileToString(zip_path, &original_zip_content));
+  enterprise_obfuscation::DownloadObfuscator obfuscator;
+  auto obfuscation_result =
+      obfuscator.ObfuscateChunk(base::as_byte_span(original_zip_content), true);
+  ASSERT_TRUE(obfuscation_result.has_value());
+  ASSERT_TRUE(base::WriteFile(tmp_path, obfuscation_result.value()));
+
+  analyzer.Start(
+      target_file_name, tmp_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  // It should be successfully analyzed as a zip
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::ZIP);
+  EXPECT_TRUE(result_.archived_executable);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::VALID);
+}
+TEST_F(FileAnalyzerTest, ObfuscatedRarAnalysis) {
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitWithFeatures(
+      {enterprise_obfuscation::kEnterpriseFileObfuscation,
+       enterprise_obfuscation::kEnterpriseFileObfuscationArchiveAnalyzer},
+      {});
+
+  scoped_refptr<MockBinaryFeatureExtractor> extractor =
+      new testing::StrictMock<MockBinaryFeatureExtractor>();
+  FileAnalyzer analyzer(extractor, /*is_obfuscated=*/true);
+  base::RunLoop run_loop;
+
+  base::FilePath target_file_name(FILE_PATH_LITERAL("target.rar"));
+  base::FilePath tmp_path =
+      temp_dir_.GetPath().Append(FILE_PATH_LITERAL("tmp.crdownload"));
+
+  base::FilePath rar_path;
+  EXPECT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &rar_path));
+  rar_path = rar_path.AppendASCII("safe_browsing")
+                 .AppendASCII("rar")
+                 .AppendASCII("has_exe.rar");
+
+  // Obfuscate
+  std::string original_rar_content;
+  ASSERT_TRUE(base::ReadFileToString(rar_path, &original_rar_content));
+  enterprise_obfuscation::DownloadObfuscator obfuscator;
+  auto obfuscation_result =
+      obfuscator.ObfuscateChunk(base::as_byte_span(original_rar_content), true);
+  ASSERT_TRUE(obfuscation_result.has_value());
+  ASSERT_TRUE(base::WriteFile(tmp_path, obfuscation_result.value()));
+
+  analyzer.Start(
+      target_file_name, tmp_path, /*password=*/std::nullopt,
+      base::BindOnce(&FileAnalyzerTest::DoneCallback, base::Unretained(this),
+                     run_loop.QuitClosure()));
+  run_loop.Run();
+
+  ASSERT_TRUE(has_result_);
+  EXPECT_EQ(result_.inspection_performed, DownloadFileType::RAR);
+  EXPECT_TRUE(result_.archived_executable);
+  EXPECT_EQ(result_.archive_summary.parser_status(),
+            ClientDownloadRequest::ArchiveSummary::VALID);
+}
+#endif  // !BUILDFLAG(IS_ANDROID)
 
 }  // namespace safe_browsing

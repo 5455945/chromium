@@ -1,23 +1,33 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/drive/drive_api_util.h"
 
+#include <array>
 #include <string>
+#include <string_view>
 
-#include "base/cxx17_backports.h"
+#include "base/containers/heap_array.h"
 #include "base/files/file.h"
-#include "base/hash/md5.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/atomic_flag.h"
+#include "crypto/obsolete/md5.h"
 #include "third_party/re2/src/re2/re2.h"
 
 namespace drive {
 namespace util {
+
+// Not inside the anonymous namespace so it can be friended by
+// crypto/obsolete/md5.
+crypto::obsolete::Md5 MakeMd5HasherForDriveApi() {
+  return {};
+}
+
 namespace {
 
 struct HostedDocumentKind {
@@ -25,20 +35,20 @@ struct HostedDocumentKind {
   const char* extension;
 };
 
-const HostedDocumentKind kHostedDocumentKinds[] = {
-    {kGoogleDocumentMimeType,     ".gdoc"},
-    {kGoogleSpreadsheetMimeType,  ".gsheet"},
+constexpr auto kHostedDocumentKinds = std::to_array<HostedDocumentKind>({
+    {kGoogleDocumentMimeType, ".gdoc"},
+    {kGoogleSpreadsheetMimeType, ".gsheet"},
     {kGooglePresentationMimeType, ".gslides"},
-    {kGoogleDrawingMimeType,      ".gdraw"},
-    {kGoogleTableMimeType,        ".gtable"},
-    {kGoogleFormMimeType,         ".gform"},
-    {kGoogleMapMimeType,          ".gmaps"},
-    {kGoogleSiteMimeType,         ".gsite"},
-};
+    {kGoogleDrawingMimeType, ".gdraw"},
+    {kGoogleTableMimeType, ".gtable"},
+    {kGoogleFormMimeType, ".gform"},
+    {kGoogleMapMimeType, ".gmaps"},
+    {kGoogleSiteMimeType, ".gsite"},
+    {kEmailLayoutsMimeType, ".gmaillayout"},
+    {kDriveProjectMimeType, ".gprj"},
+});
 
 const char kUnknownHostedDocumentExtension[] = ".glink";
-
-const int kMd5DigestBufferSize = 512 * 1024;  // 512 kB.
 
 }  // namespace
 
@@ -130,43 +140,32 @@ std::string CanonicalizeResourceId(const std::string& resource_id) {
   return resource_id;
 }
 
-std::string GetMd5Digest(const base::FilePath& file_path,
-                         const base::AtomicFlag* cancellation_flag) {
+std::string GetMd5Digest(const base::FilePath& file_path) {
+  constexpr size_t kMd5DigestBufferSize = 512 * 1024;  // 512 kB.
   base::File file(file_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
   if (!file.IsValid())
     return std::string();
 
-  base::MD5Context context;
-  base::MD5Init(&context);
+  auto md5 = MakeMd5HasherForDriveApi();
 
-  int64_t offset = 0;
-  std::unique_ptr<char[]> buffer(new char[kMd5DigestBufferSize]);
-  while (true) {
-    if (cancellation_flag && cancellation_flag->IsSet()) {  // Cancelled.
-      return std::string();
+  auto buffer = base::HeapArray<uint8_t>::Uninit(kMd5DigestBufferSize);
+  std::optional<size_t> result;
+  do {
+    result = file.ReadAtCurrentPos(buffer.as_span());
+    if (result.has_value()) {
+      md5.Update(buffer.as_span().first(*result));
     }
-    int result = file.Read(offset, buffer.get(), kMd5DigestBufferSize);
-    if (result < 0) {
-      // Found an error.
-      return std::string();
-    }
+  } while (result.has_value() && result.value() > 0);
 
-    if (result == 0) {
-      // End of file.
-      break;
-    }
-
-    offset += result;
-    base::MD5Update(&context, base::StringPiece(buffer.get(), result));
+  if (!result.has_value()) {
+    return std::string();
   }
 
-  base::MD5Digest digest;
-  base::MD5Final(&digest, &context);
-  return base::MD5DigestToBase16(digest);
+  return base::HexEncodeLower(md5.Finish());
 }
 
 bool IsKnownHostedDocumentMimeType(const std::string& mime_type) {
-  for (size_t i = 0; i < base::size(kHostedDocumentKinds); ++i) {
+  for (size_t i = 0; i < std::size(kHostedDocumentKinds); ++i) {
     if (mime_type == kHostedDocumentKinds[i].mime_type)
       return true;
   }
@@ -175,13 +174,16 @@ bool IsKnownHostedDocumentMimeType(const std::string& mime_type) {
 
 bool HasHostedDocumentExtension(const base::FilePath& path) {
   const std::string extension = base::FilePath(path.Extension()).AsUTF8Unsafe();
-  for (size_t i = 0; i < base::size(kHostedDocumentKinds); ++i) {
+  for (size_t i = 0; i < std::size(kHostedDocumentKinds); ++i) {
     if (extension == kHostedDocumentKinds[i].extension)
       return true;
   }
   return extension == kUnknownHostedDocumentExtension;
 }
 
+bool IsEncryptedMimeType(const std::string& mime_type) {
+  return base::StartsWith(mime_type, kEncryptedMimeType);
+}
 
 }  // namespace util
 }  // namespace drive

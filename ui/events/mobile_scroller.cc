@@ -1,14 +1,15 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+
 #include "ui/events/mobile_scroller.h"
 
+#include <array>
 #include <cmath>
+#include <ostream>
 
 #include "base/check_op.h"
-#include "base/lazy_instance.h"
-#include "base/macros.h"
 #include "base/notreached.h"
 #include "base/numerics/math_constants.h"
 
@@ -43,7 +44,10 @@ struct ViscosityConstants {
     viscous_fluid_normalize_ = 1.0f / ApplyViscosity(1.0f);
   }
 
-  float ApplyViscosity(float x) {
+  ViscosityConstants(const ViscosityConstants&) = delete;
+  ViscosityConstants& operator=(const ViscosityConstants&) = delete;
+
+  float ApplyViscosity(float x) const {
     x *= viscous_fluid_scale_;
     if (x < 1.0f) {
       x -= (1.0f - std::exp(-x));
@@ -60,8 +64,6 @@ struct ViscosityConstants {
   // This controls the intensity of the viscous fluid effect.
   float viscous_fluid_scale_;
   float viscous_fluid_normalize_;
-
-  DISALLOW_COPY_AND_ASSIGN(ViscosityConstants);
 };
 
 struct SplineConstants {
@@ -74,7 +76,7 @@ struct SplineConstants {
     float x_min = 0.0f;
     float y_min = 0.0f;
     for (int i = 0; i < NUM_SAMPLES; i++) {
-      const float alpha = static_cast<float>(i) / NUM_SAMPLES;
+      const float alpha = i / float{NUM_SAMPLES};
 
       float x_max = 1.0f;
       float x, tx, coef;
@@ -109,15 +111,18 @@ struct SplineConstants {
     spline_position_[NUM_SAMPLES] = spline_time_[NUM_SAMPLES] = 1.0f;
   }
 
+  SplineConstants(const SplineConstants&) = delete;
+  SplineConstants& operator=(const SplineConstants&) = delete;
+
   void CalculateCoefficients(float t,
                              float* distance_coef,
-                             float* velocity_coef) {
+                             float* velocity_coef) const {
     *distance_coef = 1.f;
     *velocity_coef = 0.f;
-    const int index = static_cast<int>(NUM_SAMPLES * t);
+    const int index = base::ClampFloor(float{NUM_SAMPLES} * t);
     if (index < NUM_SAMPLES) {
-      const float t_inf = static_cast<float>(index) / NUM_SAMPLES;
-      const float t_sup = static_cast<float>(index + 1) / NUM_SAMPLES;
+      const float t_inf = index / float{NUM_SAMPLES};
+      const float t_sup = (index + 1) / float{NUM_SAMPLES};
       const float d_inf = spline_position_[index];
       const float d_sup = spline_position_[index + 1];
       *velocity_coef = (d_sup - d_inf) / (t_sup - t_inf);
@@ -128,10 +133,8 @@ struct SplineConstants {
  private:
   enum { NUM_SAMPLES = 100 };
 
-  float spline_position_[NUM_SAMPLES + 1];
-  float spline_time_[NUM_SAMPLES + 1];
-
-  DISALLOW_COPY_AND_ASSIGN(SplineConstants);
+  std::array<float, NUM_SAMPLES + 1> spline_position_;
+  std::array<float, NUM_SAMPLES + 1> spline_time_;
 };
 
 float ComputeDeceleration(float friction) {
@@ -151,12 +154,17 @@ T Clamped(T t, T a, T b) {
   return t < a ? a : (t > b ? b : t);
 }
 
-// Leaky to allow access from the impl thread.
-base::LazyInstance<ViscosityConstants>::Leaky g_viscosity_constants =
-    LAZY_INSTANCE_INITIALIZER;
+const ViscosityConstants& GetViscosityConstants() {
+  // Trivially destructible, so no NoDestructor.
+  static const ViscosityConstants constants;
+  return constants;
+}
 
-base::LazyInstance<SplineConstants>::Leaky g_spline_constants =
-    LAZY_INSTANCE_INITIALIZER;
+const SplineConstants& GetSplineConstants() {
+  // Trivially destructible, so no NoDestructor.
+  static const SplineConstants constants;
+  return constants;
+}
 
 }  // namespace
 
@@ -197,8 +205,8 @@ MobileScroller::~MobileScroller() {}
 bool MobileScroller::ComputeScrollOffset(base::TimeTicks time,
                                          gfx::Vector2dF* offset,
                                          gfx::Vector2dF* velocity) {
-  DCHECK(offset);
-  DCHECK(velocity);
+  CHECK(offset, base::NotFatalUntil::M163);
+  CHECK(velocity, base::NotFatalUntil::M163);
   if (!ComputeScrollOffsetInternal(time)) {
     *offset = gfx::Vector2dF(GetFinalX(), GetFinalY());
     *velocity = gfx::Vector2dF();
@@ -216,7 +224,7 @@ void MobileScroller::StartScroll(float start_x,
                                  float dy,
                                  base::TimeTicks start_time) {
   StartScroll(start_x, start_y, dx, dy, start_time,
-              base::TimeDelta::FromMilliseconds(kDefaultDurationMs));
+              base::Milliseconds(kDefaultDurationMs));
 }
 
 void MobileScroller::StartScroll(float start_x,
@@ -225,7 +233,7 @@ void MobileScroller::StartScroll(float start_x,
                                  float dy,
                                  base::TimeTicks start_time,
                                  base::TimeDelta duration) {
-  DCHECK_GT(duration, base::TimeDelta());
+  CHECK_GT(duration, base::TimeDelta(), base::NotFatalUntil::M163);
   mode_ = SCROLL_MODE;
   finished_ = false;
   duration_ = duration;
@@ -248,7 +256,7 @@ void MobileScroller::Fling(float start_x,
                            float min_y,
                            float max_y,
                            base::TimeTicks start_time) {
-  DCHECK(velocity_x || velocity_y);
+  CHECK(velocity_x || velocity_y, base::NotFatalUntil::M163);
 
   // Continue a scroll or fling in progress.
   if (flywheel_enabled_ && !finished_) {
@@ -268,7 +276,7 @@ void MobileScroller::Fling(float start_x,
 
   velocity_ = velocity;
   duration_ = GetSplineFlingDuration(velocity);
-  DCHECK_GT(duration_, base::TimeDelta());
+  CHECK_GT(duration_, base::TimeDelta(), base::NotFatalUntil::M163);
   duration_seconds_reciprocal_ = 1.0 / duration_.InSecondsF();
   start_time_ = start_time;
   curr_time_ = start_time_;
@@ -406,10 +414,9 @@ bool MobileScroller::ComputeScrollOffsetInternal(base::TimeTicks time) {
     case UNDEFINED:
       NOTREACHED() << "|StartScroll()| or |Fling()| must be called prior to "
                       "scroll offset computation.";
-      return false;
 
     case SCROLL_MODE: {
-      float x = g_viscosity_constants.Get().ApplyViscosity(u);
+      float x = GetViscosityConstants().ApplyViscosity(u);
 
       curr_x_ = start_x_ + x * delta_x_;
       curr_y_ = start_y_ + x * delta_y_;
@@ -418,8 +425,8 @@ bool MobileScroller::ComputeScrollOffsetInternal(base::TimeTicks time) {
     case FLING_MODE: {
       float distance_coef = 1.f;
       float velocity_coef = 0.f;
-      g_spline_constants.Get().CalculateCoefficients(u, &distance_coef,
-                                                     &velocity_coef);
+      GetSplineConstants().CalculateCoefficients(u, &distance_coef,
+                                                 &velocity_coef);
 
       curr_velocity_ = velocity_coef * distance_ * duration_seconds_reciprocal_;
 
@@ -461,8 +468,7 @@ base::TimeDelta MobileScroller::GetSplineFlingDuration(float velocity) const {
   const double l = GetSplineDeceleration(velocity);
   const double decel_minus_one = kDecelerationRate - 1.0;
   const double time_seconds = std::exp(l / decel_minus_one);
-  return base::TimeDelta::FromMicroseconds(time_seconds *
-                                           base::Time::kMicrosecondsPerSecond);
+  return base::Microseconds(time_seconds * base::Time::kMicrosecondsPerSecond);
 }
 
 double MobileScroller::GetSplineFlingDistance(float velocity) const {

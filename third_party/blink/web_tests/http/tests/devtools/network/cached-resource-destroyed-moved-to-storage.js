@@ -1,14 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
+
+import {ConsoleTestRunner} from 'console_test_runner';
+import * as TextUtils from 'devtools/core/text_utils/text_utils.js';
+import {NetworkTestRunner} from 'network_test_runner';
+import {TestRunner} from 'test_runner';
 
 (async function() {
   TestRunner.addResult(
     `Tests content is moved from cached resource to resource agent's data storage when cached resource is destroyed.\n`
   );
 
-  await TestRunner.loadTestModule('network_test_runner');
-  await TestRunner.loadModule('console'); await TestRunner.loadTestModule('console_test_runner');
   await TestRunner.showPanel('network');
 
   await TestRunner.evaluateInPagePromise(`
@@ -40,7 +43,7 @@
 
   function step2() {
     imageRequest = NetworkTestRunner.networkRequests().pop();
-    imageRequest.requestContent().then(step3);
+    imageRequest.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(step3);
   }
 
   var originalContentLength;
@@ -57,16 +60,16 @@
   }
 
   function step4(msg) {
-    TestRunner.NetworkAgent.setCacheDisabled(true).then(step5);
+    TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: true}).then(step5);
   }
 
   function step5() {
-    TestRunner.NetworkAgent.setCacheDisabled(false).then(step6);
+    TestRunner.NetworkAgent.invoke_setCacheDisabled({cacheDisabled: false}).then(step6);
   }
 
   function step6() {
-    delete imageRequest._contentData;
-    imageRequest.requestContent().then(step7);
+    delete imageRequest.contentData;
+    imageRequest.requestContentData().then(TextUtils.ContentData.ContentData.asDeferredContent).then(step7);
   }
 
   function step7({ content, error, isEncoded }) {

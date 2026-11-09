@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ namespace ash {
 using DragDropImageTest = AshTestBase;
 
 TEST_F(DragDropImageTest, SetBoundsConsidersDragHintForTouch) {
-  std::unique_ptr<aura::Window> window = CreateTestWindow();
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   views::UniqueWidgetPtr drag_image_widget =
       DragImageView::Create(window.get(), ui::mojom::DragEventSource::kTouch);
   DragImageView* drag_image_view =
@@ -48,7 +48,7 @@ TEST_F(DragDropImageTest, SetBoundsConsidersDragHintForTouch) {
 }
 
 TEST_F(DragDropImageTest, SetBoundsIgnoresDragHintForMouse) {
-  std::unique_ptr<aura::Window> window = CreateTestWindow();
+  std::unique_ptr<aura::Window> window = CreateWindowWithAppType();
   views::UniqueWidgetPtr drag_image_widget =
       DragImageView::Create(window.get(), ui::mojom::DragEventSource::kMouse);
   DragImageView* drag_image_view =

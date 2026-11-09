@@ -1,21 +1,20 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "sandbox/mac/seatbelt_exec.h"
 
-#include <fcntl.h>
-#include <inttypes.h>
-#include <stdarg.h>
-#include <stdio.h>
-#include <sys/socket.h>
-#include <sys/uio.h>
+#include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 
+#include <limits>
 #include <vector>
 
+#include "base/compiler_specific.h"
 #include "base/posix/eintr_wrapper.h"  //nogncheck
 #include "sandbox/mac/sandbox_logging.h"
+#include "sandbox/mac/sandbox_serializer.h"
 #include "sandbox/mac/seatbelt.h"
 
 namespace sandbox {
@@ -43,7 +42,8 @@ constexpr char WriteTraits::kNameString[];
 template <typename Traits>
 bool ReadOrWrite(int fd,
                  const typename Traits::BufferType buffer,
-                 const size_t size) {
+                 const size_t size,
+                 const char* operation_description) {
   if (size > std::numeric_limits<ssize_t>::max()) {
     logging::Error("request size is greater than ssize_t::max");
     return false;
@@ -53,14 +53,16 @@ bool ReadOrWrite(int fd,
 
   while (bytes_to_transact > 0) {
     ssize_t offset = size - bytes_to_transact;
-    ssize_t transacted_bytes =
-        HANDLE_EINTR(Traits::Operate(fd, buffer + offset, bytes_to_transact));
+    ssize_t transacted_bytes = HANDLE_EINTR(
+        Traits::Operate(fd, UNSAFE_TODO(buffer + offset), bytes_to_transact));
     if (transacted_bytes < 0) {
-      logging::PError("%s failed", Traits::kNameString);
+      logging::PError("SeatbeltExec: %s %s failed", operation_description,
+                      Traits::kNameString);
       return false;
     } else if (transacted_bytes == 0) {
       // A short read from the sender, perhaps the sender process died.
-      logging::Error("%s failed", Traits::kNameString);
+      logging::Error("SeatbeltExec: %s %s failed", operation_description,
+                     Traits::kNameString);
       return false;
     }
 
@@ -92,40 +94,15 @@ SeatbeltExecClient::~SeatbeltExecClient() {
     IGNORE_EINTR(close(pipe_[1]));
 }
 
-bool SeatbeltExecClient::SetBooleanParameter(const std::string& key,
-                                             bool value) {
-  google::protobuf::MapPair<std::string, std::string> pair(
-      key, value ? "TRUE" : "FALSE");
-  return policy_.mutable_params()->insert(pair).second;
-}
-
-bool SeatbeltExecClient::SetParameter(const std::string& key,
-                                      const std::string& value) {
-  google::protobuf::MapPair<std::string, std::string> pair(key, value);
-  return policy_.mutable_params()->insert(pair).second;
-}
-
-void SeatbeltExecClient::SetProfile(const std::string& policy) {
-  policy_.set_profile(policy);
-}
-
 int SeatbeltExecClient::GetReadFD() {
   return pipe_[0];
 }
 
-bool SeatbeltExecClient::SendProfile() {
+bool SeatbeltExecClient::SendPolicy(const std::string& serialized_policy) {
   IGNORE_EINTR(close(pipe_[0]));
   pipe_[0] = -1;
 
-  std::string serialized_protobuf;
-  if (!policy_.SerializeToString(&serialized_protobuf)) {
-    logging::Error("SeatbeltExecClient: Serializing the profile failed.");
-    return false;
-  }
-
-  if (!WriteString(serialized_protobuf)) {
-    logging::Error(
-        "SeatbeltExecClient: Writing the serialized profile failed.");
+  if (!WriteString(serialized_policy)) {
     return false;
   }
 
@@ -138,21 +115,20 @@ bool SeatbeltExecClient::SendProfile() {
 bool SeatbeltExecClient::WriteString(const std::string& str) {
   uint64_t str_len = static_cast<uint64_t>(str.size());
   if (!ReadOrWrite<WriteTraits>(pipe_[1], reinterpret_cast<uint8_t*>(&str_len),
-                                sizeof(str_len))) {
-    logging::Error("SeatbeltExecClient: write buffer length failed.");
+                                sizeof(str_len), "buffer length")) {
     return false;
   }
 
-  if (!ReadOrWrite<WriteTraits>(
-          pipe_[1], reinterpret_cast<const uint8_t*>(&str[0]), str_len)) {
-    logging::Error("SeatbeltExecClient: write buffer failed.");
+  if (!ReadOrWrite<WriteTraits>(pipe_[1],
+                                reinterpret_cast<const uint8_t*>(&str[0]),
+                                str_len, "buffer")) {
     return false;
   }
 
   return true;
 }
 
-SeatbeltExecServer::SeatbeltExecServer(int fd) : fd_(fd), extra_params_() {}
+SeatbeltExecServer::SeatbeltExecServer(int fd) : fd_(fd) {}
 
 SeatbeltExecServer::~SeatbeltExecServer() {
   close(fd_);
@@ -169,14 +145,14 @@ sandbox::SeatbeltExecServer::CreateFromArgumentsResult::
 sandbox::SeatbeltExecServer::CreateFromArgumentsResult
 SeatbeltExecServer::CreateFromArguments(const char* executable_path,
                                         int argc,
-                                        char** argv) {
+                                        const char* const* argv) {
   CreateFromArgumentsResult result;
   int seatbelt_client_fd = -1;
   for (int i = 1; i < argc; ++i) {
-    if (strncmp(argv[i], switches::kSeatbeltClient,
-                strlen(switches::kSeatbeltClient)) == 0) {
+    if (UNSAFE_TODO(strncmp(argv[i], switches::kSeatbeltClient,
+                            strlen(switches::kSeatbeltClient))) == 0) {
       result.sandbox_required = true;
-      std::string arg(argv[i]);
+      std::string arg(UNSAFE_TODO(argv[i]));
       std::string fd_string = arg.substr(strlen(switches::kSeatbeltClient));
       seatbelt_client_fd = std::stoi(fd_string);
     }
@@ -191,21 +167,7 @@ SeatbeltExecServer::CreateFromArguments(const char* executable_path,
     return result;
   }
 
-  char full_exec_path[MAXPATHLEN];
-  if (realpath(executable_path, full_exec_path) == NULL) {
-    logging::PError("realpath");
-    return result;
-  }
-
-  auto server = std::make_unique<SeatbeltExecServer>(seatbelt_client_fd);
-  // These parameters are provided for every profile to use.
-  if (!server->SetParameter("EXECUTABLE_PATH", full_exec_path) ||
-      !server->SetParameter("CURRENT_PID", std::to_string(getpid()))) {
-    logging::Error("Failed to set up parameters for sandbox.");
-    return result;
-  }
-
-  result.server = std::move(server);
+  result.server.reset(new SeatbeltExecServer(seatbelt_client_fd));
   return result;
 }
 
@@ -214,62 +176,24 @@ bool SeatbeltExecServer::InitializeSandbox() {
   if (!ReadString(&policy_string))
     return false;
 
-  mac::SandboxPolicy policy;
-  if (!policy.ParseFromString(policy_string)) {
-    logging::Error("SeatbeltExecServer: ParseFromString failed");
-    return false;
-  }
-
-  return ApplySandboxProfile(policy);
-}
-
-bool SeatbeltExecServer::ApplySandboxProfile(const mac::SandboxPolicy& policy) {
-  std::vector<const char*> weak_params;
-  for (const auto& pair : policy.params()) {
-    weak_params.push_back(pair.first.c_str());
-    weak_params.push_back(pair.second.c_str());
-  }
-  for (const auto& pair : extra_params_) {
-    weak_params.push_back(pair.first.c_str());
-    weak_params.push_back(pair.second.c_str());
-  }
-  weak_params.push_back(nullptr);
-
-  char* error = nullptr;
-  int rv = Seatbelt::InitWithParams(policy.profile().c_str(), 0,
-                                    weak_params.data(), &error);
-  if (error) {
-    logging::Error("SeatbeltExecServer: Failed to initialize sandbox: %d %s",
-                   rv, error);
-    Seatbelt::FreeError(error);
-    return false;
-  }
-
-  return rv == 0;
+  return SandboxSerializer::ApplySerializedPolicy(policy_string);
 }
 
 bool SeatbeltExecServer::ReadString(std::string* str) {
   uint64_t buf_len = 0;
   if (!ReadOrWrite<ReadTraits>(fd_, reinterpret_cast<uint8_t*>(&buf_len),
-                               sizeof(buf_len))) {
-    logging::Error("SeatbeltExecServer: failed to read buffer length.");
+                               sizeof(buf_len), "buffer length")) {
     return false;
   }
 
   str->resize(buf_len);
 
   if (!ReadOrWrite<ReadTraits>(fd_, reinterpret_cast<uint8_t*>(&(*str)[0]),
-                               buf_len)) {
-    logging::Error("SeatbeltExecServer: failed to read buffer.");
+                               buf_len, "buffer")) {
     return false;
   }
 
   return true;
-}
-
-bool SeatbeltExecServer::SetParameter(const std::string& key,
-                                      const std::string& value) {
-  return extra_params_.insert(std::make_pair(key, value)).second;
 }
 
 }  // namespace sandbox

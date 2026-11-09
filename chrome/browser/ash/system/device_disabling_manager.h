@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,18 +8,22 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
-#include "chrome/browser/ash/settings/cros_settings.h"
+#include "base/observer_list_types.h"
+#include "chromeos/ash/components/policy/restriction_schedule/device_restriction_schedule_controller.h"
+#include "chromeos/ash/components/settings/cros_settings.h"
+
+class PrefService;
 
 namespace policy {
-class BrowserPolicyConnectorChromeOS;
+class BrowserPolicyConnectorAsh;
 }
 
-namespace user_manager {
-class UserManager;
+namespace session_manager {
+class SessionManager;
 }
 
 namespace ash {
@@ -31,8 +35,8 @@ namespace system {
 // - If the device has been wiped, it will perform a hash dance during OOBE to
 //   find out whether any persistent state has been stored for it on the server.
 //   If so, persistent state is retrieved as a |DeviceStateRetrievalResponse|
-//   protobuf, parsed and written to the |prefs::kServerBackedDeviceState| local
-//   state pref. At the appropriate place in the OOBE flow, the
+//   protobuf, parsed and written to the |ash::prefs::kServerBackedDeviceState|
+//   local state pref. At the appropriate place in the OOBE flow, the
 //   |WizardController| will call CheckWhetherDeviceDisabledDuringOOBE() to find
 //   out whether the device is disabled, causing it to either show or skip the
 //   device disabled screen.
@@ -46,26 +50,31 @@ namespace system {
 //   2) If a session is in progress, the session is terminated. After Chrome has
 //      restarted on the login screen, the disabled screen is shown per 1).
 //   This ensures that when a device is disabled, there is never any user
-//   session running in the backround.
+//   session running in the background.
 //   When the device is re-enabled, Chrome is restarted once more to resume the
 //   regular login screen flows from a known-good point.
-class DeviceDisablingManager {
+class DeviceDisablingManager
+    : public policy::DeviceRestrictionScheduleController::Observer {
  public:
   using DeviceDisabledCheckCallback = base::OnceCallback<void(bool)>;
 
-  class Observer {
+  class Observer : public base::CheckedObserver {
    public:
-    virtual ~Observer();
+    Observer& operator=(const Observer&) = delete;
+
+    ~Observer() override;
 
     virtual void OnDisabledMessageChanged(
         const std::string& disabled_message) = 0;
 
-   private:
-    DISALLOW_ASSIGN(Observer);
+    virtual void OnLocationTrackingEnabledChanged(
+        bool location_tracking_enabled) = 0;
   };
 
   class Delegate {
    public:
+    Delegate& operator=(const Delegate&) = delete;
+
     virtual ~Delegate();
 
     // Terminate the current session (if any) and restart Chrome to show the
@@ -74,16 +83,27 @@ class DeviceDisablingManager {
 
     // Show the device disabled screen.
     virtual void ShowDeviceDisabledScreen() = 0;
-
-   private:
-    DISALLOW_ASSIGN(Delegate);
   };
 
-  // |delegate| must outlive |this|.
-  DeviceDisablingManager(Delegate* delegate,
-                         CrosSettings* cros_settings,
-                         user_manager::UserManager* user_manager);
-  ~DeviceDisablingManager();
+  // Following pointers must be non-null, and must outlive `this`:
+  // - `local_state`
+  // - `browser_policy_connector_ash`
+  // - `device_restriction_schedule_controller`
+  // - `session_manager`
+  // `delegate` must outlive `this`.
+  DeviceDisablingManager(
+      const PrefService* local_state,
+      const policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      policy::DeviceRestrictionScheduleController*
+          device_restriction_schedule_controller,
+      Delegate* delegate,
+      CrosSettings* cros_settings,
+      session_manager::SessionManager* session_manager);
+
+  DeviceDisablingManager(const DeviceDisablingManager&) = delete;
+  DeviceDisablingManager& operator=(const DeviceDisablingManager&) = delete;
+
+  ~DeviceDisablingManager() override;
 
   // Must be called after construction.
   void Init();
@@ -98,6 +118,11 @@ class DeviceDisablingManager {
   // Returns the cached disabled message. The message is only guaranteed to be
   // up to date if the disabled screen was triggered.
   const std::string& disabled_message() const { return disabled_message_; }
+
+  // Returns whether location tracking is enabled for the disabled device. The
+  // value is only guaranteed to be up to date if the disabled screen was
+  // triggered.
+  bool location_tracking_enabled() const { return location_tracking_enabled_; }
 
   // Returns the cached serial_number. The value is only guaranteed to be
   // up to date if the disabled screen was triggered.
@@ -121,17 +146,30 @@ class DeviceDisablingManager {
   // Cache the disabled message and inform observers if it changed.
   void CacheDisabledMessageAndNotify(const std::string& disabled_message);
 
-  void UpdateFromCrosSettings();
+  // Cache the location tracking enabled state and inform observers if it
+  // changed.
+  void CacheLocationTrackingEnabledAndNotify(bool location_tracking_enabled);
 
-  Delegate* delegate_;
-  policy::BrowserPolicyConnectorChromeOS* browser_policy_connector_;
-  CrosSettings* cros_settings_;
-  user_manager::UserManager* user_manager_;
+  // DeviceRestrictionScheduleController::Observer:
+  void OnRestrictionScheduleStateChanged(bool enabled) override;
 
-  base::ObserverList<Observer>::Unchecked observers_;
+  void Update();
+
+  const raw_ref<const PrefService> local_state_;
+  const raw_ref<const policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+  const raw_ref<policy::DeviceRestrictionScheduleController>
+      device_restriction_schedule_controller_;
+
+  raw_ptr<Delegate> delegate_;
+  raw_ptr<CrosSettings> cros_settings_;
+  const raw_ref<session_manager::SessionManager> session_manager_;
+
+  base::ObserverList<Observer> observers_;
 
   base::CallbackListSubscription device_disabled_subscription_;
   base::CallbackListSubscription disabled_message_subscription_;
+  base::CallbackListSubscription location_tracking_enabled_subscription_;
 
   // Indicates whether the device was disabled when the cros settings were last
   // read.
@@ -143,23 +181,16 @@ class DeviceDisablingManager {
   // A cached copy of the message to show on the device disabled screen.
   std::string disabled_message_;
 
+  // A cached copy of whether location tracking is enabled.
+  bool location_tracking_enabled_ = false;
+
   // A cached copy of the serial number to show on the device disabled screen.
   std::string serial_number_;
 
   base::WeakPtrFactory<DeviceDisablingManager> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(DeviceDisablingManager);
 };
 
 }  // namespace system
 }  // namespace ash
-
-// TODO(https://crbug.com/1164001): remove when Chrome OS code migration is
-// done.
-namespace chromeos {
-namespace system {
-using ::ash::system::DeviceDisablingManager;
-}  // namespace system
-}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_ASH_SYSTEM_DEVICE_DISABLING_MANAGER_H_

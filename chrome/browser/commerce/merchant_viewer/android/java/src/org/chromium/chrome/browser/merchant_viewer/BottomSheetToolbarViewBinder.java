@@ -1,18 +1,20 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.merchant_viewer;
 
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.ui.modelutil.PropertyKey;
 import org.chromium.ui.modelutil.PropertyModel;
 
 /** ViewBinder for BottomSheetToolbarView. */
+@NullMarked
 public class BottomSheetToolbarViewBinder {
     public static void bind(
             PropertyModel model, BottomSheetToolbarView view, PropertyKey propertyKey) {
-        if (BottomSheetToolbarProperties.URL == propertyKey) {
-            view.setUrl(model.get(BottomSheetToolbarProperties.URL));
+        if (BottomSheetToolbarProperties.ORIGIN == propertyKey) {
+            view.setOrigin(model.get(BottomSheetToolbarProperties.ORIGIN));
         } else if (BottomSheetToolbarProperties.TITLE == propertyKey) {
             view.setTitle(model.get(BottomSheetToolbarProperties.TITLE));
         } else if (BottomSheetToolbarProperties.LOAD_PROGRESS == propertyKey) {
@@ -32,6 +34,9 @@ public class BottomSheetToolbarViewBinder {
                     model.get(BottomSheetToolbarProperties.CLOSE_BUTTON_ON_CLICK_CALLBACK));
         } else if (BottomSheetToolbarProperties.FAVICON_ICON == propertyKey) {
             view.setFaviconIcon(model.get(BottomSheetToolbarProperties.FAVICON_ICON));
+        } else if (BottomSheetToolbarProperties.FAVICON_ICON_DRAWABLE == propertyKey) {
+            view.setFaviconIconDrawable(
+                    model.get(BottomSheetToolbarProperties.FAVICON_ICON_DRAWABLE));
         } else if (BottomSheetToolbarProperties.FAVICON_ICON_VISIBLE == propertyKey) {
             view.setFaviconIconVisible(
                     model.get(BottomSheetToolbarProperties.FAVICON_ICON_VISIBLE));

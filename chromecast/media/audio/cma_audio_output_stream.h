@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,15 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
-#include "base/memory/weak_ptr.h"
+#include "base/functional/callback.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
-#include "chromecast/common/mojom/multiroom.mojom.h"
 #include "chromecast/media/api/cma_backend.h"
 #include "media/audio/audio_io.h"
 #include "media/base/audio_parameters.h"
@@ -44,11 +40,14 @@ class CmaAudioOutputStream : public CmaBackend::Decoder::Delegate {
                        base::TimeDelta buffer_duration,
                        const std::string& device_id,
                        CmaBackendFactory* cma_backend_factory);
+
+  CmaAudioOutputStream(const CmaAudioOutputStream&) = delete;
+  CmaAudioOutputStream& operator=(const CmaAudioOutputStream&) = delete;
+
   ~CmaAudioOutputStream() override;
 
   void SetRunning(bool running);
-  void Initialize(const std::string& application_session_id,
-                  chromecast::mojom::MultiroomInfoPtr multiroom_info);
+  void Initialize(const std::string& application_session_id);
   void Start(::media::AudioOutputStream::AudioSourceCallback* source_callback);
   void Stop(base::WaitableEvent* finished);
   void Flush(base::WaitableEvent* finished);
@@ -97,8 +96,6 @@ class CmaAudioOutputStream : public CmaBackend::Decoder::Delegate {
   ::media::AudioOutputStream::AudioSourceCallback* source_callback_ = nullptr;
 
   THREAD_CHECKER(media_thread_checker_);
-
-  DISALLOW_COPY_AND_ASSIGN(CmaAudioOutputStream);
 };
 
 }  // namespace media

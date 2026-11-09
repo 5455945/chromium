@@ -1,25 +1,51 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "base/pending_task.h"
 
+#include "base/task/task_features.h"
 
 namespace base {
 
-PendingTask::PendingTask() = default;
+TaskMetadata::TaskMetadata() = default;
 
-PendingTask::PendingTask(const Location& posted_from, OnceClosure task)
-    : PendingTask(posted_from, std::move(task), TimeTicks(), TimeTicks()) {}
+TaskMetadata::TaskMetadata(const Location& posted_from,
+                           TimeTicks queue_time,
+                           TimeTicks delayed_run_time,
+                           TimeDelta leeway,
+                           subtle::DelayPolicy delay_policy)
+    : posted_from(posted_from),
+      queue_time(queue_time),
+      delayed_run_time(delayed_run_time),
+      leeway(leeway),
+      delay_policy(delay_policy) {}
+
+TaskMetadata::TaskMetadata(TaskMetadata&& other) = default;
+TaskMetadata::TaskMetadata(const TaskMetadata& other) = default;
+
+TaskMetadata::~TaskMetadata() = default;
+
+TaskMetadata& TaskMetadata::operator=(TaskMetadata&& other) = default;
+TaskMetadata& TaskMetadata::operator=(const TaskMetadata& other) = default;
+
+PendingTask::PendingTask() = default;
 
 PendingTask::PendingTask(const Location& posted_from,
                          OnceClosure task,
                          TimeTicks queue_time,
-                         TimeTicks delayed_run_time)
-    : task(std::move(task)),
-      posted_from(posted_from),
-      queue_time(queue_time),
-      delayed_run_time(delayed_run_time) {}
+                         TimeTicks delayed_run_time,
+                         TimeDelta leeway,
+                         subtle::DelayPolicy delay_policy)
+    : TaskMetadata(posted_from,
+                   queue_time,
+                   delayed_run_time,
+                   leeway,
+                   delay_policy),
+      task(std::move(task)) {}
+
+PendingTask::PendingTask(const TaskMetadata& metadata, OnceClosure task)
+    : TaskMetadata(metadata), task(std::move(task)) {}
 
 PendingTask::PendingTask(PendingTask&& other) = default;
 
@@ -27,26 +53,27 @@ PendingTask::~PendingTask() = default;
 
 PendingTask& PendingTask::operator=(PendingTask&& other) = default;
 
-bool PendingTask::operator<(const PendingTask& other) const {
-  // Since the top of a priority queue is defined as the "greatest" element, we
-  // need to invert the comparison here.  We want the smaller time to be at the
-  // top of the heap.
-
-  if (delayed_run_time < other.delayed_run_time)
-    return false;
-
-  if (delayed_run_time > other.delayed_run_time)
-    return true;
-
-  // If the times happen to match, then we use the sequence number to decide.
-  // Compare the difference to support integer roll-over.
-  return (sequence_num - other.sequence_num) > 0;
+TimeTicks TaskMetadata::GetDesiredExecutionTime() const {
+  if (!delayed_run_time.is_null()) {
+    return delayed_run_time;
+  }
+  return queue_time;
 }
 
-TimeTicks PendingTask::GetDesiredExecutionTime() const {
-  if (!delayed_run_time.is_null())
-    return delayed_run_time;
-  return queue_time;
+TimeTicks TaskMetadata::earliest_delayed_run_time() const {
+  DCHECK(!delayed_run_time.is_null());
+  if (delay_policy == subtle::DelayPolicy::kFlexiblePreferEarly) {
+    return delayed_run_time - leeway;
+  }
+  return delayed_run_time;
+}
+
+TimeTicks TaskMetadata::latest_delayed_run_time() const {
+  DCHECK(!delayed_run_time.is_null());
+  if (delay_policy == subtle::DelayPolicy::kFlexibleNoSooner) {
+    return delayed_run_time + leeway;
+  }
+  return delayed_run_time;
 }
 
 }  // namespace base

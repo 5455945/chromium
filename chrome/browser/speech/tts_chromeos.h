@@ -1,4 +1,4 @@
-// Copyright (c) 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -37,7 +37,8 @@ class TtsPlatformImplChromeOs : public content::TtsPlatform {
   void ClearError() override;
   void SetError(const std::string& error) override;
   bool IsSpeaking() override;
-  bool PreferEngineDelegateVoices() override;
+  void FinalizeVoiceOrdering(std::vector<content::VoiceData>& voices) override;
+  void RefreshVoices() override;
 
   // Unimplemented.
   void Pause() override {}
@@ -52,8 +53,9 @@ class TtsPlatformImplChromeOs : public content::TtsPlatform {
 
  private:
   friend base::NoDestructor<TtsPlatformImplChromeOs>;
+  friend class TtsChromeosTest;
   TtsPlatformImplChromeOs();
-  ~TtsPlatformImplChromeOs();
+  virtual ~TtsPlatformImplChromeOs();
 
   void ProcessSpeech(int utterance_id,
                      const std::string& lang,

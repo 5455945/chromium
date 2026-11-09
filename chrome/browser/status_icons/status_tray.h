@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "base/macros.h"
 
 namespace gfx {
 class ImageSkia;
@@ -25,6 +23,8 @@ class StatusTray {
     NOTIFICATION_TRAY_ICON = 0,
     MEDIA_STREAM_CAPTURE_ICON,
     BACKGROUND_MODE_ICON,
+    GLIC_ICON,
+    OMNIBOX_EVERYWHERE_ICON,
     OTHER_ICON,
     NAMED_STATUS_ICON_COUNT
   };
@@ -34,6 +34,9 @@ class StatusTray {
   // platform does not support status icons.
   static std::unique_ptr<StatusTray> Create();
 
+  StatusTray(const StatusTray&) = delete;
+  StatusTray& operator=(const StatusTray&) = delete;
+
   virtual ~StatusTray();
 
   // Creates a new StatusIcon. The StatusTray retains ownership of the
@@ -42,11 +45,25 @@ class StatusTray {
                                const gfx::ImageSkia& image,
                                const std::u16string& tool_tip);
 
-  // Removes |icon| from this status tray.
-  void RemoveStatusIcon(StatusIcon* icon);
+  // Removes |icon| from this status tray. Returns the `std::unique_ptr` to the
+  // icon so it can be cleaned up safely.
+  std::unique_ptr<StatusIcon> RemoveStatusIcon(StatusIcon* icon);
+
+  // Checks if a status icon of a specific type exists in the status tray.
+  bool HasStatusIconOfTypeForTesting(StatusIconType type) const;
 
  protected:
-  using StatusIcons = std::vector<std::unique_ptr<StatusIcon>>;
+  struct StatusIconWithType {
+    StatusIconWithType(std::unique_ptr<StatusIcon> status_icon,
+                       StatusIconType status_icon_type);
+    StatusIconWithType(StatusIconWithType&& other) noexcept;
+    StatusIconWithType& operator=(StatusIconWithType&& other) noexcept;
+    ~StatusIconWithType();
+
+    std::unique_ptr<StatusIcon> icon;
+    StatusIconType type;
+  };
+  using StatusIcons = std::vector<StatusIconWithType>;
 
   StatusTray();
 
@@ -60,11 +77,9 @@ class StatusTray {
   const StatusIcons& status_icons() const { return status_icons_; }
 
  private:
-  // List containing all active StatusIcons. The icons are owned by this
-  // StatusTray.
+  // List containing all active StatusIcons, paired with their type. The icons
+  // are owned by this StatusTray.
   StatusIcons status_icons_;
-
-  DISALLOW_COPY_AND_ASSIGN(StatusTray);
 };
 
 #endif  // CHROME_BROWSER_STATUS_ICONS_STATUS_TRAY_H_

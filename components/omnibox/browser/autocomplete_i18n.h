@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -31,7 +31,6 @@
 // expands to more than one code point that will not be handled properly. Such
 // characters will be compared case-sensitively.
 struct SimpleCaseInsensitiveCompareUCS2 {
- public:
   bool operator()(char16_t x, char16_t y) const {
     return u_tolower(x) == u_tolower(y);
   }

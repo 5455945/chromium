@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,19 +9,24 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
+#include "base/callback_list.h"
+#include "base/memory/raw_ptr.h"
+#include "base/memory/raw_ref.h"
 #include "base/memory/weak_ptr.h"
-// TODO(https://crbug.com/1164001): move CrosSettings to forward declaration
-// when moved to chrome/browser/ash/.
-#include "chrome/browser/ash/settings/cros_settings.h"
-#include "chromeos/dbus/session_manager/session_manager_client.h"
+#include "chromeos/ash/components/dbus/session_manager/session_manager_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_store.h"
 
 namespace device {
 class BluetoothAdapter;
-}
+}  // namespace device
 
-namespace chromeos {
+namespace policy {
+class BrowserPolicyConnectorAsh;
+}  // namespace policy
+
+namespace ash {
+
+class CrosSettings;
 
 // Fetches all info we want to show on OOBE/Login screens about system
 // version, boot times and cloud policy.
@@ -29,7 +34,7 @@ class VersionInfoUpdater : public policy::CloudPolicyStore::Observer {
  public:
   class Delegate {
    public:
-    virtual ~Delegate() {}
+    virtual ~Delegate() = default;
 
     // Called when OS version label should be updated.
     virtual void OnOSVersionLabelTextUpdated(
@@ -46,7 +51,14 @@ class VersionInfoUpdater : public policy::CloudPolicyStore::Observer {
     virtual void OnAdbSideloadStatusUpdated(bool enabled) = 0;
   };
 
-  explicit VersionInfoUpdater(Delegate* delegate);
+  // `browser_policy_connector_ash` must be non-null and must outlive `this`.
+  VersionInfoUpdater(
+      policy::BrowserPolicyConnectorAsh* browser_policy_connector_ash,
+      Delegate* delegate);
+
+  VersionInfoUpdater(const VersionInfoUpdater&) = delete;
+  VersionInfoUpdater& operator=(const VersionInfoUpdater&) = delete;
+
   ~VersionInfoUpdater() override;
 
   // Sets delegate.
@@ -57,7 +69,7 @@ class VersionInfoUpdater : public policy::CloudPolicyStore::Observer {
   void StartUpdate(bool is_chrome_branded);
 
   // Determine whether the system information will be displayed forcedly.
-  absl::optional<bool> IsSystemInfoEnforced() const;
+  std::optional<bool> IsSystemInfoEnforced() const;
 
  private:
   // policy::CloudPolicyStore::Observer interface:
@@ -77,8 +89,8 @@ class VersionInfoUpdater : public policy::CloudPolicyStore::Observer {
   // Produce a label with device identifiers.
   std::string GetDeviceIdsLabel();
 
-  // Callback from chromeos::VersionLoader giving the version.
-  void OnVersion(const std::string& version);
+  // Callback from VersionLoader giving the version.
+  void OnVersion(const std::optional<std::string>& version);
 
   // Callback from device::BluetoothAdapterFactory::GetAdapter.
   void OnGetAdapter(scoped_refptr<device::BluetoothAdapter> adapter);
@@ -88,23 +100,24 @@ class VersionInfoUpdater : public policy::CloudPolicyStore::Observer {
       SessionManagerClient::AdbSideloadResponseCode response_code,
       bool enabled);
 
+  const raw_ref<policy::BrowserPolicyConnectorAsh>
+      browser_policy_connector_ash_;
+
   // Text obtained from OnVersion.
-  std::string version_text_;
+  std::optional<std::string> version_text_;
 
   std::vector<base::CallbackListSubscription> subscriptions_;
 
-  chromeos::CrosSettings* cros_settings_;
+  raw_ptr<CrosSettings> cros_settings_;
 
-  Delegate* delegate_;
+  raw_ptr<Delegate> delegate_;
 
   // Weak pointer factory so we can give our callbacks for invocation
   // at a later time without worrying that they will actually try to
   // happen after the lifetime of this object.
   base::WeakPtrFactory<VersionInfoUpdater> weak_pointer_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(VersionInfoUpdater);
 };
 
-}  // namespace chromeos
+}  // namespace ash
 
 #endif  // CHROME_BROWSER_ASH_LOGIN_VERSION_INFO_UPDATER_H_

@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,9 +7,8 @@
 
 #include <string>
 
-#include "base/callback_helpers.h"
-
-class Profile;
+#include "base/functional/callback_helpers.h"
+#include "chrome/browser/ash/borealis/borealis_metrics.h"
 
 namespace borealis {
 
@@ -20,6 +19,7 @@ class BorealisAppLauncher {
  public:
   enum class LaunchResult {
     kSuccess,
+    kUninstalled,  // User uninstalled Borealis via MOTD dialog.
     kUnknownApp,
     kNoResponse,
     kError,
@@ -40,21 +40,25 @@ class BorealisAppLauncher {
                      const std::vector<std::string>& args,
                      OnLaunchedCallback callback);
 
-  explicit BorealisAppLauncher(Profile* profile);
+  BorealisAppLauncher() = default;
+  BorealisAppLauncher(const BorealisAppLauncher&) = delete;
+  BorealisAppLauncher& operator=(const BorealisAppLauncher&) = delete;
+  virtual ~BorealisAppLauncher() = default;
 
   // Launch the given |app_id|'s associated application. This can be the
-  // borealis launcher itself or one of its GuestOsRegistry apps.
-  void Launch(std::string app_id, OnLaunchedCallback callback);
+  // borealis launcher itself or one of its GuestOsRegistry apps. |source|
+  // indicates the source of the launch request.
+  virtual void Launch(std::string app_id,
+                      BorealisLaunchSource source,
+                      OnLaunchedCallback callback) = 0;
 
   // Launch the given |app_id|'s associated application with the given |args|.
   // This can be the borealis launcher itself or one of its GuestOsRegistry
-  // apps.
-  void Launch(std::string app_id,
-              const std::vector<std::string>& args,
-              OnLaunchedCallback callback);
-
- private:
-  Profile* const profile_;
+  // apps. |source| indicates the source of the launch request.
+  virtual void Launch(std::string app_id,
+                      const std::vector<std::string>& args,
+                      BorealisLaunchSource source,
+                      OnLaunchedCallback callback) = 0;
 };
 
 }  // namespace borealis

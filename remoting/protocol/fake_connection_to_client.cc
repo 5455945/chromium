@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,17 +6,28 @@
 
 #include <utility>
 
-#include "remoting/codec/video_encoder.h"
+#include "base/notimplemented.h"
+#include "remoting/base/fifo_buffer.h"
 #include "remoting/protocol/audio_source.h"
 #include "remoting/protocol/audio_stream.h"
+#include "remoting/protocol/fake_message_pipe_wrapper.h"
 #include "remoting/protocol/session.h"
-#include "remoting/protocol/video_frame_pump.h"
 #include "third_party/webrtc/modules/desktop_capture/desktop_capturer.h"
 
-namespace remoting {
-namespace protocol {
+namespace remoting::protocol {
 
-FakeVideoStream::FakeVideoStream() {}
+FakeAudioStream::FakeAudioStream() = default;
+FakeAudioStream::~FakeAudioStream() = default;
+
+void FakeAudioStream::Pause(bool pause) {
+  is_paused_ = pause;
+}
+
+base::WeakPtr<FakeAudioStream> FakeAudioStream::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
+FakeVideoStream::FakeVideoStream() = default;
 FakeVideoStream::~FakeVideoStream() = default;
 
 void FakeVideoStream::SetEventTimestampsSource(
@@ -24,22 +35,21 @@ void FakeVideoStream::SetEventTimestampsSource(
 
 void FakeVideoStream::Pause(bool pause) {}
 
-void FakeVideoStream::SetLosslessEncode(bool want_lossless) {}
-
-void FakeVideoStream::SetLosslessColor(bool want_lossless) {}
-
-void FakeVideoStream::SetObserver(Observer* observer) {
-  observer_ = observer;
+void FakeVideoStream::SelectSource(webrtc::ScreenId id) {
+  selected_source_ = id;
 }
 
-void FakeVideoStream::SelectSource(int id) {}
+void FakeVideoStream::SetTargetFramerate(int framerate) {}
+
+webrtc::ScreenId FakeVideoStream::selected_source() const {
+  return selected_source_;
+}
 
 base::WeakPtr<FakeVideoStream> FakeVideoStream::GetWeakPtr() {
   return weak_factory_.GetWeakPtr();
 }
 
-FakeConnectionToClient::FakeConnectionToClient(std::unique_ptr<Session> session)
-    : session_(std::move(session)) {}
+FakeConnectionToClient::FakeConnectionToClient() = default;
 
 FakeConnectionToClient::~FakeConnectionToClient() = default;
 
@@ -47,19 +57,15 @@ void FakeConnectionToClient::SetEventHandler(EventHandler* event_handler) {
   event_handler_ = event_handler;
 }
 
-std::unique_ptr<VideoStream> FakeConnectionToClient::StartVideoStream(
-    std::unique_ptr<webrtc::DesktopCapturer> desktop_capturer) {
-  desktop_capturer_ = std::move(desktop_capturer);
-  if (video_stub_ && video_encode_task_runner_) {
-    std::unique_ptr<VideoEncoder> video_encoder =
-        VideoEncoder::Create(session_->config());
+void FakeConnectionToClient::ApplyNetworkSettings(
+    const NetworkSettings& settings) {
+  network_settings_ = settings;
+}
 
-    std::unique_ptr<protocol::VideoFramePump> pump(new protocol::VideoFramePump(
-        video_encode_task_runner_, std::move(desktop_capturer_),
-        std::move(video_encoder), video_stub_));
-    video_feedback_stub_ = pump->video_feedback_stub();
-    return std::move(pump);
-  }
+std::unique_ptr<VideoStream> FakeConnectionToClient::StartVideoStream(
+    webrtc::ScreenId screen_id,
+    std::unique_ptr<DesktopCapturer> desktop_capturer) {
+  desktop_capturer_ = std::move(desktop_capturer);
 
   std::unique_ptr<FakeVideoStream> result(new FakeVideoStream());
   last_video_stream_ = result->GetWeakPtr();
@@ -68,25 +74,41 @@ std::unique_ptr<VideoStream> FakeConnectionToClient::StartVideoStream(
 
 std::unique_ptr<AudioStream> FakeConnectionToClient::StartAudioStream(
     std::unique_ptr<AudioSource> audio_source) {
-  NOTIMPLEMENTED();
-  return nullptr;
+  audio_source_ = std::move(audio_source);
+
+  auto result = std::make_unique<FakeAudioStream>();
+  last_audio_stream_ = result->GetWeakPtr();
+  return result;
+}
+
+void FakeConnectionToClient::SetAudioWriter(
+    std::unique_ptr<FifoBufferWriter> writer) {
+  audio_writer_ = std::move(writer);
 }
 
 ClientStub* FakeConnectionToClient::client_stub() {
   return client_stub_;
 }
 
-void FakeConnectionToClient::Disconnect(ErrorCode disconnect_error) {
-  CHECK(is_connected_);
+void FakeConnectionToClient::Start() {}
+
+void FakeConnectionToClient::Disconnect(ErrorCode disconnect_error,
+                                        std::string_view error_details,
+                                        const SourceLocation& error_location) {
+  if (!is_connected_) {
+    return;
+  }
 
   is_connected_ = false;
   disconnect_error_ = disconnect_error;
-  if (event_handler_)
-    event_handler_->OnConnectionClosed(disconnect_error_);
+  if (event_handler_) {
+    event_handler_->OnConnectionClosed(disconnect_error, error_details,
+                                       error_location);
+  }
 }
 
-Session* FakeConnectionToClient::session() {
-  return session_.get();
+Transport* FakeConnectionToClient::transport() {
+  return nullptr;
 }
 
 void FakeConnectionToClient::set_clipboard_stub(ClipboardStub* clipboard_stub) {
@@ -109,5 +131,27 @@ WebrtcEventLogData* FakeConnectionToClient::rtc_event_log() {
   return nullptr;
 }
 
-}  // namespace protocol
-}  // namespace remoting
+base::WeakPtr<ConnectionToClient> FakeConnectionToClient::GetWeakPtr() {
+  return weak_factory_.GetWeakPtr();
+}
+
+base::WeakPtr<FakeConnectionToClient>
+FakeConnectionToClient::GetWeakPtrForTest() {
+  return weak_factory_.GetWeakPtr();
+}
+
+std::unique_ptr<MessagePipe> FakeConnectionToClient::CreateOutgoingDataChannel(
+    const std::string& name) {
+  auto pipe = std::make_unique<FakeMessagePipe>(/*asynchronous=*/false);
+  std::unique_ptr<MessagePipe> wrapper = pipe->Wrap();
+  outgoing_data_channels_[name] = std::move(pipe);
+  return wrapper;
+}
+
+FakeMessagePipe* FakeConnectionToClient::GetOutgoingDataChannel(
+    const std::string& name) const {
+  auto it = outgoing_data_channels_.find(name);
+  return it != outgoing_data_channels_.end() ? it->second.get() : nullptr;
+}
+
+}  // namespace remoting::protocol

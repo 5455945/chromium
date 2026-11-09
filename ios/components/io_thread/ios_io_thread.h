@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -14,9 +14,8 @@
 #include <string>
 #include <vector>
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#import "base/memory/raw_ptr.h"
+#include "base/memory/scoped_refptr.h"
 #include "base/memory/weak_ptr.h"
 #include "components/prefs/pref_member.h"
 #include "ios/web/public/thread/web_thread_delegate.h"
@@ -27,25 +26,14 @@ class PrefProxyConfigTracker;
 class PrefService;
 
 namespace net {
-class CTPolicyEnforcer;
-class CertVerifier;
-class CookieStore;
-class HostResolver;
 class HttpAuthHandlerFactory;
 class HttpAuthPreferences;
-class HttpServerProperties;
-class HttpTransactionFactory;
-class HttpUserAgentSettings;
 class LoggingNetworkChangeObserver;
 class NetLog;
 class NetworkDelegate;
 class ProxyConfigService;
-class ProxyResolutionService;
-class SSLConfigService;
-class TransportSecurityState;
 class URLRequestContext;
 class URLRequestContextGetter;
-class URLRequestJobFactory;
 }  // namespace net
 
 namespace io_thread {
@@ -86,50 +74,30 @@ class IOSIOThread : public web::WebThreadDelegate {
       ~SystemRequestContextLeakChecker();
 
      private:
-      Globals* const globals_;
+      const raw_ptr<Globals> globals_;
     };
 
     Globals();
     ~Globals();
 
-    // The "system" NetworkDelegate, used for BrowserState-agnostic network
-    // events.
-    std::unique_ptr<net::NetworkDelegate> system_network_delegate;
-    std::unique_ptr<net::HostResolver> host_resolver;
-    std::unique_ptr<net::CertVerifier> cert_verifier;
-    // This TransportSecurityState doesn't load or save any state. It's only
-    // used to enforce pinning for system requests and will only use built-in
-    // pins.
-    std::unique_ptr<net::TransportSecurityState> transport_security_state;
-    std::unique_ptr<net::SSLConfigService> ssl_config_service;
     std::unique_ptr<net::HttpAuthPreferences> http_auth_preferences;
-    std::unique_ptr<net::HttpAuthHandlerFactory> http_auth_handler_factory;
-    std::unique_ptr<net::HttpServerProperties> http_server_properties;
-    std::unique_ptr<net::ProxyResolutionService>
-        system_proxy_resolution_service;
-    std::unique_ptr<net::QuicContext> quic_context;
-    std::unique_ptr<net::HttpNetworkSession> system_http_network_session;
-    std::unique_ptr<net::HttpTransactionFactory>
-        system_http_transaction_factory;
-    std::unique_ptr<net::URLRequestJobFactory> system_url_request_job_factory;
     std::unique_ptr<net::URLRequestContext> system_request_context;
     SystemRequestContextLeakChecker system_request_context_leak_checker;
-    std::unique_ptr<net::CookieStore> system_cookie_store;
-    std::unique_ptr<net::HttpUserAgentSettings> http_user_agent_settings;
-    std::unique_ptr<net::CTPolicyEnforcer> ct_policy_enforcer;
   };
 
-  // |net_log| must either outlive the IOSIOThread or be NULL.
+  // `net_log` must either outlive the IOSIOThread or be NULL.
   IOSIOThread(PrefService* local_state, net::NetLog* net_log);
+
+  IOSIOThread(const IOSIOThread&) = delete;
+  IOSIOThread& operator=(const IOSIOThread&) = delete;
+
   ~IOSIOThread() override;
+
+  // Initialize the IO thread with blocking allowed.
+  void InitOnIO();
 
   // Can only be called on the IO thread.
   Globals* globals();
-
-  // Allows overriding Globals in tests where IOSIOThread::Init() and
-  // IOSIOThread::CleanUp() are not called.  This allows for injecting mocks
-  // into IOSIOThread global objects.
-  void SetGlobalsForTesting(Globals* globals);
 
   net::NetLog* net_log();
 
@@ -144,7 +112,11 @@ class IOSIOThread : public web::WebThreadDelegate {
   // called on the IO thread.
   void ClearHostCache();
 
-  const net::HttpNetworkSession::Params& NetworkSessionParams() const;
+  const net::HttpNetworkSessionParams& NetworkSessionParams() const;
+
+  const net::QuicParams& quic_params() const { return quic_params_; }
+
+  std::unique_ptr<net::HttpAuthHandlerFactory> CreateHttpAuthHandlerFactory();
 
  protected:
   // A string describing the current application version. For example: "stable"
@@ -169,31 +141,24 @@ class IOSIOThread : public web::WebThreadDelegate {
   void CleanUp() override;
 
   // Sets up HttpAuthPreferences and HttpAuthHandlerFactory on Globals.
-  void CreateDefaultAuthHandlerFactory();
+  void CreateDefaultAuthPreferences();
 
   // Discards confidential data. To be called on IO thread only.
   void ChangedToOnTheRecordOnIOThread();
 
-  static net::URLRequestContext* ConstructSystemRequestContext(
-      Globals* globals,
-      const net::HttpNetworkSession::Params& params,
-      net::NetLog* net_log);
+  std::unique_ptr<net::URLRequestContext> ConstructSystemRequestContext();
 
   // The NetLog is owned by the application context, to allow logging from other
   // threads during shutdown, but is used most frequently on the IO thread.
-  net::NetLog* net_log_;
+  raw_ptr<net::NetLog> net_log_;
 
-  // These member variables are basically global, but their lifetimes are tied
-  // to the IOSIOThread.  IOSIOThread owns them all, despite not using
-  // scoped_ptr. This is because the destructor of IOSIOThread runs on the
-  // wrong thread.  All member variables should be deleted in CleanUp().
+  // These member variables are initialized in Init() and destroyed in
+  // Cleanup(). They do not change for the lifetime of the IO thread.
+  std::unique_ptr<Globals> globals_;
 
-  // These member variables are initialized in Init() and do not change for the
-  // lifetime of the IO thread.
+  net::HttpNetworkSessionParams params_;
 
-  Globals* globals_;
-
-  net::HttpNetworkSession::Params params_;
+  net::QuicParams quic_params_;
 
   // Observer that logs network changes to the NetLog.
   std::unique_ptr<net::LoggingNetworkChangeObserver> network_change_observer_;
@@ -208,8 +173,6 @@ class IOSIOThread : public web::WebThreadDelegate {
       system_url_request_context_getter_;
 
   base::WeakPtrFactory<IOSIOThread> weak_factory_;
-
-  DISALLOW_COPY_AND_ASSIGN(IOSIOThread);
 };
 
 }  // namespace io_thread

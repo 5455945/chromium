@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,8 @@
 #include <utility>
 
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/file_path_conversion.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_file_property_bag.h"
 #include "third_party/blink/renderer/bindings/core/v8/v8_union_arraybuffer_arraybufferview_blob_usvstring.h"
@@ -19,7 +20,11 @@
 #include "third_party/blink/renderer/core/frame/local_frame.h"
 #include "third_party/blink/renderer/core/testing/dummy_page_holder.h"
 #include "third_party/blink/renderer/platform/bindings/exception_state.h"
+#include "third_party/blink/renderer/platform/blob/testing/fake_blob_registry.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
+#include "third_party/blink/renderer/platform/loader/fetch/memory_cache.h"
+#include "third_party/blink/renderer/platform/testing/task_environment.h"
 #include "third_party/blink/renderer/platform/testing/unit_test_helpers.h"
 
 namespace blink {
@@ -41,17 +46,17 @@ class MockShareService : public ShareService {
 
   void set_error(mojom::ShareError value) { error_ = value; }
 
-  const WTF::String& title() const { return title_; }
-  const WTF::String& text() const { return text_; }
+  const String& title() const { return title_; }
+  const String& text() const { return text_; }
   const KURL& url() const { return url_; }
-  const WTF::Vector<SharedFilePtr>& files() const { return files_; }
+  const Vector<SharedFilePtr>& files() const { return files_; }
   mojom::ShareError error() const { return error_; }
 
  private:
-  void Share(const WTF::String& title,
-             const WTF::String& text,
+  void Share(const String& title,
+             const String& text,
              const KURL& url,
-             WTF::Vector<SharedFilePtr> files,
+             Vector<SharedFilePtr> files,
              ShareCallback callback) override {
     title_ = title;
     text_ = text;
@@ -67,10 +72,10 @@ class MockShareService : public ShareService {
   }
 
   mojo::Receiver<ShareService> receiver_{this};
-  WTF::String title_;
-  WTF::String text_;
+  String title_;
+  String text_;
   KURL url_;
-  WTF::Vector<SharedFilePtr> files_;
+  Vector<SharedFilePtr> files_;
   mojom::ShareError error_;
 };
 
@@ -95,8 +100,8 @@ class NavigatorShareTest : public testing::Test {
         &GetFrame(), mojom::UserActivationNotificationType::kTest);
     Navigator* navigator = GetFrame().DomWindow()->navigator();
     NonThrowableExceptionState exception_state;
-    ScriptPromise promise = NavigatorShare::share(GetScriptState(), *navigator,
-                                                  &share_data, exception_state);
+    auto promise = NavigatorShare::share(GetScriptState(), *navigator,
+                                         &share_data, exception_state);
     test::RunPendingTasks();
     EXPECT_EQ(mock_share_service_.error() == mojom::ShareError::OK
                   ? v8::Promise::kFulfilled
@@ -109,15 +114,14 @@ class NavigatorShareTest : public testing::Test {
  protected:
   void SetUp() override {
     GetFrame().Loader().CommitNavigation(
-        WebNavigationParams::CreateWithHTMLBufferForTesting(
-            SharedBuffer::Create(), KURL("https://example.com")),
+        WebNavigationParams::CreateWithEmptyHTMLForTesting(
+            KURL("https://example.com")),
         nullptr /* extra_data */);
     test::RunPendingTasks();
 
     GetFrame().GetBrowserInterfaceBroker().SetBinderForTesting(
-        ShareService::Name_,
-        WTF::BindRepeating(&MockShareService::Bind,
-                           WTF::Unretained(&mock_share_service_)));
+        ShareService::Name_, BindRepeating(&MockShareService::Bind,
+                                           Unretained(&mock_share_service_)));
   }
 
   void TearDown() override {
@@ -126,15 +130,19 @@ class NavigatorShareTest : public testing::Test {
     // See https://crbug.com/1010116 for more information.
     GetFrame().GetBrowserInterfaceBroker().SetBinderForTesting(
         ShareService::Name_, {});
+
+    MemoryCache::Get()->EvictResources();
   }
 
  public:
+  test::TaskEnvironment task_environment;
   MockShareService mock_share_service_;
 
   std::unique_ptr<DummyPageHolder> holder_;
   v8::HandleScope handle_scope_;
   v8::Local<v8::Context> context_;
   v8::Context::Scope context_scope_;
+  ScopedFakeBlobRegistry blob_registry_;
 };
 
 TEST_F(NavigatorShareTest, ShareText) {
@@ -142,16 +150,19 @@ TEST_F(NavigatorShareTest, ShareText) {
   const String message = "Body";
   const String url = "https://example.com/path?query#fragment";
 
-  ShareData share_data;
-  share_data.setTitle(title);
-  share_data.setText(message);
-  share_data.setUrl(url);
-  Share(share_data);
+  ShareData* share_data = MakeGarbageCollected<ShareData>();
+  share_data->setTitle(title);
+  share_data->setText(message);
+  share_data->setUrl(url);
+  Share(*share_data);
 
   EXPECT_EQ(mock_share_service().title(), title);
   EXPECT_EQ(mock_share_service().text(), message);
   EXPECT_EQ(mock_share_service().url(), KURL(url));
   EXPECT_EQ(mock_share_service().files().size(), 0U);
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingTitle));
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingText));
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingUrl));
   EXPECT_TRUE(
       GetDocument().IsUseCounted(WebFeature::kWebShareSuccessfulWithoutFiles));
 }
@@ -163,9 +174,9 @@ File* CreateSampleFile(ExecutionContext* context,
   HeapVector<Member<V8BlobPart>> blob_parts;
   blob_parts.push_back(MakeGarbageCollected<V8BlobPart>(file_contents));
 
-  FilePropertyBag file_property_bag;
-  file_property_bag.setType(content_type);
-  return File::Create(context, blob_parts, file_name, &file_property_bag);
+  FilePropertyBag* file_property_bag = MakeGarbageCollected<FilePropertyBag>();
+  file_property_bag->setType(content_type);
+  return File::Create(context, blob_parts, file_name, file_property_bag);
 }
 
 TEST_F(NavigatorShareTest, ShareFile) {
@@ -177,26 +188,29 @@ TEST_F(NavigatorShareTest, ShareFile) {
   files.push_back(CreateSampleFile(ExecutionContext::From(GetScriptState()),
                                    file_name, content_type, file_contents));
 
-  ShareData share_data;
-  share_data.setFiles(files);
-  Share(share_data);
+  ShareData* share_data = MakeGarbageCollected<ShareData>();
+  share_data->setFiles(files);
+  Share(*share_data);
 
   EXPECT_EQ(mock_share_service().files().size(), 1U);
-  EXPECT_EQ(mock_share_service().files()[0]->name, file_name);
+  EXPECT_EQ(mock_share_service().files()[0]->name.path(),
+            StringToFilePath(file_name));
   EXPECT_EQ(mock_share_service().files()[0]->blob->GetType(), content_type);
   EXPECT_EQ(mock_share_service().files()[0]->blob->size(),
             file_contents.length());
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingFiles));
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kWebShareSuccessfulContainingFiles));
 }
 
 TEST_F(NavigatorShareTest, CancelShare) {
   const String title = "Subject";
-  ShareData share_data;
-  share_data.setTitle(title);
+  ShareData* share_data = MakeGarbageCollected<ShareData>();
+  share_data->setTitle(title);
 
   mock_share_service().set_error(mojom::blink::ShareError::CANCELED);
-  Share(share_data);
+  Share(*share_data);
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingTitle));
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kWebShareUnsuccessfulWithoutFiles));
 }
@@ -206,17 +220,42 @@ TEST_F(NavigatorShareTest, CancelShareWithFile) {
   const String content_type = "text/csv";
   const String file_contents = "1,2,3";
 
+  const String url = "https://example.site";
+
   HeapVector<Member<File>> files;
   files.push_back(CreateSampleFile(ExecutionContext::From(GetScriptState()),
                                    file_name, content_type, file_contents));
 
-  ShareData share_data;
-  share_data.setFiles(files);
+  ShareData* share_data = MakeGarbageCollected<ShareData>();
+  share_data->setFiles(files);
+  share_data->setUrl(url);
 
   mock_share_service().set_error(mojom::blink::ShareError::CANCELED);
-  Share(share_data);
+  Share(*share_data);
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingFiles));
+  EXPECT_TRUE(GetDocument().IsUseCounted(WebFeature::kWebShareContainingUrl));
   EXPECT_TRUE(GetDocument().IsUseCounted(
       WebFeature::kWebShareUnsuccessfulContainingFiles));
+}
+
+TEST_F(NavigatorShareTest, ShareFileUrlWithBaseTag) {
+  GetDocument().SetBaseURLOverride(KURL("file:///"));
+
+  const String url = "file:///etc/passwd";
+  ShareData* share_data = MakeGarbageCollected<ShareData>();
+  share_data->setUrl(url);
+
+  LocalFrame::NotifyUserActivation(
+      &GetFrame(), mojom::UserActivationNotificationType::kTest);
+  Navigator* navigator = GetFrame().DomWindow()->navigator();
+  DummyExceptionStateForTesting exception_state;
+  NavigatorShare::share(GetScriptState(), *navigator, share_data,
+                        exception_state);
+
+  // Regression test for crbug.com/501541341.
+  // Verify that the URL is rejected by CanShareInternal even when the
+  // document's base URL protocol is manipulated to match the shared URL.
+  EXPECT_TRUE(exception_state.HadException());
 }
 
 }  // namespace blink

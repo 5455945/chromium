@@ -26,12 +26,14 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_NODE_OUTPUT_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_WEBAUDIO_AUDIO_NODE_OUTPUT_H_
 
+#include "base/memory/raw_ref.h"
 #include "base/memory/scoped_refptr.h"
 #include "third_party/blink/renderer/modules/modules_export.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_node.h"
 #include "third_party/blink/renderer/modules/webaudio/audio_param.h"
 #include "third_party/blink/renderer/platform/audio/audio_bus.h"
 #include "third_party/blink/renderer/platform/wtf/hash_set.h"
+#include "third_party/blink/renderer/platform/wtf/vector.h"
 
 namespace blink {
 
@@ -65,11 +67,17 @@ class MODULES_EXPORT AudioNodeOutput final {
   // during the course of a render quantum.
   unsigned RenderingFanOutCount() const;
 
+  // Returns the number of AudioParams that this output is connected to
+  // during rendering. Unlike `ParamFanOutCount()` this will not change
+  // during a render quantum. MUST be called from the audio thread.
+  unsigned RenderingParamFanOutCount() const;
+
+  // Return true if either `RenderingFanOutCount()` or
+  // `RenderingParamFanOutCount()` is greater than zero.
+  bool IsConnectedDuringRendering() const;
+
   // Must be called with the context's graph lock.
   void DisconnectAll();
-
-  // Disconnect a specific input or AudioParam.
-  void DisconnectAudioParam(AudioParamHandler&);
 
   void SetNumberOfChannels(unsigned);
   unsigned NumberOfChannels() const { return number_of_channels_; }
@@ -81,8 +89,18 @@ class MODULES_EXPORT AudioNodeOutput final {
   // node, but it has otherwise "finished" its work.  For example, when a note
   // has finished playing.  It is kept around, because it may be played again at
   // a later time.  They must be called with the context's graph lock.
-  void Disable();
-  void Enable();
+  //
+  // DisableAndEnqueue disables this output and pushes downstream handlers that
+  // might need to be disabled into the provided `worklist`. The actual
+  // disabling of downstream nodes is handled by the caller (see
+  // `AudioHandler::DisableOutputs()`).
+  void DisableAndEnqueue(Vector<scoped_refptr<AudioHandler>>& worklist);
+
+  // EnableAndEnqueue enables this output and pushes downstream handlers that
+  // might need to be enabled into the provided `worklist`. The actual
+  // enabling of downstream nodes is handled by the caller (see
+  // `AudioHandler::EnableOutputs()`).
+  void EnableAndEnqueue(Vector<scoped_refptr<AudioHandler>>& worklist);
 
   // updateRenderingState() is called in the audio thread at the start or end of
   // the render quantum to handle any recent changes to the graph state.
@@ -91,14 +109,14 @@ class MODULES_EXPORT AudioNodeOutput final {
 
  private:
   // Can be called from any thread.
-  AudioHandler& Handler() const { return handler_; }
+  AudioHandler& Handler() const { return *handler_; }
   DeferredTaskHandler& GetDeferredTaskHandler() const {
-    return handler_.GetDeferredTaskHandler();
+    return handler_->GetDeferredTaskHandler();
   }
 
   // This reference is safe because the AudioHandler owns this AudioNodeOutput
   // object.
-  AudioHandler& handler_;
+  const raw_ref<AudioHandler> handler_;
 
   // fanOutCount() is the number of AudioNodeInputs that we're connected to.
   // This method should not be called in audio thread rendering code, instead
@@ -106,10 +124,10 @@ class MODULES_EXPORT AudioNodeOutput final {
   // It must be called with the context's graph lock.
   unsigned FanOutCount();
 
-  // Similar to fanOutCount(), paramFanOutCount() is the number of AudioParams
-  // that we're connected to.  This method should not be called in audio thread
-  // rendering code, instead renderingParamFanOutCount() should be used.
-  // It must be called with the context's graph lock.
+  // Similar to `FanOutCount()`, `ParamFanOutCount()` is the number of
+  // AudioParams that this output is connected to.  This method MUST be
+  // called from the main thread with the context graph lock.
+  // For audio thread, use `RenderingParamFanOutCount()` instead.
   unsigned ParamFanOutCount();
 
   // Must be called with the context's graph lock.
@@ -143,22 +161,22 @@ class MODULES_EXPORT AudioNodeOutput final {
   scoped_refptr<AudioBus> in_place_bus_;
   // If m_isInPlace is true, use m_inPlaceBus as the valid AudioBus; If false,
   // use the default m_internalBus.
-  bool is_in_place_;
+  bool is_in_place_ = false;
 
   // This HashSet holds connection references. We must call
   // AudioNode::makeConnection when we add an AudioNodeInput to this, and must
   // call AudioNode::breakConnection() when we remove an AudioNodeInput from
   // this.
   HashSet<AudioNodeInput*> inputs_;
-  bool is_enabled_;
+  bool is_enabled_ = true;
 
-  bool did_call_dispose_;
+  bool did_call_dispose_ = false;
 
   // For the purposes of rendering, keeps track of the number of inputs and
   // AudioParams we're connected to.  These value should only be changed at the
   // very start or end of the rendering quantum.
-  unsigned rendering_fan_out_count_;
-  unsigned rendering_param_fan_out_count_;
+  unsigned rendering_fan_out_count_ = 0;
+  unsigned rendering_param_fan_out_count_ = 0;
 
   // This collection of raw pointers is safe because they are retained by
   // AudioParam objects retained by m_connectedParams of the owner AudioNode.

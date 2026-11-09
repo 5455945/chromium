@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,7 @@
 #define ASH_WM_SESSION_STATE_ANIMATOR_H_
 
 #include "ash/ash_export.h"
-#include "base/callback.h"
-#include "base/macros.h"
+#include "base/functional/callback.h"
 #include "base/time/time.h"
 
 namespace ash {
@@ -109,6 +108,9 @@ class ASH_EXPORT SessionStateAnimator {
   //
   class ASH_EXPORT AnimationSequence {
    public:
+    AnimationSequence(const AnimationSequence&) = delete;
+    AnimationSequence& operator=(const AnimationSequence&) = delete;
+
     virtual ~AnimationSequence();
 
     // Apply animation |type| to all containers included in |container_mask|
@@ -142,6 +144,8 @@ class ASH_EXPORT SessionStateAnimator {
     // called.
     virtual void OnAnimationAborted();
 
+    bool sequence_ended() const { return sequence_ended_; }
+
    private:
     // Destroys this and calls the callback if the contained animations
     // completed successfully.
@@ -160,11 +164,13 @@ class ASH_EXPORT SessionStateAnimator {
 
     // Callback to be called when the aniamtion is finished or aborted.
     AnimationCallback callback_;
-
-    DISALLOW_COPY_AND_ASSIGN(AnimationSequence);
   };
 
   SessionStateAnimator();
+
+  SessionStateAnimator(const SessionStateAnimator&) = delete;
+  SessionStateAnimator& operator=(const SessionStateAnimator&) = delete;
+
   virtual ~SessionStateAnimator();
 
   // Reports animation duration for |speed|.
@@ -190,7 +196,7 @@ class ASH_EXPORT SessionStateAnimator {
   virtual AnimationSequence* BeginAnimationSequence(
       AnimationCallback callback) = 0;
 
-  // Retruns true if the wallpaper is hidden.
+  // Returns true if the wallpaper is hidden.
   virtual bool IsWallpaperHidden() const = 0;
 
   // Shows the wallpaper immediately.
@@ -198,9 +204,6 @@ class ASH_EXPORT SessionStateAnimator {
 
   // Hides the wallpaper immediately.
   virtual void HideWallpaper() = 0;
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(SessionStateAnimator);
 };
 
 }  // namespace ash

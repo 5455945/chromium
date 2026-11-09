@@ -1,23 +1,30 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/share/share_history.h"
 
-#include "base/android/jni_string.h"
+#include <string>
+
 #include "base/containers/flat_map.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/ptr_util.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/task/task_traits.h"
 #include "base/task/thread_pool.h"
 #include "base/time/time.h"
+#include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_android.h"
 #include "chrome/browser/share/proto/share_history_message.pb.h"
 #include "components/leveldb_proto/public/proto_database_provider.h"
 #include "content/public/browser/storage_partition.h"
 
-#include "chrome/browser/share/jni_headers/ShareHistoryBridge_jni.h"
+#if BUILDFLAG(IS_ANDROID)
+#include "base/android/jni_string.h"
 
-using base::android::JavaParamRef;
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/share/jni_headers/ShareHistoryBridge_jni.h"
+#endif
 
 namespace sharing {
 
@@ -30,6 +37,8 @@ const char* const kShareHistoryFolder = "share_history";
 // do not fold these constants together.
 const char* const kShareHistoryKey = "share_history";
 
+constexpr auto kMaxHistoryAge = base::Days(90);
+
 int TodaysDay() {
   return (base::Time::Now() - base::Time::UnixEpoch()).InDays();
 }
@@ -40,9 +49,19 @@ std::unique_ptr<ShareHistory::BackingDb> MakeDefaultDbForProfile(
       ->GetProtoDatabaseProvider()
       ->GetDB<mojom::ShareHistory>(
           leveldb_proto::ProtoDbType::SHARE_HISTORY_DATABASE,
-          profile->GetPath().Append(kShareHistoryFolder),
+          profile->GetPath().AppendASCII(kShareHistoryFolder),
           base::ThreadPool::CreateSequencedTaskRunner(
               {base::MayBlock(), base::TaskPriority::BEST_EFFORT}));
+}
+
+bool DayOverlapsTimeRange(base::Time day_start,
+                          base::Time start,
+                          base::Time end) {
+  const base::Time epoch = base::Time::UnixEpoch();
+  int day = (day_start - epoch).InDays();
+  int start_day = (start - epoch).InDays();
+  int end_day = (end - epoch).InDays();
+  return day >= start_day && day <= end_day;
 }
 
 }  // namespace
@@ -107,7 +126,7 @@ void ShareHistory::GetFlatShareHistory(GetFlatHistoryCallback callback,
   }
 
   if (db_init_status_ != leveldb_proto::Enums::kOK) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(std::move(callback), std::vector<Target>()));
     return;
   }
@@ -133,8 +152,24 @@ void ShareHistory::GetFlatShareHistory(GetFlatHistoryCallback callback,
   std::sort(result.begin(), result.end(),
             [](const Target& a, const Target& b) { return a.count > b.count; });
 
-  base::SequencedTaskRunnerHandle::Get()->PostTask(
+  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
       FROM_HERE, base::BindOnce(std::move(callback), result));
+}
+
+void ShareHistory::Clear(const base::Time& start, const base::Time& end) {
+  google::protobuf::RepeatedPtrField<mojom::DayShareHistory> histories_to_keep;
+  for (const auto& day : history_.day_histories()) {
+    base::Time day_start = base::Time::UnixEpoch() + base::Days(day.day());
+    if (!DayOverlapsTimeRange(day_start, start, end)) {
+      mojom::DayShareHistory this_day;
+      this_day.CopyFrom(day);
+      histories_to_keep.Add(std::move(this_day));
+    }
+  }
+
+  history_.mutable_day_histories()->Swap(&histories_to_keep);
+
+  FlushToBackingDb();
 }
 
 void ShareHistory::Init() {
@@ -149,7 +184,7 @@ void ShareHistory::OnInitDone(leveldb_proto::Enums::InitStatus status) {
     // as in the happy case, but without going through LevelDB; i.e., act as
     // though the initial read failed, instead of the LevelDB initialization, so
     // that control always ends up in OnInitialReadDone.
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&ShareHistory::OnInitialReadDone,
                                   weak_factory_.GetWeakPtr(), false,
                                   std::make_unique<mojom::ShareHistory>()));
@@ -169,7 +204,7 @@ void ShareHistory::OnInitialReadDone(
   init_finished_ = true;
   post_init_callbacks_.Notify();
 
-  // TODO(ellyjones): Expire entries older than WINDOW days.
+  Clear(base::Time(), base::Time::Now() - kMaxHistoryAge);
 }
 
 void ShareHistory::FlushToBackingDb() {
@@ -209,11 +244,23 @@ mojom::TargetShareHistory* ShareHistory::TargetShareHistoryByName(
 
 }  // namespace sharing
 
-void JNI_ShareHistoryBridge_AddShareEntry(JNIEnv* env,
-                                          const JavaParamRef<jobject>& jprofile,
-                                          const JavaParamRef<jstring>& name) {
-  Profile* profile = ProfileAndroid::FromProfileAndroid(jprofile);
+#if BUILDFLAG(IS_ANDROID)
+static void JNI_ShareHistoryBridge_AddShareEntry(Profile* profile,
+                                                 const std::string& name) {
   auto* instance = sharing::ShareHistory::Get(profile);
-  if (instance)
-    instance->AddShareEntry(base::android::ConvertJavaStringToUTF8(env, name));
+  if (instance) {
+    instance->AddShareEntry(name);
+  }
 }
+
+static void JNI_ShareHistoryBridge_Clear(Profile* profile) {
+  auto* instance = sharing::ShareHistory::Get(profile);
+  if (instance) {
+    instance->Clear();
+  }
+}
+#endif
+
+#if BUILDFLAG(IS_ANDROID)
+DEFINE_JNI(ShareHistoryBridge)
+#endif

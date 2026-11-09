@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -42,7 +42,7 @@ class PLATFORM_EXPORT CanvasMemoryDumpProvider final
   CanvasMemoryDumpProvider() = default;
 
   base::Lock lock_;
-  WTF::HashSet<CanvasMemoryDumpClient*> clients_ GUARDED_BY(lock_);
+  HashSet<CanvasMemoryDumpClient*> clients_ GUARDED_BY(lock_);
 };
 
 }  // namespace blink

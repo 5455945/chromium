@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,12 +8,14 @@
 #include <cstring>
 #include <vector>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
 #include "base/check_op.h"
+#include "base/compiler_specific.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/location.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
-#include "base/threading/sequenced_task_runner_handle.h"
+#include "base/task/sequenced_task_runner.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
 #include "net/socket/next_proto.h"
@@ -25,6 +27,10 @@ namespace chromecast {
 class SocketBuffer {
  public:
   SocketBuffer() : pending_read_data_(nullptr), pending_read_len_(0) {}
+
+  SocketBuffer(const SocketBuffer&) = delete;
+  SocketBuffer& operator=(const SocketBuffer&) = delete;
+
   ~SocketBuffer() {}
 
   // Reads |len| bytes from the buffer and writes it to |data|. Returns the
@@ -53,7 +59,7 @@ class SocketBuffer {
   void Write(const char* data, size_t len) {
     DCHECK(data);
     DCHECK_GT(len, 0u);
-    data_.insert(data_.end(), data, data + len);
+    data_.insert(data_.end(), data, UNSAFE_TODO(data + len));
     if (!pending_read_callback_.is_null()) {
       int result = ReadInternal(pending_read_data_, pending_read_len_);
       pending_read_data_ = nullptr;
@@ -75,13 +81,13 @@ class SocketBuffer {
     DCHECK(data);
     DCHECK_GT(len, 0u);
     len = std::min(len, data_.size());
-    std::memcpy(data, data_.data(), len);
+    UNSAFE_TODO(std::memcpy(data, data_.data(), len));
     data_.erase(data_.begin(), data_.begin() + len);
     return len;
   }
 
   void PostReadCallback(net::CompletionOnceCallback callback, int result) {
-    base::SequencedTaskRunnerHandle::Get()->PostTask(
+    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&SocketBuffer::CallReadCallback,
                                   weak_factory_.GetWeakPtr(),
                                   std::move(callback), result));
@@ -94,13 +100,11 @@ class SocketBuffer {
   }
 
   std::vector<char> data_;
-  char* pending_read_data_;
+  raw_ptr<char> pending_read_data_;
   size_t pending_read_len_;
   net::CompletionOnceCallback pending_read_callback_;
   bool eos_ = false;
   base::WeakPtrFactory<SocketBuffer> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(SocketBuffer);
 };
 
 FakeStreamSocket::FakeStreamSocket() : FakeStreamSocket(net::IPEndPoint()) {}
@@ -199,25 +203,13 @@ bool FakeStreamSocket::WasEverUsed() const {
   return false;
 }
 
-bool FakeStreamSocket::WasAlpnNegotiated() const {
-  return false;
-}
-
 net::NextProto FakeStreamSocket::GetNegotiatedProtocol() const {
-  return net::kProtoUnknown;
+  return net::NextProto::kProtoUnknown;
 }
 
 bool FakeStreamSocket::GetSSLInfo(net::SSLInfo* /* ssl_info */) {
   return false;
 }
-
-void FakeStreamSocket::GetConnectionAttempts(
-    net::ConnectionAttempts* /* out */) const {}
-
-void FakeStreamSocket::ClearConnectionAttempts() {}
-
-void FakeStreamSocket::AddConnectionAttempts(
-    const net::ConnectionAttempts& /* attempts */) {}
 
 int64_t FakeStreamSocket::GetTotalReceivedBytes() const {
   return 0;

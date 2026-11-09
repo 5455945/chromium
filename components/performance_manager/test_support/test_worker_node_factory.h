@@ -1,11 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_TEST_WORKER_NODE_FACTORY_H_
 #define COMPONENTS_PERFORMANCE_MANAGER_TEST_SUPPORT_TEST_WORKER_NODE_FACTORY_H_
 
+#include "base/memory/raw_ptr.h"
 #include "components/performance_manager/test_support/graph_test_harness.h"
+#include "url/origin.h"
 
 namespace performance_manager {
 
@@ -36,12 +38,16 @@ struct TestWorkerNodeFactory {
   ~TestWorkerNodeFactory();
 
   // Creates a dedicated worker with a client frame.
-  WorkerNodeImpl* CreateDedicatedWorker(ProcessNodeImpl* process_node,
-                                        FrameNodeImpl* client_frame_node);
+  WorkerNodeImpl* CreateDedicatedWorker(
+      ProcessNodeImpl* process_node,
+      FrameNodeImpl* client_frame_node,
+      const url::Origin& origin = url::Origin());
 
   // Creates a dedicated worker with a client worker.
-  WorkerNodeImpl* CreateDedicatedWorker(ProcessNodeImpl* process_node,
-                                        WorkerNodeImpl* client_worker_node);
+  WorkerNodeImpl* CreateDedicatedWorker(
+      ProcessNodeImpl* process_node,
+      WorkerNodeImpl* client_worker_node,
+      const url::Origin& origin = url::Origin());
 
   // Create a shared worker node with the possibility of having any number of
   // clients.
@@ -54,7 +60,7 @@ struct TestWorkerNodeFactory {
   void DeleteWorker(WorkerNodeImpl* worker_node);
 
  private:
-  TestGraphImpl* graph_;
+  raw_ptr<TestGraphImpl> graph_;
 
   base::flat_set<TestNodeWrapper<WorkerNodeImpl>, TestNodeWrapperComparator>
       worker_nodes_;

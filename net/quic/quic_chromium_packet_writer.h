@@ -1,4 +1,4 @@
-// Copyright 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,21 @@
 #define NET_QUIC_QUIC_CHROMIUM_PACKET_WRITER_H_
 
 #include <stddef.h>
+#include <stdint.h>
 
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "base/timer/timer.h"
 #include "net/base/completion_repeating_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_export.h"
 #include "net/socket/datagram_client_socket.h"
-#include "net/third_party/quiche/src/quic/core/quic_connection.h"
-#include "net/third_party/quiche/src/quic/core/quic_packet_writer.h"
-#include "net/third_party/quiche/src/quic/core/quic_packets.h"
-#include "net/third_party/quiche/src/quic/core/quic_types.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_connection.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packet_writer.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_packets.h"
+#include "net/third_party/quiche/src/quiche/quic/core/quic_types.h"
 
 namespace net {
 
@@ -30,21 +33,21 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter
   // repeated memory allocations.  This packet writer only ever has a
   // single write in flight, a constraint inherited from the interface
   // of the underlying datagram Socket.
-  class NET_EXPORT_PRIVATE ReusableIOBuffer : public IOBuffer {
+  class NET_EXPORT_PRIVATE ReusableIOBuffer : public IOBufferWithSize {
    public:
     explicit ReusableIOBuffer(size_t capacity);
 
     size_t capacity() const { return capacity_; }
     size_t size() const { return size_; }
 
-    // Does memcpy from |buffer| into this->data(). |buf_len <=
-    // capacity()| must be true, |HasOneRef()| must be true.
-    void Set(const char* buffer, size_t buf_len);
+    // Copies |buffer| into this->data(). |buffer.size() <= capacity()| must
+    // be true, |HasOneRef()| must be true.
+    void Set(base::span<const uint8_t> buffer);
 
    private:
     ~ReusableIOBuffer() override;
     size_t capacity_;
-    size_t size_;
+    size_t size_ = 0;
   };
   // Delegate interface which receives notifications on socket write events.
   class NET_EXPORT_PRIVATE Delegate {
@@ -65,10 +68,13 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter
     virtual void OnWriteUnblocked() = 0;
   };
 
-  QuicChromiumPacketWriter();
   // |socket| and |task_runner| must outlive writer.
   QuicChromiumPacketWriter(DatagramClientSocket* socket,
                            base::SequencedTaskRunner* task_runner);
+
+  QuicChromiumPacketWriter(const QuicChromiumPacketWriter&) = delete;
+  QuicChromiumPacketWriter& operator=(const QuicChromiumPacketWriter&) = delete;
+
   ~QuicChromiumPacketWriter() override;
 
   // |delegate| must outlive writer.
@@ -83,31 +89,49 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter
   void WritePacketToSocket(scoped_refptr<ReusableIOBuffer> packet);
 
   // quic::QuicPacketWriter
-  quic::WriteResult WritePacket(const char* buffer,
-                                size_t buf_len,
-                                const quic::QuicIpAddress& self_address,
-                                const quic::QuicSocketAddress& peer_address,
-                                quic::PerPacketOptions* options) override;
+  quic::WriteResult WritePacket(
+      const char* buffer,
+      size_t buf_len,
+      const quiche::QuicheIpAddress& self_address,
+      const quic::QuicSocketAddress& peer_address,
+      quic::PerPacketOptions* options,
+      const quic::QuicPacketWriterParams& params) override;
   bool IsWriteBlocked() const override;
   void SetWritable() override;
+  std::optional<int> MessageTooBigErrorCode() const override;
   quic::QuicByteCount GetMaxPacketSize(
       const quic::QuicSocketAddress& peer_address) const override;
   bool SupportsReleaseTime() const override;
   bool IsBatchMode() const override;
+  bool SupportsEcn() const override;
   quic::QuicPacketBuffer GetNextWriteLocation(
-      const quic::QuicIpAddress& self_address,
+      const quiche::QuicheIpAddress& self_address,
       const quic::QuicSocketAddress& peer_address) override;
   quic::WriteResult Flush() override;
 
   void OnWriteComplete(int rv);
 
+  // If the writer has enqueued a task to retry, OnSocketClosed() must be called
+  // when the socket is closed to avoid using an invalid socket.
+  bool OnSocketClosed(DatagramClientSocket* socket);
+
+  // Register a QUIC UDP payload that can close a QUIC connection and the
+  // underlying socket to the Android system server. When the app loses network
+  // access, the system server destroys the registered socket and sends the
+  // registered UDP payload to the server.
+  void RegisterQuicConnectionClosePayload(base::span<uint8_t> payload);
+
+  // Unregister the underlying socket and its associated UDP payload that were
+  // previously registered by RegisterQuicConnectionClosePayload
+  void UnregisterQuicConnectionClosePayload();
+
  private:
-  void SetPacket(const char* buffer, size_t buf_len);
+  void SetPacket(base::span<const uint8_t> buffer);
   bool MaybeRetryAfterWriteError(int rv);
   void RetryPacketAfterNoBuffers();
   quic::WriteResult WritePacketToSocketImpl();
-  DatagramClientSocket* socket_;  // Unowned.
-  Delegate* delegate_;            // Unowned.
+  raw_ptr<DatagramClientSocket> socket_;  // Unowned.
+  raw_ptr<Delegate> delegate_ = nullptr;  // Unowned.
   // Reused for every packet write for the lifetime of the writer.  Is
   // moved to the delegate in the case of a write error.
   scoped_refptr<ReusableIOBuffer> packet_;
@@ -115,20 +139,26 @@ class NET_EXPORT_PRIVATE QuicChromiumPacketWriter
   // Whether a write is currently in progress: true if an asynchronous write is
   // in flight, or a retry of a previous write is in progress, or session is
   // handling write error of a previous write.
-  bool write_in_progress_;
+  bool write_in_progress_ = false;
 
   // If ture, IsWriteBlocked() will return true regardless of
   // |write_in_progress_|.
-  bool force_write_blocked_;
+  bool force_write_blocked_ = false;
 
-  int retry_count_;
+  // The current ECN codepoint the UDP socket is sending.
+  EcnCodePoint outgoing_ecn_ = ECN_NOT_ECT;
+
+  // Bitmap of outgoing IP ECN marks observed on this session. Bit 0 = Not-ECT,
+  // Bit 1 = ECT(1), Bit 2 = ECT(0), Bit 3 = CE. Reported to metrics at the
+  // end of the session.
+  uint8_t outgoing_ecn_history_ = 0;
+
+  int retry_count_ = 0;
   // Timer set when a packet should be retried after ENOBUFS.
   base::OneShotTimer retry_timer_;
 
   CompletionRepeatingCallback write_callback_;
   base::WeakPtrFactory<QuicChromiumPacketWriter> weak_factory_{this};
-
-  DISALLOW_COPY_AND_ASSIGN(QuicChromiumPacketWriter);
 };
 
 }  // namespace net

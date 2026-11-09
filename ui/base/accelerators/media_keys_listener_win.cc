@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -11,14 +11,12 @@ namespace ui {
 std::unique_ptr<MediaKeysListener> MediaKeysListener::Create(
     MediaKeysListener::Delegate* delegate,
     MediaKeysListener::Scope scope) {
-  DCHECK(delegate);
+  CHECK(delegate, base::NotFatalUntil::M163);
 
   if (scope == Scope::kGlobal) {
     // We should never have more than one global media keys listener.
-    if (!GlobalMediaKeysListenerWin::has_instance())
-      return std::make_unique<GlobalMediaKeysListenerWin>(delegate);
-
-    NOTREACHED();
+    CHECK(!GlobalMediaKeysListenerWin::has_instance());
+    return std::make_unique<GlobalMediaKeysListenerWin>(delegate);
   }
   return nullptr;
 }

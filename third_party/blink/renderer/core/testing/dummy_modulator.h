@@ -1,16 +1,17 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_DUMMY_MODULATOR_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_TESTING_DUMMY_MODULATOR_H_
 
-#include "base/single_thread_task_runner.h"
+#include "base/task/single_thread_task_runner.h"
 #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink-forward.h"
 #include "third_party/blink/renderer/bindings/core/v8/module_record.h"
 #include "third_party/blink/renderer/bindings/core/v8/module_request.h"
+#include "third_party/blink/renderer/core/script/import_map_error.h"
 #include "third_party/blink/renderer/core/script/modulator.h"
-#include "third_party/blink/renderer/platform/heap/handle.h"
+#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
 
 namespace blink {
 
@@ -44,7 +45,9 @@ class DummyModulator : public Modulator {
                  network::mojom::RequestDestination destination,
                  const ScriptFetchOptions&,
                  ModuleScriptCustomFetchType,
-                 ModuleTreeClient*) override;
+                 ModuleTreeClient*,
+                 v8::ModuleImportPhase,
+                 String referrer) override;
   void FetchSingle(const ModuleScriptFetchRequest&,
                    ResourceFetcher*,
                    ModuleGraphLevel,
@@ -58,21 +61,17 @@ class DummyModulator : public Modulator {
       ModuleTreeClient*) override;
   ModuleScript* GetFetchedModuleScript(const KURL&, ModuleType) override;
   KURL ResolveModuleSpecifier(const String&, const KURL&, String*) override;
+  String GetIntegrityMetadataString(const KURL&) const override;
+  IntegrityMetadataSet GetIntegrityMetadata(const KURL&) const override;
   bool HasValidContext() override;
   void ResolveDynamically(const ModuleRequest& module_request,
-                          const KURL&,
                           const ReferrerScriptInfo&,
-                          ScriptPromiseResolver*) override;
-  ScriptValue CreateTypeError(const String& message) const override;
-  ScriptValue CreateSyntaxError(const String& message) const override;
-  void RegisterImportMap(const ImportMap*,
-                         ScriptValue error_to_rethrow) override;
-  AcquiringImportMapsState GetAcquiringImportMapsState() const override;
-  void SetAcquiringImportMapsState(AcquiringImportMapsState) override;
+                          ScriptPromiseResolver<IDLAny>*) override;
+  void AddEntryToModuleMap(const KURL& url,
+                           ModuleType type,
+                           ModuleScript* script) override;
   ModuleImportMeta HostGetImportMetaProperties(
       v8::Local<v8::Module>) const override;
-  const ImportMap* GetImportMapForTest() const override;
-  ScriptValue InstantiateModule(v8::Local<v8::Module>, const KURL&) override;
   ModuleType ModuleTypeFromRequest(
       const ModuleRequest& module_request) const override;
   ModuleScriptFetcher* CreateModuleScriptFetcher(

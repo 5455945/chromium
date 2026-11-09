@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,24 +7,28 @@
 #include <windows.storage.h>
 #include <wrl/event.h>
 
-#include "base/bind.h"
-#include "base/callback.h"
+#include <optional>
+#include <utility>
+
+#include "base/debug/stack_trace.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback.h"
 #include "base/memory/weak_ptr.h"
 #include "base/run_loop.h"
 #include "base/test/bind.h"
 #include "base/test/task_environment.h"
-#include "base/win/core_winrt_util.h"
+#include "base/win/scoped_hstring.h"
 #include "base/win/scoped_winrt_initializer.h"
 #include "base/win/vector.h"
 #include "chrome/browser/webshare/win/fake_storage_file_statics.h"
 #include "chrome/browser/webshare/win/fake_uri_runtime_class_factory.h"
 #include "testing/gtest/include/gtest/gtest-spi.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
 
 using ABI::Windows::ApplicationModel::DataTransfer::DataRequestedEventArgs;
 using ABI::Windows::ApplicationModel::DataTransfer::DataTransferManager;
 using ABI::Windows::ApplicationModel::DataTransfer::IDataPackage;
+using ABI::Windows::ApplicationModel::DataTransfer::IDataPackage2;
 using ABI::Windows::ApplicationModel::DataTransfer::IDataPackagePropertySet;
 using ABI::Windows::ApplicationModel::DataTransfer::IDataRequest;
 using ABI::Windows::ApplicationModel::DataTransfer::IDataRequestDeferral;
@@ -92,20 +96,20 @@ class DataRequestedTestCallback {
 class FakeDataTransferManagerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    if (!FakeDataTransferManager::IsSupportedEnvironment())
-      GTEST_SKIP();
-
     winrt_initializer_.emplace();
     ASSERT_TRUE(winrt_initializer_->Succeeded());
     fake_data_transfer_manager_ =
         Microsoft::WRL::Make<FakeDataTransferManager>();
   }
 
-  absl::optional<base::win::ScopedWinrtInitializer> winrt_initializer_;
+  std::optional<base::win::ScopedWinrtInitializer> winrt_initializer_;
   ComPtr<FakeDataTransferManager> fake_data_transfer_manager_;
 };
 
 TEST_F(FakeDataTransferManagerTest, RemovingHandlerForInvalidToken) {
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
+
   // Validate removing an invalid token both fails and creates a test failure
   // when there is no listener
   EventRegistrationToken invalid_token;
@@ -187,6 +191,8 @@ TEST_F(FakeDataTransferManagerTest, OutOfOrderEventUnsubscribing) {
       fake_data_transfer_manager_->remove_DataRequested(token_1));
   ASSERT_FALSE(fake_data_transfer_manager_->HasDataRequestedListener());
 
+  base::debug::OverrideStackTraceOutputForTesting suppress_stacks(
+      base::debug::OverrideStackTraceOutputForTesting::Mode::kSuppressOutput);
   EXPECT_NONFATAL_FAILURE(
       fake_data_transfer_manager_->GetDataRequestedInvoker(),
       "GetDataRequestedInvoker");
@@ -301,7 +307,9 @@ TEST_F(FakeDataTransferManagerTest, PostDataRequestedCallback) {
         auto url_h = base::win::ScopedHString::Create("https://my.url.com");
         ComPtr<IUriRuntimeClass> uri;
         EXPECT_HRESULT_SUCCEEDED(uri_factory->CreateUri(url_h.get(), &uri));
-        EXPECT_HRESULT_SUCCEEDED(data_package->SetUri(uri.Get()));
+        ComPtr<IDataPackage2> data_package_2;
+        EXPECT_HRESULT_SUCCEEDED(data_package.As(&data_package_2));
+        EXPECT_HRESULT_SUCCEEDED(data_package_2->SetWebLink(uri.Get()));
 
         auto storage_items = Make<base::win::Vector<IStorageItem*>>();
         storage_items->Append(storage_item.Get());

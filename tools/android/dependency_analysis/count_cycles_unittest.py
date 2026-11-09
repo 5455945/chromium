@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2020 The Chromium Authors. All rights reserved.
+# Copyright 2020 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 """Unit tests for dependency_analysis.count_cycles."""
@@ -13,6 +13,7 @@ import graph
 
 class TestFindCycles(unittest.TestCase):
     """Unit tests for find_cycles."""
+
     KEY_0 = '0'
     KEY_1 = '1'
     KEY_2 = '2'
@@ -103,7 +104,8 @@ class TestFindCycles(unittest.TestCase):
         """
         test_graph = graph.Graph()
         for ka, kb in itertools.permutations(
-            [self.KEY_0, self.KEY_1, self.KEY_2, self.KEY_3], 2):
+            [self.KEY_0, self.KEY_1, self.KEY_2, self.KEY_3], 2
+        ):
             test_graph.add_edge_if_new(ka, kb)
 
         res = count_cycles.find_cycles(test_graph, self.MAX_CYCLE_LENGTH)
@@ -124,7 +126,8 @@ class TestFindCycles(unittest.TestCase):
         """
         test_graph = graph.Graph()
         for ka, kb in itertools.permutations(
-            [self.KEY_0, self.KEY_1, self.KEY_2, self.KEY_3], 2):
+            [self.KEY_0, self.KEY_1, self.KEY_2, self.KEY_3], 2
+        ):
             test_graph.add_edge_if_new(ka, kb)
 
         res = count_cycles.find_cycles(test_graph, 2)

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,17 @@
 
 #include <string>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "components/ukm/content/source_url_recorder.h"
 #include "content/public/browser/web_contents.h"
+#include "third_party/blink/public/common/features.h"
 #include "url/gurl.h"
 
 namespace page_load_metrics {
 
-PageLoadMetricsObserverTestHarness::PageLoadMetricsObserverTestHarness()
-    : ChromeRenderViewHostTestHarness() {}
-
-PageLoadMetricsObserverTestHarness::~PageLoadMetricsObserverTestHarness() {}
+PageLoadMetricsObserverTestHarness::~PageLoadMetricsObserverTestHarness() =
+    default;
 
 void PageLoadMetricsObserverTestHarness::SetUp() {
   ChromeRenderViewHostTestHarness::SetUp();
@@ -30,8 +29,25 @@ void PageLoadMetricsObserverTestHarness::SetUp() {
       web_contents(), this,
       base::BindRepeating(
           &PageLoadMetricsObserverTestHarness::RegisterObservers,
-          base::Unretained(this)));
+          base::Unretained(this)),
+      IsNonTabWebUI());
   web_contents()->WasShown();
+}
+
+bool PageLoadMetricsObserverTestHarness::IsNonTabWebUI() const {
+  return false;
+}
+
+void PageLoadMetricsObserverTestHarness::InitializeFeatureList() {
+  scoped_feature_list_.InitWithFeaturesAndParameters(
+      {
+          {blink::features::kFencedFrames, {{"implementation_type", "mparch"}}},
+      },
+      {
+          // Disable the memory requirement of Prerender2
+          // so the test can run on any bot.
+          {blink::features::kPrerender2MemoryControls},
+      });
 }
 
 const char PageLoadMetricsObserverTestHarness::kResourceUrl[] =

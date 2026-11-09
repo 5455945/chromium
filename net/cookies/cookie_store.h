@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,25 +10,20 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/functional/callback_forward.h"
 #include "net/base/net_export.h"
 #include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_delegate.h"
 #include "net/cookies/cookie_access_result.h"
 #include "net/cookies/cookie_deletion_info.h"
 #include "net/cookies/cookie_options.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
+#include "net/cookies/cookie_partition_key_collection.h"
 
 class GURL;
-
-namespace base {
-namespace trace_event {
-class ProcessMemoryDump;
-}
-}  // namespace base
 
 namespace net {
 
@@ -70,19 +65,38 @@ class NET_EXPORT CookieStore {
   // which cookies it can alter (e.g. http only, or same site).
   //
   // The current time will be used in place of a null creation time.
-  virtual void SetCanonicalCookieAsync(std::unique_ptr<CanonicalCookie> cookie,
-                                       const GURL& source_url,
-                                       const CookieOptions& options,
-                                       SetCookiesCallback callback) = 0;
+  //
+  // |cookie_access_result| is an optional input status, to allow for status
+  // chaining from callers. It helps callers provide the status of a
+  // canonical cookie that may have warnings associated with it.
+  virtual void SetCanonicalCookieAsync(
+      std::unique_ptr<CanonicalCookie> cookie,
+      const GURL& source_url,
+      const CookieOptions& options,
+      SetCookiesCallback callback,
+      std::optional<CookieAccessResult> cookie_access_result) = 0;
+
+  // Set the cookie on the cookie store. This is unsafe because it doesn't do
+  // any of the usual inclusion checks and will always insert the cookie, This
+  // should be used for testing only. Use this only if SetCanonicalCookieAsync
+  // does not fit your testing requirements.
+  virtual void SetUnsafeCanonicalCookieForTestAsync(
+      std::unique_ptr<CanonicalCookie> cookie,
+      SetCookiesCallback callback) = 0;
 
   // Obtains a CookieList for the given |url| and |options|. The returned
   // cookies are passed into |callback|, ordered by longest path, then earliest
   // creation date.
   // To get all the cookies for a URL, use this method with an all-inclusive
   // |options|.
+  // If |cookie_partition_key_collection| is not empty, then this function will
+  // return the partitioned cookies for that URL whose partition keys are in the
+  // cookie_partition_key_collection *in addition to* the unpartitioned cookies
+  // for that URL.
   virtual void GetCookieListWithOptionsAsync(
       const GURL& url,
       const CookieOptions& options,
+      const CookiePartitionKeyCollection& cookie_partition_key_collection,
       GetCookieListCallback callback) = 0;
 
   // Returns all the cookies, for use in management UI, etc. This does not mark
@@ -140,7 +154,7 @@ class NET_EXPORT CookieStore {
   // Protects session cookies from deletion on shutdown, if the underlying
   // CookieStore implemention is currently configured to store them to disk.
   // Otherwise, does nothing.
-  virtual void SetForceKeepSessionState();
+  virtual void SetForceKeepSessionState() {}
 
   // The interface used to observe changes to this CookieStore's contents.
   virtual CookieChangeDispatcher& GetChangeDispatcher() = 0;
@@ -150,21 +164,28 @@ class NET_EXPORT CookieStore {
   // the instance initialization process). Otherwise, this returns true to
   // indicate success. CookieStores which do not support modifying cookieable
   // schemes will always return false.
-  virtual void SetCookieableSchemes(const std::vector<std::string>& schemes,
+  virtual void SetCookieableSchemes(std::vector<std::string> schemes,
                                     SetCookieableSchemesCallback callback) = 0;
 
   // Transfer ownership of a CookieAccessDelegate.
   void SetCookieAccessDelegate(std::unique_ptr<CookieAccessDelegate> delegate);
-
-  // Reports the estimate of dynamically allocated memory in bytes.
-  virtual void DumpMemoryStats(base::trace_event::ProcessMemoryDump* pmd,
-                               const std::string& parent_absolute_name) const;
 
   // This may be null if no delegate has been set yet, or the delegate has been
   // reset to null.
   const CookieAccessDelegate* cookie_access_delegate() const {
     return cookie_access_delegate_.get();
   }
+
+  // Returns a boolean indicating whether the cookie `site` has any cookie
+  // in another partition other than the `cookie_partition_key` supplied.
+  // Will return nullopt if cookies have not finished loading.
+  virtual std::optional<bool> SiteHasCookieInOtherPartition(
+      const net::SchemefulSite& site,
+      const CookiePartitionKey& cookie_partition_key) const;
+
+  // Called when a preconnect request is initiated for the `url` to trigger
+  // pre-loading of the cookies for it.
+  virtual void OnPreconnect(const GURL& url);
 
  private:
   // Used to determine whether a particular cookie should be subject to legacy

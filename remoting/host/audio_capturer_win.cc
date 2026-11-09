@@ -1,16 +1,18 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "remoting/host/audio_capturer_win.h"
 
+#include <objbase.h>
+
+#include <windows.h>
+
 #include <avrt.h>
 #include <mmreg.h>
 #include <mmsystem.h>
-#include <objbase.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <windows.h>
 
 #include <algorithm>
 #include <memory>
@@ -85,7 +87,10 @@ bool AudioCapturerWin::ResetAndInitialize() {
 void AudioCapturerWin::Deinitialize() {
   DCHECK(thread_checker_.CalledOnValidThread());
   wave_format_ex_.Reset(nullptr);
-  default_device_detector_.reset();
+  if (default_device_detector_) {
+    default_device_detector_->Unregister();
+  }
+  default_device_detector_.Reset();
   audio_capture_client_.Reset();
   if (audio_client_) {
     audio_client_->Stop();
@@ -111,7 +116,8 @@ bool AudioCapturerWin::Initialize() {
   }
 
   default_device_detector_ =
-      std::make_unique<DefaultAudioDeviceChangeDetector>(mm_device_enumerator);
+      Microsoft::WRL::Make<DefaultAudioDeviceChangeDetector>(
+          mm_device_enumerator);
 
   // Get the audio endpoint.
   hr = mm_device_enumerator->GetDefaultAudioEndpoint(eRender, eConsole,
@@ -122,9 +128,7 @@ bool AudioCapturerWin::Initialize() {
   }
 
   // Get an audio client.
-  hr = mm_device_->Activate(__uuidof(IAudioClient),
-                            CLSCTX_ALL,
-                            nullptr,
+  hr = mm_device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
                             &audio_client_);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to get an IAudioClient. Error " << hr;
@@ -141,7 +145,7 @@ bool AudioCapturerWin::Initialize() {
   // is not a whole number.
   int device_period_in_milliseconds =
       1 + ((device_period - 1) / k100nsPerMillisecond);
-  audio_device_period_ = base::TimeDelta::FromMilliseconds(
+  audio_device_period_ = base::Milliseconds(
       std::max(device_period_in_milliseconds, kMinTimerInterval));
 
   // Get the wave format.
@@ -171,8 +175,8 @@ bool AudioCapturerWin::Initialize() {
     return false;
   }
 
-  sampling_rate_ = static_cast<AudioPacket::SamplingRate>(
-      wave_format_ex_->nSamplesPerSec);
+  sampling_rate_ =
+      static_cast<AudioPacket::SamplingRate>(wave_format_ex_->nSamplesPerSec);
 
   wave_format_ex_->wBitsPerSample = kBitsPerSample;
   wave_format_ex_->nBlockAlign = wave_format_ex_->nChannels * kBytesPerSample;
@@ -182,7 +186,7 @@ bool AudioCapturerWin::Initialize() {
   if (wave_format_ex_->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
     PWAVEFORMATEXTENSIBLE wave_format_extensible =
         reinterpret_cast<WAVEFORMATEXTENSIBLE*>(
-        static_cast<WAVEFORMATEX*>(wave_format_ex_));
+            static_cast<WAVEFORMATEX*>(wave_format_ex_));
     if (!IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,
                      wave_format_extensible->SubFormat) &&
         !IsEqualGUID(KSDATAFORMAT_SUBTYPE_PCM,
@@ -199,13 +203,10 @@ bool AudioCapturerWin::Initialize() {
 
   // Initialize the IAudioClient.
   hr = audio_client_->Initialize(
-      AUDCLNT_SHAREMODE_SHARED,
-      AUDCLNT_STREAMFLAGS_LOOPBACK,
+      AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK,
       (kMaxExpectedTimerLag + audio_device_period_.InMilliseconds()) *
-      k100nsPerMillisecond,
-      0,
-      wave_format_ex_,
-      nullptr);
+          k100nsPerMillisecond,
+      0, wave_format_ex_, nullptr);
   if (FAILED(hr)) {
     LOG(ERROR) << "Failed to initialize IAudioClient. Error " << hr;
     return false;
@@ -251,9 +252,10 @@ void AudioCapturerWin::DoCapture() {
   HRESULT hr = S_OK;
   while (true) {
     UINT32 next_packet_size;
-    HRESULT hr = audio_capture_client_->GetNextPacketSize(&next_packet_size);
-    if (FAILED(hr))
+    hr = audio_capture_client_->GetNextPacketSize(&next_packet_size);
+    if (FAILED(hr)) {
       break;
+    }
 
     if (next_packet_size <= 0) {
       return;
@@ -264,10 +266,19 @@ void AudioCapturerWin::DoCapture() {
     DWORD flags;
     hr = audio_capture_client_->GetBuffer(&data, &frames, &flags, nullptr,
                                           nullptr);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
       break;
-
-    if (volume_filter_.Apply(reinterpret_cast<int16_t*>(data), frames)) {
+    }
+    // SAFETY: The Data from the AudioCaptureClient is configured to be 16-bit
+    // (see `kBytesPerSample` == 2) when we run the initaliztion code in
+    // AudioCapturerWin::Initialize and configure
+    // `wave_format_ex_->wBitsPerSample`. If this configuration for 16-bit fails
+    // the initialization fails. Thus it is safe to reinterpret this as a
+    // int16_t buffer of size `frames * wave_format_ex_->nChannels`. Reference:
+    // https://learn.microsoft.com/en-gb/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer
+    const auto audio_samples = UNSAFE_BUFFERS(base::span(
+        reinterpret_cast<int16_t*>(data), frames * wave_format_ex_->nChannels));
+    if (volume_filter_.Apply(audio_samples)) {
       std::unique_ptr<AudioPacket> packet(new AudioPacket());
       packet->add_data(data, frames * wave_format_ex_->nBlockAlign);
       packet->set_encoding(AudioPacket::ENCODING_RAW);
@@ -278,27 +289,29 @@ void AudioCapturerWin::DoCapture() {
       // TODO(zijiehe): Convert dwChannelMask to layout and pass it to
       // AudioPump. So the stream can be downmixed properly with both number and
       // layouts of speakers.
-      packet->set_channels(static_cast<AudioPacket::Channels>(
-          wave_format_ex_->nChannels));
+      packet->set_channels(
+          static_cast<AudioPacket::Channels>(wave_format_ex_->nChannels));
 
       callback_.Run(std::move(packet));
     }
 
     hr = audio_capture_client_->ReleaseBuffer(frames);
-    if (FAILED(hr))
+    if (FAILED(hr)) {
       break;
+    }
   }
 
   // There is nothing to capture if the audio endpoint device has been unplugged
   // or disabled.
-  if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+  if (hr == AUDCLNT_E_DEVICE_INVALIDATED) {
     return;
+  }
 
   // Avoid reporting the same error multiple times.
   if (FAILED(hr) && hr != last_capture_error_) {
     last_capture_error_ = hr;
-    LOG(ERROR) << "Failed to capture an audio packet: 0x"
-               << std::hex << hr << std::dec << ".";
+    LOG(ERROR) << "Failed to capture an audio packet: 0x" << std::hex << hr
+               << std::dec << ".";
   }
 }
 

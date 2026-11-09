@@ -1,15 +1,23 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/extensions/api/web_navigation/web_navigation_api_constants.h"
+
+#include "extensions/buildflags/buildflags.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace extensions {
 
 namespace web_navigation_api_constants {
 
 const char kErrorKey[] = "error";
+const char kDocumentIdKey[] = "documentId";
+const char kDocumentLifecycleKey[] = "documentLifecycle";
 const char kFrameIdKey[] = "frameId";
+const char kFrameTypeKey[] = "frameType";
+const char kParentDocumentIdKey[] = "parentDocumentId";
 const char kParentFrameIdKey[] = "parentFrameId";
 const char kProcessIdKey[] = "processId";
 const char kReplacedTabIdKey[] = "replacedTabId";

@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -15,7 +15,7 @@ class WebIconSizesParserTest : public testing::Test {};
 
 TEST(WebIconSizesParserTest, parseSizes) {
   WebString sizes_attribute = "32x33";
-  WebVector<gfx::Size> sizes;
+  std::vector<gfx::Size> sizes;
   sizes = WebIconSizesParser::ParseIconSizes(sizes_attribute);
   ASSERT_EQ(1U, sizes.size());
   EXPECT_EQ(32, sizes[0].width());

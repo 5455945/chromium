@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include "third_party/blink/renderer/core/accessibility/ax_context.h"
 #include "third_party/blink/renderer/core/accessibility/ax_object_cache.h"
 #include "third_party/blink/renderer/core/dom/document.h"
-#include "third_party/blink/renderer/modules/accessibility/ax_object_cache_impl.h"
 #include "ui/accessibility/ax_mode.h"
 
 namespace blink {
@@ -18,22 +17,110 @@ WebAXContext::WebAXContext(WebDocument root_document, const ui::AXMode& mode)
 
 WebAXContext::~WebAXContext() {}
 
-WebAXObject WebAXContext::Root() const {
-  // It is an error to call AXContext::GetAXObjectCache() if the underlying
-  // document is no longer active, so early return in that case to prevent
-  // crashes that might otherwise happen in some cases (see crbug.com/1094576).
-  if (!private_->HasActiveDocument())
-    return WebAXObject();
+bool WebAXContext::HasActiveDocument() const {
+  return private_->HasActiveDocument();
+}
 
-  // Make sure that layout is updated before a root ax object is created.
-  WebAXObject::UpdateLayout(WebDocument(private_->GetDocument()));
-
-  return WebAXObject(
-      static_cast<AXObjectCacheImpl*>(&private_->GetAXObjectCache())->Root());
+bool WebAXContext::HasAXObjectCache() const {
+  CHECK(HasActiveDocument());
+  return private_->GetDocument()->ExistingAXObjectCache();
 }
 
 const ui::AXMode& WebAXContext::GetAXMode() const {
+  DCHECK(!private_->GetAXMode().is_mode_off());
   return private_->GetAXMode();
 }
 
+void WebAXContext::SetAXMode(const ui::AXMode& mode) const {
+  private_->SetAXMode(mode);
+}
+
+void WebAXContext::MarkDocumentDirty() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+  private_->GetAXObjectCache().MarkDocumentDirty();
+}
+
+void WebAXContext::ResetSerializer() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+  private_->GetAXObjectCache().ResetSerializer();
+}
+
+void WebAXContext::GetImagesToAnnotate(ui::AXTreeUpdate& updates,
+                                       std::vector<ui::AXNodeData*>& nodes) {
+  private_->GetAXObjectCache().GetImagesToAnnotate(updates, nodes);
+}
+
+void WebAXContext::UpdateAXForAllDocuments() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+  return private_->GetAXObjectCache().UpdateAXForAllDocuments();
+}
+
+void WebAXContext::ScheduleImmediateSerialization() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+
+  auto& cache = private_->GetAXObjectCache();
+  cache.ScheduleImmediateSerialization();
+}
+
+void WebAXContext::AddEventToSerializationQueue(const ui::AXEvent& event,
+                                                bool immediate_serialization) {
+  if (!HasActiveDocument()) {
+    return;
+  }
+
+  auto& cache = private_->GetAXObjectCache();
+  cache.AddEventToSerializationQueue(event, immediate_serialization);
+}
+
+void WebAXContext::OnSerializationCancelled() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+
+  auto& cache = private_->GetAXObjectCache();
+  cache.OnSerializationCancelled();
+}
+
+void WebAXContext::OnSerializationStartSend() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+
+  auto& cache = private_->GetAXObjectCache();
+  cache.OnSerializationStartSend();
+}
+
+bool WebAXContext::IsSerializationInFlight() const {
+  if (!HasActiveDocument()) {
+    return false;
+  }
+
+  const auto& cache = private_->GetAXObjectCache();
+  return cache.IsSerializationInFlight();
+}
+
+void WebAXContext::OnSerializationReceived() {
+  if (!HasActiveDocument()) {
+    return;
+  }
+  return private_->GetAXObjectCache().OnSerializationReceived();
+}
+
+void WebAXContext::FireLoadCompleteIfLoaded() {
+  if (!private_->HasActiveDocument())
+    return;
+  return private_->GetDocument()->DispatchHandleLoadComplete();
+}
+
+void WebAXContext::SetSerializationResetToken(uint32_t reset_token) const {
+  private_->GetAXObjectCache().SetSerializationResetToken(reset_token);
+}
 }  // namespace blink

@@ -1,15 +1,16 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "media/base/audio_pull_fifo.h"
+
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/containers/span.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "base/strings/stringprintf.h"
 #include "media/base/audio_bus.h"
-#include "media/base/audio_pull_fifo.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace media {
@@ -24,7 +25,7 @@ namespace media {
 static int kChannels = 2;
 
 // Max number of audio framed the FIFO can contain.
-static const int kMaxFramesInFifo = 2048;
+static constexpr int kMaxFramesInFifo = 2048;
 
 class AudioPullFifoTest
     : public testing::TestWithParam<int> {
@@ -34,16 +35,18 @@ class AudioPullFifoTest
                    kMaxFramesInFifo,
                    base::BindRepeating(&AudioPullFifoTest::ProvideInput,
                                        base::Unretained(this))),
-        audio_bus_(AudioBus::Create(kChannels, kMaxFramesInFifo)),
-        fill_value_(0),
-        last_frame_delay_(-1) {
+        audio_bus_(AudioBus::Create(kChannels, kMaxFramesInFifo)) {
     EXPECT_EQ(kMaxFramesInFifo, pull_fifo_.SizeInFrames());
   }
+
+  AudioPullFifoTest(const AudioPullFifoTest&) = delete;
+  AudioPullFifoTest& operator=(const AudioPullFifoTest&) = delete;
+
   virtual ~AudioPullFifoTest() = default;
 
-  void VerifyValue(const float data[], int size, float start_value) {
+  void VerifyValue(base::span<float> data, float start_value) {
     float value = start_value;
-    for (int i = 0; i < size; ++i) {
+    for (size_t i = 0; i < data.size(); ++i) {
       ASSERT_FLOAT_EQ(value++, data[i]) << "i=" << i;
     }
   }
@@ -56,8 +59,9 @@ class AudioPullFifoTest
     SCOPED_TRACE(base::StringPrintf("Checking frames_to_consume %d",
                  frames_to_consume));
     pull_fifo_.Consume(audio_bus_.get(), frames_to_consume);
-    for (int j = 0; j < kChannels; ++j) {
-      VerifyValue(audio_bus_->channel(j), frames_to_consume, start_value);
+    for (auto channel : audio_bus_->AllChannels()) {
+      VerifyValue(channel.first(static_cast<size_t>(frames_to_consume)),
+                  start_value);
     }
     start_value += frames_to_consume;
     EXPECT_LT(last_frame_delay_, audio_bus_->frames());
@@ -72,22 +76,19 @@ class AudioPullFifoTest
 
     EXPECT_EQ(audio_bus->channels(), audio_bus_->channels());
     EXPECT_EQ(audio_bus->frames(), kMaxFramesInFifo);
-    for (int i = 0; i < audio_bus->frames(); ++i) {
-      for (int j = 0; j < audio_bus->channels(); ++j) {
-        // Store same value in all channels.
-        audio_bus->channel(j)[i] = fill_value_;
-      }
-      fill_value_++;
+    for (auto channel : audio_bus->AllChannels()) {
+      std::ranges::generate(
+          channel, [value = fill_value_]() mutable { return value++; });
     }
+
+    fill_value_ += audio_bus_->frames();
   }
 
  protected:
   AudioPullFifo pull_fifo_;
   std::unique_ptr<AudioBus> audio_bus_;
-  int fill_value_;
-  int last_frame_delay_;
-
-  DISALLOW_COPY_AND_ASSIGN(AudioPullFifoTest);
+  int fill_value_ = 0;
+  int last_frame_delay_ = -1;
 };
 
 TEST_P(AudioPullFifoTest, Consume) {

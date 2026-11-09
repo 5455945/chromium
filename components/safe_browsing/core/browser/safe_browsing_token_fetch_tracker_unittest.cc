@@ -1,4 +1,4 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,7 @@ namespace safe_browsing {
 
 class SafeBrowsingTokenFetchTrackerTest : public ::testing::Test {
  public:
-  SafeBrowsingTokenFetchTrackerTest() {}
+  SafeBrowsingTokenFetchTrackerTest() = default;
 
  protected:
   base::test::TaskEnvironment task_environment_{
@@ -125,7 +125,7 @@ TEST_F(SafeBrowsingTokenFetchTrackerTest, Timeout) {
                      &on_timeout1_invoked));
 
   task_environment_.FastForwardBy(
-      base::TimeDelta::FromMilliseconds(delay_before_second_request_from_ms));
+      base::Milliseconds(delay_before_second_request_from_ms));
   fetcher.StartTrackingTokenFetch(
       base::BindOnce([](std::string* target_token,
                         const std::string& token) { *target_token = token; },
@@ -140,16 +140,16 @@ TEST_F(SafeBrowsingTokenFetchTrackerTest, Timeout) {
       kTokenFetchTimeoutDelayFromMilliseconds -
       delay_before_second_request_from_ms;
   task_environment_.FastForwardBy(
-      base::TimeDelta::FromMilliseconds(time_to_trigger_first_timeout_from_ms));
+      base::Milliseconds(time_to_trigger_first_timeout_from_ms));
   EXPECT_EQ(access_token1, "");
   EXPECT_TRUE(on_timeout1_invoked);
   EXPECT_EQ(access_token2, "dummy_value2");
   EXPECT_FALSE(on_timeout2_invoked);
 
   // Fast-forward to trigger the second request's timeout threshold.
-  task_environment_.FastForwardBy(base::TimeDelta::FromMilliseconds(
-      kTokenFetchTimeoutDelayFromMilliseconds -
-      time_to_trigger_first_timeout_from_ms));
+  task_environment_.FastForwardBy(
+      base::Milliseconds(kTokenFetchTimeoutDelayFromMilliseconds -
+                         time_to_trigger_first_timeout_from_ms));
   EXPECT_EQ(access_token2, "");
   EXPECT_TRUE(on_timeout2_invoked);
 }

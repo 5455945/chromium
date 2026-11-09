@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/component_export.h"
-#include "base/macros.h"
 #include "base/time/time.h"
 #include "ui/gfx/geometry/point_f.h"
 
@@ -48,11 +47,11 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) InputPredictor {
 
   // Generate the prediction based on current points.
   // It can use a latency based on the vsync refresh rate: `frame_interval`.
-  // TODO(crbug.com/1142061): Remove the `frame_interval` arg if the expriment
+  // TODO(crbug.com/40154523): Remove the `frame_interval` arg if the expriment
   // concludes that a frame-dependent latency isn't better.
   virtual std::unique_ptr<InputData> GeneratePrediction(
       base::TimeTicks predict_time,
-      base::TimeDelta frame_interval = base::TimeDelta::FromSeconds(0)) = 0;
+      base::TimeDelta frame_interval = base::Seconds(0)) = 0;
 
   // Returns the maximum of prediction available for resampling
   // before having side effects (jitter, wrong orientation, etc..)
@@ -65,23 +64,26 @@ class COMPONENT_EXPORT(UI_BASE_PREDICTION) InputPredictor {
   // Return the time interval based on current points.
   virtual base::TimeDelta TimeInterval() const = 0;
 
+  // Returns the latency offset to apply for resampling.
+  // Default implementation returns zero, indicating no offset.
+  virtual base::TimeDelta ResampleLatency(base::TimeDelta frame_interval) const;
+
+  // Returns true if the predictor adds ResampleLatency() to the prediction time
+  // internally.
+  virtual bool AppliesResampleLatencyInternally() const;
+
  protected:
-  static constexpr base::TimeDelta kMaxTimeDelta =
-      base::TimeDelta::FromMilliseconds(20);
+  static constexpr base::TimeDelta kMaxTimeDelta = base::Milliseconds(20);
 
   // Default time interval between events.
-  static constexpr base::TimeDelta kTimeInterval =
-      base::TimeDelta::FromMilliseconds(8);
+  static constexpr base::TimeDelta kTimeInterval = base::Milliseconds(8);
   // Minimum time interval between events.
-  static constexpr base::TimeDelta kMinTimeInterval =
-      base::TimeDelta::FromMillisecondsD(2.5);
+  static constexpr base::TimeDelta kMinTimeInterval = base::Milliseconds(2.5);
 
   // Maximum amount of prediction when resampling.
-  static constexpr base::TimeDelta kMaxResampleTime =
-      base::TimeDelta::FromMilliseconds(20);
+  static constexpr base::TimeDelta kMaxResampleTime = base::Milliseconds(20);
   // Maximum time delta for prediction.
-  static constexpr base::TimeDelta kMaxPredictionTime =
-      base::TimeDelta::FromMilliseconds(25);
+  static constexpr base::TimeDelta kMaxPredictionTime = base::Milliseconds(25);
 };
 
 }  // namespace ui

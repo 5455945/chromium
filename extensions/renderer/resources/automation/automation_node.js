@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,6 +6,11 @@ const AutomationEvent = require('automationEvent').AutomationEvent;
 const automationInternal = getInternalApi('automationInternal');
 const AutomationTreeCache = require('automationTreeCache').AutomationTreeCache;
 const exceptionHandler = require('uncaught_exception_handler');
+
+const INT32_MAX = 2147483647;
+
+// Reusable buffer for generating cryptographic random action request IDs.
+const randomBuffer = new Uint32Array(1);
 
 const natives = requireNative('automationInternal');
 
@@ -177,13 +182,6 @@ const GetChildIds = natives.GetChildIDs;
 /**
  * @param {string} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
- * @return {?Object} An object mapping html attributes to values.
- */
-const GetHtmlAttributes = natives.GetHtmlAttributes;
-
-/**
- * @param {string} axTreeID The id of the accessibility tree.
- * @param {number} nodeID The id of a node.
  * @return {?number} The index of this node in its parent, or undefined if
  *     the tree or node or node parent wasn't found.
  */
@@ -267,8 +265,7 @@ const GetUnclippedLocation = natives.GetUnclippedLocation;
  *     array if this node has no text content, or undefined if the tree or node
  *     was not found.
  */
-const GetLineStartOffsets =
-    requireNative('automationInternal').GetLineStartOffsets;
+const GetLineStartOffsets = natives.GetLineStartOffsets;
 
 /**
  * @param {string} axTreeID The id of the accessibility tree.
@@ -344,15 +341,6 @@ const GetIntListAttributeReverseRelations =
 /**
  * @param {string} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
- * @param {string} attr The name of an HTML attribute.
- * @return {?string} The value of this attribute, or undefined if the tree,
- *     node, or attribute wasn't found.
- */
-const GetHtmlAttribute = natives.GetHtmlAttribute;
-
-/**
- * @param {string} axTreeID The id of the accessibility tree.
- * @param {number} nodeID The id of a node.
  * @return {automation.NameFromType} The source of the node's name.
  */
 const GetNameFrom = natives.GetNameFrom;
@@ -403,6 +391,34 @@ const GetLineThrough = natives.GetLineThrough;
 /**
  * @param {string} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+const GetIsButton = natives.GetIsButton;
+
+/**
+ * @param {string} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+const GetIsCheckBox = natives.GetIsCheckBox;
+
+/**
+ * @param {string} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+const GetIsComboBox = natives.GetIsComboBox;
+
+/**
+ * @param {string} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {boolean}
+ */
+const GetIsImage = natives.GetIsImage;
+
+/**
+ * @param {string} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
  * @return {?Array<automation.CustomAction>} List of custom actions of the
  *     node.
  */
@@ -435,6 +451,14 @@ const GetHasPopup = natives.GetHasPopup;
  * @return {automation.AriaCurrentState}
  */
 const GetAriaCurrentState = natives.GetAriaCurrentState;
+
+/**
+ * @param {string} axTreeID The id of the accessibility tree.
+ * @param {number} nodeID The id of a node.
+ * @return {automation.InvalidState}
+ */
+const GetInvalidState = natives.GetInvalidState;
+
 
 /**
  * @param {string} axTreeID The id of the accessibility tree.
@@ -509,16 +533,6 @@ const GetTableRowCount = natives.GetTableRowCount;
 const GetDetectedLanguage = natives.GetDetectedLanguage;
 
 /**
- * @param {string} axTreeId The id of the accessibility tree.
- * @param {number} nodeID The id of a node.
- * @param {string} attr The name of the string attribute.
- * @return {!Array<{startIndex: number, endIndex: number, language: string,
- * probability: number}>}
- */
-const GetLanguageAnnotationForStringAttribute =
-    natives.GetLanguageAnnotationForStringAttribute;
-
-/**
  * @param {string} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
  * @return {!Array<number>}
@@ -576,6 +590,7 @@ const GetMarkers = natives.GetMarkers;
 /**
  * @param {string} axTreeID The id of the accessibility tree.
  * @param {number} nodeID The id of a node.
+ * @param {!automation.PositionType} type
  * @param {number} offset
  * @param {boolean} isUpstream
  * @return {!Object}
@@ -605,19 +620,37 @@ const utils = require('utils');
  * @constructor
  */
 function AutomationNodeImpl(root) {
-  this.rootImpl = root;
-  this.listeners = {__proto__: null};
+  this.rootImpl_ = root;
+  this.listeners_ = {__proto__: null};
 }
 
 AutomationNodeImpl.prototype = {
   __proto__: null,
-  treeID: '',
-  id: -1,
-  isRootNode: false,
+
+  /** @private {string} */
+  treeID_: '',
+
+  /** @private {number} */
+  id_: -1,
+
+  /** @private {boolean} */
+  isRootNode_: false,
+
+  get treeID() {
+    return this.treeID_;
+  },
+
+  get id() {
+    return this.id_;
+  },
 
   detach: function() {
-    this.rootImpl = null;
-    this.listeners = {__proto__: null};
+    this.rootImpl_ = null;
+    this.listeners_ = {__proto__: null};
+  },
+
+  get isRootNode() {
+    return this.isRootNode_;
   },
 
   get root() {
@@ -636,10 +669,6 @@ AutomationNodeImpl.prototype = {
     }
   },
 
-  get htmlAttributes() {
-    return GetHtmlAttributes(this.treeID, this.id) || {};
-  },
-
   get state() {
     return GetState(this.treeID, this.id) || {};
   },
@@ -654,6 +683,19 @@ AutomationNodeImpl.prototype = {
 
   get checked() {
     return GetChecked(this.treeID, this.id);
+  },
+
+  get caretBounds() {
+    const data = GetIntListAttribute(this.treeID, this.id, 'caretBounds');
+    if (!data) {
+      return;
+    }
+
+    if (data.length !== 4) {
+      throw Error('Internal encoding error for caret bounds.');
+    }
+
+    return {left: data[0], top: data[1], width: data[2], height: data[3]};
   },
 
   get location() {
@@ -675,12 +717,12 @@ AutomationNodeImpl.prototype = {
         'Error with bounds for range callback' :
         'Error with unclipped bounds for range callback';
 
-    if (!this.rootImpl) {
+    if (!this.rootImpl_) {
       return;
     }
 
     // Not yet initialized.
-    if (this.rootImpl.treeID === undefined || this.id === undefined) {
+    if (this.rootImpl_.treeID_ === undefined || this.id === undefined) {
       return;
     }
 
@@ -737,24 +779,40 @@ AutomationNodeImpl.prototype = {
   },
 
   get firstChild() {
-    if (GetChildCount(this.treeID, this.id) == 0) {
+    if (GetChildCount(this.treeID, this.id) === 0) {
       return undefined;
     }
     const info = GetChildIDAtIndex(this.treeID, this.id, 0);
     if (info) {
-      return AutomationRootNodeImpl.getNodeFromTree(info.treeId, info.nodeId);
+      const child =
+          AutomationRootNodeImpl.getNodeFromTree(info.treeId, info.nodeId);
+
+      // A child with an app id should always be in a different tree.
+      if (child.appId && this.treeID === info.treeId) {
+        return;
+      }
+
+      return child;
     }
   },
 
   get lastChild() {
     const count = GetChildCount(this.treeID, this.id);
-    if (count == 0) {
+    if (count === 0) {
       return;
     }
 
     const info = GetChildIDAtIndex(this.treeID, this.id, count - 1);
     if (info) {
-      return AutomationRootNodeImpl.getNodeFromTree(info.treeId, info.nodeId);
+      const child =
+          AutomationRootNodeImpl.getNodeFromTree(info.treeId, info.nodeId);
+
+      // A child with an app id should always be in a different tree.
+      if (child.appId && this.treeID === info.treeId) {
+        return;
+      }
+
+      return child;
     }
   },
 
@@ -769,8 +827,14 @@ AutomationNodeImpl.prototype = {
       const childID = info.nodeIds[i];
       const child =
           AutomationRootNodeImpl.getNodeFromTree(info.treeId, childID);
+
+      // A child with an app id should always be in a different tree.
+      if (child.appId && this.treeID === info.treeId) {
+        continue;
+      }
+
       if (child) {
-        $Array.push(children, child);
+        Array.prototype.push.call(children, child);
       }
     }
     return children;
@@ -834,13 +898,24 @@ AutomationNodeImpl.prototype = {
     return GetLineThrough(this.treeID, this.id);
   },
 
-  get detectedLanguage() {
-    return GetDetectedLanguage(this.treeID, this.id);
+  get isButton() {
+    return GetIsButton(this.treeID, this.id);
   },
 
-  languageAnnotationForStringAttribute: function(attributeName) {
-    return GetLanguageAnnotationForStringAttribute(this.treeID,
-        this.id, attributeName);
+  get isCheckBox() {
+    return GetIsCheckBox(this.treeID, this.id);
+  },
+
+  get isComboBox() {
+    return GetIsComboBox(this.treeID, this.id);
+  },
+
+  get isImage() {
+    return GetIsImage(this.treeID, this.id);
+  },
+
+  get detectedLanguage() {
+    return GetDetectedLanguage(this.treeID, this.id);
   },
 
   get customActions() {
@@ -863,12 +938,16 @@ AutomationNodeImpl.prototype = {
     return GetAriaCurrentState(this.treeID, this.id);
   },
 
+  get invalidState() {
+    return GetInvalidState(this.treeID, this.id);
+  },
+
   get tableCellColumnHeaders() {
     const ids = GetTableCellColumnHeaders(this.treeID, this.id);
-    if (ids && this.rootImpl) {
+    if (ids && this.rootImpl_) {
       const result = [];
       for (let i = 0; i < ids.length; i++) {
-        result.push(this.rootImpl.get(ids[i]));
+        result.push(this.rootImpl_.get(ids[i]));
       }
       return result;
     }
@@ -876,10 +955,10 @@ AutomationNodeImpl.prototype = {
 
   get tableCellRowHeaders() {
     const ids = GetTableCellRowHeaders(this.treeID, this.id);
-    if (ids && this.rootImpl) {
+    if (ids && this.rootImpl_) {
       const result = [];
       for (let i = 0; i < ids.length; i++) {
-        result.push(this.rootImpl.get(ids[i]));
+        result.push(this.rootImpl_.get(ids[i]));
       }
       return result;
     }
@@ -930,9 +1009,9 @@ AutomationNodeImpl.prototype = {
     return GetMarkers(this.treeID, this.id);
   },
 
-  createPosition: function(offset, opt_isUpstream) {
+  createPosition: function(type, offset, opt_isUpstream) {
     const nativePosition = CreateAutomationPosition(
-        this.treeID, this.id, offset, !!opt_isUpstream);
+        this.treeID, this.id, type, offset, Boolean(opt_isUpstream));
 
     // Attach a getter for the node, which is only available in js.
     Object.defineProperty(nativePosition, 'node', {
@@ -944,7 +1023,7 @@ AutomationNodeImpl.prototype = {
         }
 
         return privates(tree).impl.get(nativePosition.anchorID);
-      }
+      },
     });
 
     return nativePosition;
@@ -965,7 +1044,9 @@ AutomationNodeImpl.prototype = {
   },
 
   hitTest: function(x, y, eventToFire) {
-    this.hitTestInternal(x, y, eventToFire);
+    // Set an empty callback to trigger onActionResult.
+    const callback = () => {};
+    this.hitTestInternal(x, y, eventToFire, callback);
   },
 
   hitTestWithReply: function(x, y, opt_callback) {
@@ -992,9 +1073,8 @@ AutomationNodeImpl.prototype = {
 
   performStandardAction: function(action) {
     const standardActions = GetStandardActions(this.treeID, this.id);
-    if (!standardActions ||
-        !standardActions.find(item => action == item)) {
-      throw 'Inapplicable action for node: ' + action;
+    if (!standardActions || !standardActions.find(item => action === item)) {
+      throw Error('Inapplicable action for node: ' + action);
     }
     this.performAction_(action);
   },
@@ -1037,6 +1117,10 @@ AutomationNodeImpl.prototype = {
     this.performAction_('scrollToPoint', {x, y});
   },
 
+  scrollToPositionAtRowColumn: function(row, column) {
+    this.performAction_('scrollToPositionAtRowColumn', {row, column});
+  },
+
   setScrollOffset: function(x, y) {
     this.performAction_('setScrollOffset', {x, y});
   },
@@ -1047,10 +1131,11 @@ AutomationNodeImpl.prototype = {
 
   setSelection: function(startIndex, endIndex) {
     if (this.state.editable) {
-      this.performAction_('setSelection',
-                          { focusNodeID: this.id,
-                            anchorOffset: startIndex,
-                            focusOffset: endIndex });
+      this.performAction_('setSelection', {
+        focusNodeID: this.id,
+        anchorOffset: startIndex,
+        focusOffset: endIndex,
+      });
     }
   },
 
@@ -1079,16 +1164,8 @@ AutomationNodeImpl.prototype = {
   suspendMedia: function() {
     this.performAction_('suspendMedia');
   },
-
-  domQuerySelector: function(selector, callback) {
-    if (!this.rootImpl) {
-      callback();
-    }
-    automationInternal.querySelector(
-      { treeID: this.rootImpl.treeID,
-        automationNodeID: this.id,
-        selector: selector },
-      $Function.bind(this.domQuerySelectorCallback_, this, callback));
+  longClick: function() {
+    this.performAction_('longClick');
   },
 
   find: function(params) {
@@ -1118,8 +1195,8 @@ AutomationNodeImpl.prototype = {
 
   addEventListener: function(eventType, callback, capture) {
     this.removeEventListener(eventType, callback);
-    if (!this.listeners[eventType]) {
-      this.listeners[eventType] = [];
+    if (!this.listeners_[eventType]) {
+      this.listeners_[eventType] = [];
     }
 
     // Calling EventListenerAdded will also validate the args
@@ -1127,7 +1204,7 @@ AutomationNodeImpl.prototype = {
     // type/listener gets enqueued.
     EventListenerAdded(this.treeID, this.id, eventType);
 
-    $Array.push(this.listeners[eventType], {
+    Array.prototype.push.call(this.listeners_[eventType], {
       __proto__: null,
       callback: callback,
       capture: !!capture,
@@ -1136,25 +1213,27 @@ AutomationNodeImpl.prototype = {
 
   // TODO(dtseng/aboxhall): Check this impl against spec.
   removeEventListener: function(eventType, callback) {
-    if (this.listeners[eventType]) {
-      const listeners = this.listeners[eventType];
+    if (this.listeners_[eventType]) {
+      const listeners = this.listeners_[eventType];
       for (let i = 0; i < listeners.length; i++) {
         if (callback === listeners[i].callback) {
-          $Array.splice(listeners, i, 1);
+          Array.prototype.splice.call(listeners, i, 1);
         }
       }
 
-      if (listeners.length == 0) {
+      if (listeners.length === 0) {
         EventListenerRemoved(this.treeID, this.id, eventType);
       }
     }
   },
 
   toJSON: function() {
-    return { treeID: this.treeID,
-             id: this.id,
-             role: this.role,
-             attributes: this.attributes };
+    return {
+      treeID: this.treeID,
+      id: this.id,
+      role: this.role,
+      attributes: this.attributes,
+    };
   },
 
   dispatchEvent: function(
@@ -1162,7 +1241,7 @@ AutomationNodeImpl.prototype = {
     const path = [];
     let parent = this.parent;
     while (parent) {
-      $Array.push(path, parent);
+      Array.prototype.push.call(path, parent);
       parent = parent.parent;
     }
 
@@ -1191,13 +1270,13 @@ AutomationNodeImpl.prototype = {
     const childIDs = [];
     for (let i = 0; i < count; ++i) {
       const childID = GetChildIDAtIndex(this.treeID, this.id, i).nodeId;
-      $Array.push(childIDs, childID);
+      Array.prototype.push.call(childIDs, childID);
     }
     const name = GetName(this.treeID, this.id);
 
     let result = 'node id=' + this.id + ' role=' + this.role +
-        ' state=' + $JSON.stringify(this.state) + ' parentID=' + parentID +
-        ' childIds=' + $JSON.stringify(childIDs);
+        ' state=' + JSON.stringify(this.state) + ' parentID=' + parentID +
+        ' childIds=' + JSON.stringify(childIDs);
     if (childTreeID) {
       result += ' childTreeID=' + childTreeID;
     }
@@ -1211,10 +1290,10 @@ AutomationNodeImpl.prototype = {
   },
 
   dispatchEventAtCapturing_: function(event, path) {
-    privates(event).impl.eventPhase = Event.CAPTURING_PHASE;
+    event.eventPhase = Event.CAPTURING_PHASE;
     for (let i = path.length - 1; i >= 0; i--) {
       this.fireEventListeners_(path[i], event);
-      if (privates(event).impl.propagationStopped) {
+      if (event.propagationStopped) {
         return false;
       }
     }
@@ -1222,16 +1301,16 @@ AutomationNodeImpl.prototype = {
   },
 
   dispatchEventAtTargeting_: function(event) {
-    privates(event).impl.eventPhase = Event.AT_TARGET;
+    event.eventPhase = Event.AT_TARGET;
     this.fireEventListeners_(this.wrapper, event);
-    return !privates(event).impl.propagationStopped;
+    return !event.propagationStopped;
   },
 
   dispatchEventAtBubbling_: function(event, path) {
-    privates(event).impl.eventPhase = Event.BUBBLING_PHASE;
+    event.eventPhase = Event.BUBBLING_PHASE;
     for (let i = 0; i < path.length; i++) {
       this.fireEventListeners_(path[i], event);
-      if (privates(event).impl.propagationStopped) {
+      if (event.propagationStopped) {
         return false;
       }
     }
@@ -1240,11 +1319,11 @@ AutomationNodeImpl.prototype = {
 
   fireEventListeners_: function(node, event) {
     const nodeImpl = privates(node).impl;
-    if (!nodeImpl.rootImpl) {
+    if (!nodeImpl.rootImpl_) {
       return;
     }
 
-    const originalListeners = nodeImpl.listeners[event.type];
+    const originalListeners = nodeImpl.listeners_[event.type];
     if (!originalListeners) {
       return;
     }
@@ -1258,10 +1337,10 @@ AutomationNodeImpl.prototype = {
 
     const eventPhase = event.eventPhase;
     for (let i = 0; i < listeners.length; i++) {
-      if (eventPhase == Event.CAPTURING_PHASE && !listeners[i].capture) {
+      if (eventPhase === Event.CAPTURING_PHASE && !listeners[i].capture) {
         continue;
       }
-      if (eventPhase == Event.BUBBLING_PHASE && listeners[i].capture) {
+      if (eventPhase === Event.BUBBLING_PHASE && listeners[i].capture) {
         continue;
       }
 
@@ -1275,48 +1354,36 @@ AutomationNodeImpl.prototype = {
   },
 
   performAction_: function(actionType, opt_args, opt_callback) {
-    if (!this.rootImpl) {
+    if (!this.rootImpl_) {
       return;
     }
 
     // Not yet initialized.
-    if (this.rootImpl.treeID === undefined ||
-        this.id === undefined) {
+    if (this.rootImpl_.treeID === undefined || this.id === undefined) {
       return;
     }
 
     // Check permissions.
     if (!IsInteractPermitted()) {
-      throw new Error(actionType + ' requires {"desktop": true} or' +
-          ' {"interact": true} in the "automation" manifest key.');
+      throw new Error(
+          actionType + ' requires {"desktop": true} in the ' +
+          '"automation" manifest key.');
     }
+
     let requestID = -1;
     if (opt_callback) {
-      requestID = this.rootImpl.addActionResultCallback(opt_callback);
+      requestID = this.rootImpl_.addActionResultCallback(
+          actionType, opt_args, opt_callback);
     }
 
-    automationInternal.performAction({ treeID: this.rootImpl.treeID,
-                                       automationNodeID: this.id,
-                                       actionType: actionType,
-                                       requestID: requestID},
-                                     opt_args || {});
-  },
-
-  domQuerySelectorCallback_: function(userCallback, resultAutomationNodeID) {
-    // resultAutomationNodeID could be zero or undefined or (unlikely) null;
-    // they all amount to the same thing here, which is that no node was
-    // returned.
-    if (!resultAutomationNodeID || !this.rootImpl) {
-      userCallback(null);
-      return;
-    }
-    const resultNode = this.rootImpl.get(resultAutomationNodeID);
-    if (!resultNode) {
-      logging.WARNING('Query selector result not in tree: ' +
-                      resultAutomationNodeID);
-      userCallback(null);
-    }
-    userCallback(resultNode);
+    automationInternal.performAction(
+        {
+          treeID: this.rootImpl_.treeID,
+          automationNodeID: this.id,
+          actionType: actionType,
+          requestID: requestID,
+        },
+        opt_args || {});
   },
 
   findInternal_: function(params, opt_results) {
@@ -1324,7 +1391,7 @@ AutomationNodeImpl.prototype = {
     this.forAllDescendants_(function(node) {
       if (privates(node).impl.matchInternal_(params)) {
         if (opt_results) {
-          $Array.push(opt_results, node);
+          Array.prototype.push.call(opt_results, node);
         } else {
           result = node;
         }
@@ -1344,32 +1411,32 @@ AutomationNodeImpl.prototype = {
    *     for each node. Return true to early-out the traversal.
    */
   forAllDescendants_: function(closure) {
-    const stack = $Array.reverse(this.wrapper.children);
+    const stack = this.wrapper.children.reverse();
     while (stack.length > 0) {
-      const node = $Array.pop(stack);
+      const node = stack.pop();
       if (closure(node)) {
         return;
       }
 
       const children = node.children;
       for (let i = children.length - 1; i >= 0; i--) {
-        $Array.push(stack, children[i]);
+        stack.push(children[i]);
       }
     }
   },
 
   matchInternal_: function(params) {
-    if ($Object.keys(params).length === 0) {
+    if (Object.keys(params).length === 0) {
       return false;
     }
 
-    if ('role' in params && this.role != params.role) {
+    if ('role' in params && this.role !== params.role) {
       return false;
     }
 
     if ('state' in params) {
       for (const state in params.state) {
-        if (params.state[state] != (state in this.state)) {
+        if (params.state[state] !== (state in this.state)) {
           return false;
         }
       }
@@ -1377,12 +1444,12 @@ AutomationNodeImpl.prototype = {
     if ('attributes' in params) {
       for (const attribute in params.attributes) {
         const attrValue = params.attributes[attribute];
-        if (typeof attrValue != 'object') {
+        if (typeof attrValue !== 'object') {
           if (this[attribute] !== attrValue) {
             return false;
           }
         } else if (attrValue instanceof $RegExp.self) {
-          if (typeof this[attribute] != 'string') {
+          if (typeof this[attribute] !== 'string') {
             return false;
           }
           if (!attrValue.test(this[attribute])) {
@@ -1395,13 +1462,14 @@ AutomationNodeImpl.prototype = {
       }
     }
     return true;
-  }
+  },
 };
 
 const stringAttributes = [
   'accessKey',
   'appId',
-  'ariaInvalidValue',
+  'ariaCellColumnIndexText',
+  'ariaCellRowIndexText',
   'autoComplete',
   'checkedStateDescription',
   'className',
@@ -1409,43 +1477,72 @@ const stringAttributes = [
   'containerLiveStatus',
   'description',
   'display',
+  'doDefaultLabel',
   'fontFamily',
+  'htmlId',
   'htmlTag',
   'imageDataUrl',
-  'innerHtml',
+  'inputType',
   'language',
   'liveRelevant',
   'liveStatus',
+  'longClickLabel',
+  'mathContent',
   'placeholder',
   'roleDescription',
   'tooltip',
-  'url'
+  'url',
 ];
 
 const boolAttributes = [
-  'busy', 'clickable', 'containerLiveAtomic', 'containerLiveBusy',
-  'nonAtomicTextFieldRoot', 'liveAtomic', 'modal', 'notUserSelectableStyle',
-  'scrollable', 'selected', 'supportsTextLocation'
+  'busy',
+  'clickable',
+  'containerLiveAtomic',
+  'containerLiveBusy',
+  'hasHiddenOffscreenNodes',
+  'nonAtomicTextFieldRoot',
+  'liveAtomic',
+  'modal',
+  'notUserSelectableStyle',
+  'scrollable',
+  'selected',
+  'supportsTextLocation',
 ];
 
 const intAttributes = [
-  'backgroundColor', 'color', 'colorValue', 'hierarchicalLevel', 'posInSet',
-  'scrollX', 'scrollXMax', 'scrollXMin', 'scrollY', 'scrollYMax', 'scrollYMin',
-  'setSize', 'tableCellColumnSpan', 'tableCellRowSpan', 'ariaColumnCount',
-  'ariaRowCount', 'textSelEnd', 'textSelStart'
+  'backgroundColor',
+  'color',
+  'colorValue',
+  'hierarchicalLevel',
+  'posInSet',
+  'scrollX',
+  'scrollXMax',
+  'scrollXMin',
+  'scrollY',
+  'scrollYMax',
+  'scrollYMin',
+  'setSize',
+  'tableCellColumnSpan',
+  'tableCellRowSpan',
+  'ariaColumnCount',
+  'ariaRowCount',
+  'textSelEnd',
+  'textSelStart',
 ];
 
 // Int attribute, relation property to expose, reverse relation to expose.
 const nodeRefAttributes = [
   ['activedescendantId', 'activeDescendant', 'activeDescendantFor'],
-  ['errormessageId', 'errorMessage', 'errorMessageFor'],
   ['inPageLinkTargetId', 'inPageLinkTarget', null],
-  ['nextFocusId', 'nextFocus', null], ['nextOnLineId', 'nextOnLine', null],
+  ['nextFocusId', 'nextFocus', null],
+  ['nextOnLineId', 'nextOnLine', null],
+  ['nextWindowFocusId', 'nextWindowFocus', null],
   ['previousFocusId', 'previousFocus', null],
   ['previousOnLineId', 'previousOnLine', null],
+  ['previousWindowFocusId', 'previousWindowFocus', null],
   ['tableColumnHeaderId', 'tableColumnHeader', null],
   ['tableHeaderId', 'tableHeader', null],
-  ['tableRowHeaderId', 'tableRowHeader', null]
+  ['tableRowHeaderId', 'tableRowHeader', null],
 ];
 
 const intListAttributes = ['wordEnds', 'wordStarts'];
@@ -1454,162 +1551,150 @@ const intListAttributes = ['wordEnds', 'wordStarts'];
 const nodeRefListAttributes = [
   ['controlsIds', 'controls', 'controlledBy'],
   ['describedbyIds', 'describedBy', 'descriptionFor'],
-  ['detailsIds', 'details', 'detailsFor'], ['flowtoIds', 'flowTo', 'flowFrom'],
-  ['labelledbyIds', 'labelledBy', 'labelFor']
+  ['detailsIds', 'details', 'detailsFor'],
+  ['errorMessageIds', 'errorMessage', 'errorMessageFor'],
+  ['flowtoIds', 'flowTo', 'flowFrom'],
+  ['labelledbyIds', 'labelledBy', 'labelFor'],
 ];
 
 const floatAttributes =
     ['fontSize', 'maxValueForRange', 'minValueForRange', 'valueForRange'];
 
-const htmlAttributes = [['type', 'inputType']];
-
 const publicAttributes = [];
 
-$Array.forEach(stringAttributes, function(attributeName) {
-  $Array.push(publicAttributes, attributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
+Array.prototype.forEach.call(stringAttributes, function(attributeName) {
+  Array.prototype.push.call(publicAttributes, attributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
     __proto__: null,
     get: function() {
       return GetStringAttribute(this.treeID, this.id, attributeName);
-    }
+    },
   });
 });
 
-$Array.forEach(boolAttributes, function(attributeName) {
-  $Array.push(publicAttributes, attributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
+Array.prototype.forEach.call(boolAttributes, function(attributeName) {
+  Array.prototype.push.call(publicAttributes, attributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
     __proto__: null,
     get: function() {
       return GetBoolAttribute(this.treeID, this.id, attributeName);
-    }
+    },
   });
 });
 
-$Array.forEach(intAttributes, function(attributeName) {
-  $Array.push(publicAttributes, attributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
+Array.prototype.forEach.call(intAttributes, function(attributeName) {
+  Array.prototype.push.call(publicAttributes, attributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
     __proto__: null,
     get: function() {
       return GetIntAttribute(this.treeID, this.id, attributeName);
-    }
+    },
   });
 });
 
-$Array.forEach(nodeRefAttributes, function(params) {
+Array.prototype.forEach.call(nodeRefAttributes, function(params) {
   const srcAttributeName = params[0];
   const dstAttributeName = params[1];
   const dstReverseAttributeName = params[2];
-  $Array.push(publicAttributes, dstAttributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, dstAttributeName, {
+  Array.prototype.push.call(publicAttributes, dstAttributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, dstAttributeName, {
     __proto__: null,
     get: function() {
       const id = GetIntAttribute(this.treeID, this.id, srcAttributeName);
-      if (id && this.rootImpl) {
-        return this.rootImpl.get(id);
+      if (id && this.rootImpl_) {
+        return this.rootImpl_.get(id);
       } else {
         return undefined;
       }
-    }
+    },
   });
   if (dstReverseAttributeName) {
-    $Array.push(publicAttributes, dstReverseAttributeName);
-    $Object.defineProperty(
+    Array.prototype.push.call(publicAttributes, dstReverseAttributeName);
+    Object.defineProperty(
         AutomationNodeImpl.prototype, dstReverseAttributeName, {
           __proto__: null,
           get: function() {
             const ids = GetIntAttributeReverseRelations(
                 this.treeID, this.id, srcAttributeName);
-            if (!ids || !this.rootImpl) {
+            if (!ids || !this.rootImpl_) {
               return undefined;
             }
             const result = [];
             for (let i = 0; i < ids.length; ++i) {
-              const node = this.rootImpl.get(ids[i]);
+              const node = this.rootImpl_.get(ids[i]);
               if (node) {
-                $Array.push(result, node);
+                Array.prototype.push.call(result, node);
               }
             }
             return result;
-          }
+          },
         });
   }
 });
 
-$Array.forEach(intListAttributes, function(attributeName) {
-  $Array.push(publicAttributes, attributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
+Array.prototype.forEach.call(intListAttributes, function(attributeName) {
+  Array.prototype.push.call(publicAttributes, attributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
     __proto__: null,
     get: function() {
       return GetIntListAttribute(this.treeID, this.id, attributeName);
-    }
+    },
   });
 });
 
-$Array.forEach(nodeRefListAttributes, function(params) {
+Array.prototype.forEach.call(nodeRefListAttributes, function(params) {
   const srcAttributeName = params[0];
   const dstAttributeName = params[1];
   const dstReverseAttributeName = params[2];
-  $Array.push(publicAttributes, dstAttributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, dstAttributeName, {
+  Array.prototype.push.call(publicAttributes, dstAttributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, dstAttributeName, {
     __proto__: null,
     get: function() {
       const ids = GetIntListAttribute(this.treeID, this.id, srcAttributeName);
-      if (!ids || !this.rootImpl) {
+      if (!ids || !this.rootImpl_) {
         return undefined;
       }
       const result = [];
       for (let i = 0; i < ids.length; ++i) {
-        const node = this.rootImpl.get(ids[i]);
+        const node = this.rootImpl_.get(ids[i]);
         if (node) {
-          $Array.push(result, node);
+          Array.prototype.push.call(result, node);
         }
       }
       return result;
-    }
+    },
   });
   if (dstReverseAttributeName) {
-    $Array.push(publicAttributes, dstReverseAttributeName);
-    $Object.defineProperty(
+    Array.prototype.push.call(publicAttributes, dstReverseAttributeName);
+    Object.defineProperty(
         AutomationNodeImpl.prototype, dstReverseAttributeName, {
           __proto__: null,
           get: function() {
             const ids = GetIntListAttributeReverseRelations(
                 this.treeID, this.id, srcAttributeName);
-            if (!ids || !this.rootImpl) {
+            if (!ids || !this.rootImpl_) {
               return undefined;
             }
             const result = [];
             for (let i = 0; i < ids.length; ++i) {
-              const node = this.rootImpl.get(ids[i]);
+              const node = this.rootImpl_.get(ids[i]);
               if (node) {
-                $Array.push(result, node);
+                Array.prototype.push.call(result, node);
               }
             }
             return result;
-          }
+          },
         });
   }
 });
 
-$Array.forEach(floatAttributes, function(attributeName) {
-  $Array.push(publicAttributes, attributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
+Array.prototype.forEach.call(floatAttributes, function(attributeName) {
+  Array.prototype.push.call(publicAttributes, attributeName);
+  Object.defineProperty(AutomationNodeImpl.prototype, attributeName, {
     __proto__: null,
     get: function() {
       return GetFloatAttribute(this.treeID, this.id, attributeName);
-    }
-  });
-});
-
-$Array.forEach(htmlAttributes, function(params) {
-  const srcAttributeName = params[0];
-  const dstAttributeName = params[1];
-  $Array.push(publicAttributes, dstAttributeName);
-  $Object.defineProperty(AutomationNodeImpl.prototype, dstAttributeName, {
-    __proto__: null,
-    get: function() {
-      return GetHtmlAttribute(this.treeID, this.id, srcAttributeName);
-    }
+    },
   });
 });
 
@@ -1632,7 +1717,7 @@ $Array.forEach(htmlAttributes, function(params) {
  */
 function AutomationRootNodeImpl(treeID) {
   $Function.call(AutomationNodeImpl, this, this);
-  this.treeID = treeID;
+  this.treeID_ = treeID;
   this.axNodeDataCache_ = {__proto__: null};
 }
 
@@ -1666,30 +1751,24 @@ utils.defineProperty(AutomationRootNodeImpl, 'destroy', function(treeID) {
   delete AutomationTreeCache.idToAutomationRootNode[treeID];
 });
 
-/**
- * A counter keeping track of IDs to use for mapping action requests to
- * their callback function.
- */
-AutomationRootNodeImpl.actionRequestCounter = 0;
-
+utils.defineProperty(AutomationRootNodeImpl, 'destroyAll', function() {
+  AutomationTreeCache.idToAutomationRootNode = {};
+});
 /**
  * A map from a request ID to the corresponding callback function to call
- * when the action response event is received.
+ * when the action response event is received. Shared globally across trees
+ * to allow cross-tree hitTest resolution (e.g. desktop hitTest landing in tab).
+ * Request IDs are randomized to avoid cross-tree hijacking.
  */
 AutomationRootNodeImpl.actionRequestIDToCallback = {};
-
 AutomationRootNodeImpl.prototype = {
   __proto__: AutomationNodeImpl.prototype,
 
   /**
    * @type {boolean}
+   * @private
    */
-  isRootNode: true,
-
-  /**
-   * @type {string}
-   */
-  treeID: '',
+  isRootNode_: true,
 
   /**
    * A map from id to AutomationNode.
@@ -1698,7 +1777,7 @@ AutomationRootNodeImpl.prototype = {
    */
   axNodeDataCache_: null,
 
-  get id() {
+  get id_() {
     const result = GetRootID(this.treeID);
 
     // Don't return undefined, because the id is often passed directly
@@ -1732,7 +1811,7 @@ AutomationRootNodeImpl.prototype = {
 
   get anchorObject() {
     const id = GetAnchorObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return this.get(id);
     }
     return undefined;
@@ -1740,7 +1819,7 @@ AutomationRootNodeImpl.prototype = {
 
   get anchorOffset() {
     const id = GetAnchorObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetAnchorOffset(this.treeID);
     }
     return undefined;
@@ -1748,7 +1827,7 @@ AutomationRootNodeImpl.prototype = {
 
   get anchorAffinity() {
     const id = GetAnchorObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetAnchorAffinity(this.treeID);
     }
     return undefined;
@@ -1756,7 +1835,7 @@ AutomationRootNodeImpl.prototype = {
 
   get focusObject() {
     const id = GetFocusObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return this.get(id);
     }
     return undefined;
@@ -1764,7 +1843,7 @@ AutomationRootNodeImpl.prototype = {
 
   get focusOffset() {
     const id = GetFocusObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetFocusOffset(this.treeID);
     }
     return undefined;
@@ -1772,7 +1851,7 @@ AutomationRootNodeImpl.prototype = {
 
   get focusAffinity() {
     const id = GetFocusObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetFocusAffinity(this.treeID);
     }
     return undefined;
@@ -1780,7 +1859,7 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionStartObject() {
     const id = GetSelectionStartObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return this.get(id);
     }
     return undefined;
@@ -1788,7 +1867,7 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionStartOffset() {
     const id = GetSelectionStartObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetSelectionStartOffset(this.treeID);
     }
     return undefined;
@@ -1796,7 +1875,7 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionStartAffinity() {
     const id = GetSelectionStartObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetSelectionStartAffinity(this.treeID);
     }
     return undefined;
@@ -1804,7 +1883,7 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionEndObject() {
     const id = GetSelectionEndObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return this.get(id);
     }
     return undefined;
@@ -1812,7 +1891,7 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionEndOffset() {
     const id = GetSelectionEndObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetSelectionEndOffset(this.treeID);
     }
     return undefined;
@@ -1820,18 +1899,18 @@ AutomationRootNodeImpl.prototype = {
 
   get selectionEndAffinity() {
     const id = GetSelectionEndObjectID(this.treeID);
-    if (id && id != -1) {
+    if (id && id !== -1) {
       return GetSelectionEndAffinity(this.treeID);
     }
     return undefined;
   },
 
   get: function(id) {
-    if (id == undefined) {
+    if (id == null) {
       return undefined;
     }
 
-    if (id == this.id) {
+    if (id === this.id) {
       return this.wrapper;
     }
 
@@ -1846,8 +1925,8 @@ AutomationRootNodeImpl.prototype = {
     }
 
     obj = new AutomationNode(this);
-    privates(obj).impl.treeID = this.treeID;
-    privates(obj).impl.id = id;
+    privates(obj).impl.treeID_ = this.treeID;
+    privates(obj).impl.id_ = id;
     this.axNodeDataCache_[id] = obj;
 
     return obj;
@@ -1870,34 +1949,44 @@ AutomationRootNodeImpl.prototype = {
   onAccessibilityEvent: function(eventParams) {
     const targetNode = this.get(eventParams.targetID);
     if (targetNode) {
+      if (eventParams.actionRequestID !== -1 &&
+          this.onActionResult(eventParams.actionRequestID, targetNode)) {
+        return;
+      }
+
       const targetNodeImpl = privates(targetNode).impl;
       targetNodeImpl.dispatchEvent(
           eventParams.eventType, eventParams.eventFrom,
           eventParams.eventFromAction, eventParams.mouseX, eventParams.mouseY,
           eventParams.intents);
-
-      if (eventParams.actionRequestID != -1) {
-        this.onActionResult(eventParams.actionRequestID, targetNode);
-      }
     } else {
-      logging.WARNING('Got ' + eventParams.eventType +
-                      ' event on unknown node: ' + eventParams.targetID +
-                      '; this: ' + this.id);
+      logging.WARNING(
+          'Got ' + eventParams.eventType + ' event on unknown node: ' +
+          eventParams.targetID + '; this: ' + this.id);
     }
-    return true;
   },
 
-  addActionResultCallback: function(callback) {
-    AutomationRootNodeImpl.actionRequestIDToCallback[
-        ++AutomationRootNodeImpl.actionRequestCounter] = callback;
-    return AutomationRootNodeImpl.actionRequestCounter;
+  addActionResultCallback: function(actionType, opt_args, callback) {
+    let requestID;
+    const map = AutomationRootNodeImpl.actionRequestIDToCallback;
+    do {
+      crypto.getRandomValues(randomBuffer);
+      requestID = randomBuffer[0] & INT32_MAX;
+    } while (requestID === 0 || Object.hasOwn(map, requestID));
+
+    map[requestID] = {
+      actionType,
+      opt_args,
+      callback,
+    };
+    return requestID;
   },
 
   onGetTextLocationResult: function(textLocationParams) {
     const requestID = textLocationParams.requestID;
     if (requestID in AutomationRootNodeImpl.actionRequestIDToCallback) {
       const callback =
-          AutomationRootNodeImpl.actionRequestIDToCallback[requestID];
+          AutomationRootNodeImpl.actionRequestIDToCallback[requestID].callback;
       try {
         if (textLocationParams.result) {
           callback(ComputeGlobalBounds(
@@ -1910,15 +1999,61 @@ AutomationRootNodeImpl.prototype = {
       } catch (e) {
         logging.WARNING('Error with onGetTextLocationResult callback:' + e);
       }
-      delete AutomationNodeImpl.actionRequestIDToCallback[requestID];
+      delete AutomationRootNodeImpl.actionRequestIDToCallback[requestID];
     }
   },
 
-
   onActionResult: function(requestID, result) {
     if (requestID in AutomationRootNodeImpl.actionRequestIDToCallback) {
-      AutomationRootNodeImpl.actionRequestIDToCallback[requestID](result);
+      const data = AutomationRootNodeImpl.actionRequestIDToCallback[requestID];
+      if (data.actionType.indexOf('hitTest') === 0 && result &&
+          result.role === 'window' && result.className &&
+          result.className.indexOf('ExoSurface') === 0) {
+        // Search for a node containing app id, which indicates Lacros.
+        function findApp(node) {
+          // Exit early if we've crossed roots from |result|.
+          if (result.root !== node.root) {
+            return null;
+          }
+
+          // This node is actually in a different backing C++ tree though at
+          // this internal js layer, we merge the trees so that it is rooted to
+          // the desktop tree (same as |result|).
+          if (node.appId) {
+            return node;
+          }
+
+          for (const child of node.children) {
+            const found = findApp(child);
+            if (found) {
+              return found;
+            }
+          }
+
+          return null;
+        }
+
+        // The hit test |result| node is not quite what we need to start
+        // searching in. Find the topmost ExoShell surface.
+        while (result.parent && result.parent.className &&
+               result.parent.className.indexOf('ExoShellSurface') === 0) {
+          result = result.parent;
+        }
+
+        const appNode = findApp(result);
+        if (appNode) {
+          delete AutomationRootNodeImpl.actionRequestIDToCallback[requestID];
+
+          // Repost the hit test on |appNode|.
+          privates(appNode).impl.performAction_(
+              data.actionType, data.opt_args, data.callback);
+          return true;
+        }
+      }
+
+      data.callback(result);
       delete AutomationRootNodeImpl.actionRequestIDToCallback[requestID];
+      return false;
     }
   },
 
@@ -1953,7 +2088,6 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
     'boundsForRange',
     'createPosition',
     'doDefault',
-    'domQuerySelector',
     'find',
     'findAll',
     'focus',
@@ -1975,6 +2109,7 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
     'scrollLeft',
     'scrollRight',
     'scrollToPoint',
+    'scrollToPositionAtRowColumn',
     'scrollUp',
     'setAccessibilityFocus',
     'setScrollOffset',
@@ -1985,14 +2120,16 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
     'startDuckingMedia',
     'stopDuckingMedia',
     'suspendMedia',
+    'longClick',
     'toString',
-    'unclippedBoundsForRange'
+    'unclippedBoundsForRange',
   ],
-  readonly: $Array.concat(
+  readonly: Array.prototype.concat.call(
       publicAttributes,
       [
         'ariaCurrentState',
         'bold',
+        'caretBounds',
         'checked',
         'children',
         'customActions',
@@ -2001,9 +2138,13 @@ utils.expose(AutomationNode, AutomationNodeImpl, {
         'detectedLanguage',
         'firstChild',
         'hasPopup',
-        'htmlAttributes',
         'imageAnnotation',
         'indexInParent',
+        'invalidState',
+        'isButton',
+        'isCheckBox',
+        'isComboBox',
+        'isImage',
         'isRootNode',
         'italic',
         'lastChild',
@@ -2076,6 +2217,10 @@ utils.defineProperty(AutomationRootNode, 'getOrCreate', function(treeID) {
 
 utils.defineProperty(AutomationRootNode, 'destroy', function(treeID) {
   AutomationRootNodeImpl.destroy(treeID);
+});
+
+utils.defineProperty(AutomationRootNode, 'destroyAll', function() {
+  AutomationRootNodeImpl.destroyAll();
 });
 
 exports.$set('AutomationNode', AutomationNode);

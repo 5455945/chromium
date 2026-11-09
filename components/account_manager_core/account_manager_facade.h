@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,11 +8,11 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
 #include "base/component_export.h"
+#include "base/functional/callback.h"
 #include "base/observer_list_types.h"
 #include "components/account_manager_core/account.h"
-#include "components/account_manager_core/account_addition_result.h"
+#include "google_apis/gaia/google_service_auth_error.h"
 
 class OAuth2AccessTokenFetcher;
 class OAuth2AccessTokenConsumer;
@@ -23,12 +23,10 @@ namespace account_manager {
 // Implementations of this interface hide the in-process / out-of-process nature
 // of this communication.
 // Instances of this class are singletons, and are independent of a |Profile|.
-// Use |GetAccountManagerFacade()| to get an instance of this class.
+// Use |ash::AccountManagerFactory::Get()->GetAccountManagerFacade()| to get an
+// instance of this class.
 class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
  public:
-  // UMA histogram name.
-  static const char kAccountAdditionSource[];
-
   // Observer interface to get notifications about changes in the account list.
   class Observer : public base::CheckedObserver {
    public:
@@ -41,32 +39,9 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
     virtual void OnAccountUpserted(const Account& account) = 0;
     // Invoked when an account is removed.
     virtual void OnAccountRemoved(const Account& account) = 0;
-  };
-
-  // The source UI surface used for launching the account addition /
-  // re-authentication dialog. This should be as specific as possible.
-  // These values are persisted to logs. Entries should not be renumbered and
-  // numeric values should never be reused.
-  // Note: Please update |AccountManagerAccountAdditionSource| in enums.xml
-  // after adding new values.
-  enum class AccountAdditionSource : int {
-    // Settings > Add account button.
-    kSettingsAddAccountButton = 0,
-    // Settings > Sign in again button.
-    kSettingsReauthAccountButton = 1,
-    // Launched from an ARC application.
-    kArc = 2,
-    // Launched automatically from Chrome content area. As of now, this is
-    // possible only when an account requires re-authentication.
-    kContentArea = 3,
-    // Print Preview dialog.
-    kPrintPreviewDialog = 4,
-    // Account Manager migration welcome screen.
-    kAccountManagerMigrationWelcomeScreen = 5,
-    // Onboarding.
-    kOnboarding = 6,
-
-    kMaxValue = kOnboarding
+    // Invoked when the error state associated with an account changes.
+    virtual void OnAuthErrorChanged(const AccountKey& account,
+                                    const GoogleServiceAuthError& error) = 0;
   };
 
   AccountManagerFacade();
@@ -93,31 +68,27 @@ class COMPONENT_EXPORT(ACCOUNT_MANAGER_CORE) AccountManagerFacade {
       const AccountKey& account,
       base::OnceCallback<void(const GoogleServiceAuthError&)> callback) = 0;
 
-  // Launches account addition dialog.
-  virtual void ShowAddAccountDialog(const AccountAdditionSource& source) = 0;
-
-  // Launches account addition dialog and calls the `callback` with the result.
-  // If `result` is `kSuccess`, the added account will be passed to the
-  // callback. Otherwise `account` will be set to `absl::nullopt`.
-  virtual void ShowAddAccountDialog(
-      const AccountAdditionSource& source,
-      base::OnceCallback<void(const AccountAdditionResult& result)>
-          callback) = 0;
-
-  // Launches account reauthentication dialog for provided `email`.
-  virtual void ShowReauthAccountDialog(const AccountAdditionSource& source,
-                                       const std::string& email) = 0;
-
-  // Launches OS Settings > Accounts.
-  virtual void ShowManageAccountsSettings() = 0;
-
   // Creates an access token fetcher for `account`.
   // Currently, `account` must be a Gaia account.
   // The returned object should not outlive `AccountManagerFacade` itself.
   virtual std::unique_ptr<OAuth2AccessTokenFetcher> CreateAccessTokenFetcher(
       const AccountKey& account,
-      const std::string& oauth_consumer_name,
       OAuth2AccessTokenConsumer* consumer) = 0;
+
+  // Reports an `error` for `account`.
+  // `account` must be a valid Gaia account known to Account Manager.
+  // Setting the error `state` as `kNone` resets the error state for `account`.
+  virtual void ReportAuthError(const AccountKey& account,
+                               const GoogleServiceAuthError& error) = 0;
+
+  // Adds or updates an account programmatically without user interaction.
+  // Should only be used in tests.
+  virtual void UpsertAccountForTesting(const Account& account,
+                                       const std::string& token_value) = 0;
+
+  // Removes an account programmatically without user interaction. Should only
+  // be used in tests.
+  virtual void RemoveAccountForTesting(const AccountKey& account) = 0;
 };
 
 }  // namespace account_manager

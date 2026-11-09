@@ -1,13 +1,16 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "media/base/android/media_drm_bridge_factory.h"
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
 #include "media/base/cdm_config.h"
+#include "media/base/cdm_factory.h"
 #include "media/base/content_decryption_module.h"
+#include "media/base/key_system_names.h"
+#include "media/cdm/clear_key_cdm_common.h"
 #include "third_party/widevine/cdm/widevine_cdm_common.h"
 
 namespace media {
@@ -22,38 +25,37 @@ MediaDrmBridgeFactory::MediaDrmBridgeFactory(CreateFetcherCB create_fetcher_cb,
 
 MediaDrmBridgeFactory::~MediaDrmBridgeFactory() {
   if (cdm_created_cb_)
-    std::move(cdm_created_cb_).Run(nullptr, "CDM creation aborted");
+    std::move(cdm_created_cb_)
+        .Run(nullptr, CreateCdmStatus::kCdmCreationAborted);
 }
 
 void MediaDrmBridgeFactory::Create(
-    const std::string& key_system,
     const CdmConfig& cdm_config,
     const SessionMessageCB& session_message_cb,
     const SessionClosedCB& session_closed_cb,
     const SessionKeysChangeCB& session_keys_change_cb,
     const SessionExpirationUpdateCB& session_expiration_update_cb,
     CdmCreatedCB cdm_created_cb) {
-  DCHECK(MediaDrmBridge::IsKeySystemSupported(key_system));
-  DCHECK(MediaDrmBridge::IsAvailable());
+  DCHECK(MediaDrmBridge::IsKeySystemSupported(cdm_config.key_system));
   DCHECK(scheme_uuid_.empty()) << "This factory can only be used once.";
 
-  scheme_uuid_ = MediaDrmBridge::GetUUID(key_system);
+  scheme_uuid_ = MediaDrmBridge::GetUUID(cdm_config.key_system);
   DCHECK(!scheme_uuid_.empty());
 
   // Set security level.
-  if (key_system == kWidevineKeySystem) {
+  if (cdm_config.key_system == kWidevineKeySystem) {
     security_level_ = cdm_config.use_hw_secure_codecs
-                          ? MediaDrmBridge::SECURITY_LEVEL_1
-                          : MediaDrmBridge::SECURITY_LEVEL_3;
+                          ? MediaDrmBridge::SECURITY_LEVEL_HW_SECURE_ALL
+                          : MediaDrmBridge::SECURITY_LEVEL_SW_SECURE_CRYPTO;
+  } else if (media::IsExternalClearKey(cdm_config.key_system)) {
+    security_level_ = MediaDrmBridge::SECURITY_LEVEL_UNKNOWN;
   } else if (!cdm_config.use_hw_secure_codecs) {
     // Assume other key systems require hardware-secure codecs and thus do not
     // support full compositing.
     auto error_message =
-        key_system +
+        cdm_config.key_system +
         " may require use_video_overlay_for_embedded_encrypted_video";
     NOTREACHED() << error_message;
-    std::move(cdm_created_cb).Run(nullptr, error_message);
-    return;
   }
 
   session_message_cb_ = session_message_cb;
@@ -62,68 +64,77 @@ void MediaDrmBridgeFactory::Create(
   session_expiration_update_cb_ = session_expiration_update_cb;
   cdm_created_cb_ = std::move(cdm_created_cb);
 
-  // MediaDrmStorage may be lazy created in MediaDrmStorageBridge.
-  storage_ = std::make_unique<MediaDrmStorageBridge>();
+  // Create MediaDrmBridge synchronously.
+  // For ClearKey, we require media crypto immediately since we don't use
+  // storage. For others, we set requires_media_crypto to false during
+  // pre-allocation, as we don't have the origin ID yet.
+  const bool is_clearkey = media::IsExternalClearKey(cdm_config.key_system);
+  auto storage = std::make_unique<MediaDrmStorageBridge>();
 
-  if (!MediaDrmBridge::IsPerOriginProvisioningSupported()) {
-    // Per-origin provisioning isn't supported, so proceed without specifying an
-    // origin ID.
-    CreateMediaDrmBridge("");
-    return;
+  // Request the origin ID from the browser process before constructing
+  // MediaDrm synchronously, so that the Storage Mojo IPC transit overlaps
+  // with MediaDrm HAL construction. The reply is posted to this thread, so it
+  // always runs after `media_drm_bridge_` is set.
+  if (!is_clearkey) {
+    storage->Initialize(
+        create_storage_cb_,
+        base::BindOnce(&MediaDrmBridgeFactory::OnStorageInitialized,
+                       weak_factory_.GetWeakPtr()));
   }
 
-  storage_->Initialize(
-      create_storage_cb_,
-      base::BindOnce(&MediaDrmBridgeFactory::OnStorageInitialized,
-                     weak_factory_.GetWeakPtr()));
+  auto result = MediaDrmBridge::CreateInternal(
+      scheme_uuid_, "", security_level_, "User",
+      /*requires_media_crypto=*/is_clearkey, std::move(storage),
+      create_fetcher_cb_, session_message_cb_, session_closed_cb_,
+      session_keys_change_cb_, session_expiration_update_cb_);
+
+  if (!result.has_value()) {
+    weak_factory_.InvalidateWeakPtrs();
+    std::move(cdm_created_cb_).Run(nullptr, std::move(result).error());
+    return;
+  }
+  media_drm_bridge_ = std::move(result).value();
+
+  if (is_clearkey) {
+    media_drm_bridge_->SetMediaCryptoReadyCB(
+        base::BindOnce(&MediaDrmBridgeFactory::OnMediaCryptoReady,
+                       weak_factory_.GetWeakPtr()));
+  }
 }
 
 void MediaDrmBridgeFactory::OnStorageInitialized(bool success) {
-  DCHECK(storage_);
+  DCHECK(media_drm_bridge_);
   DVLOG(2) << __func__ << ": success = " << success
-           << ", origin_id = " << storage_->origin_id();
+           << ", origin_id = " << media_drm_bridge_->storage()->origin_id();
 
-  // MediaDrmStorageBridge should only be created on a successful Initialize().
+  // If storage initialization fails, discard the pre-allocated bridge and fail
+  // creation.
   if (!success) {
-    std::move(cdm_created_cb_).Run(nullptr, "Cannot fetch origin ID");
+    media_drm_bridge_ = nullptr;
+    std::move(cdm_created_cb_)
+        .Run(nullptr, CreateCdmStatus::kGetCdmOriginIdFailed);
     return;
   }
 
-  CreateMediaDrmBridge(storage_->origin_id());
-}
-
-void MediaDrmBridgeFactory::CreateMediaDrmBridge(const std::string& origin_id) {
-  DCHECK(!media_drm_bridge_);
-
-  // Requires MediaCrypto so that it can be used by MediaCodec-based decoders.
-  const bool requires_media_crypto = true;
-
-  media_drm_bridge_ = MediaDrmBridge::CreateInternal(
-      scheme_uuid_, origin_id, security_level_, requires_media_crypto,
-      std::move(storage_), create_fetcher_cb_, session_message_cb_,
-      session_closed_cb_, session_keys_change_cb_,
-      session_expiration_update_cb_);
-
-  if (!media_drm_bridge_) {
-    std::move(cdm_created_cb_).Run(nullptr, "MediaDrmBridge creation failed");
-    return;
-  }
-
-  media_drm_bridge_->SetMediaCryptoReadyCB(base::BindOnce(
-      &MediaDrmBridgeFactory::OnMediaCryptoReady, weak_factory_.GetWeakPtr()));
+  media_drm_bridge_->CompleteInitialization(
+      media_drm_bridge_->storage()->origin_id(),
+      base::BindOnce(&MediaDrmBridgeFactory::OnMediaCryptoReady,
+                     weak_factory_.GetWeakPtr()));
 }
 
 void MediaDrmBridgeFactory::OnMediaCryptoReady(
-    JavaObjectPtr media_crypto,
+    base::android::ScopedJavaGlobalRef<jobject> media_crypto,
     bool requires_secure_video_codec) {
   DCHECK(media_crypto);
-  if (media_crypto->is_null()) {
+
+  if (!media_crypto) {
     media_drm_bridge_ = nullptr;
-    std::move(cdm_created_cb_).Run(nullptr, "MediaCrypto not available");
+    std::move(cdm_created_cb_)
+        .Run(nullptr, CreateCdmStatus::kMediaCryptoNotAvailable);
     return;
   }
 
-  std::move(cdm_created_cb_).Run(media_drm_bridge_, "");
+  std::move(cdm_created_cb_).Run(media_drm_bridge_, CreateCdmStatus::kSuccess);
 }
 
 }  // namespace media

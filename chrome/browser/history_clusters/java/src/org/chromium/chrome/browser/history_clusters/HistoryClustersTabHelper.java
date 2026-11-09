@@ -1,17 +1,17 @@
-// Copyright 2021 The Chromium Authors. All rights reserved.
+// Copyright 2021 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 package org.chromium.chrome.browser.history_clusters;
 
-import androidx.annotation.Nullable;
+import org.jni_zero.NativeMethods;
 
-import org.chromium.base.annotations.NativeMethods;
+import org.chromium.build.annotations.NullMarked;
+import org.chromium.build.annotations.Nullable;
 import org.chromium.content_public.browser.WebContents;
 
-/**
- * Bridge between the C++ and Java Chrome Memories HistoryClustersTabHelper.
- */
+/** Bridge between the C++ and Java Chrome Memories HistoryClustersTabHelper. */
+@NullMarked
 public class HistoryClustersTabHelper {
     /**
      * Notify Memories service that the current tab's URL has been copied.
@@ -38,6 +38,7 @@ public class HistoryClustersTabHelper {
     @NativeMethods
     interface Natives {
         void onCurrentTabUrlCopied(WebContents contents);
+
         void onCurrentTabUrlShared(WebContents contents);
     }
 }

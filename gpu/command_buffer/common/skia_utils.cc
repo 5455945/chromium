@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,12 +6,16 @@
 
 #include <inttypes.h>
 
+#include <string_view>
+
+#include "base/memory/raw_ptr.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/process_memory_dump.h"
 #include "build/build_config.h"
 #include "third_party/skia/include/core/SkTraceMemoryDump.h"
-#include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "third_party/skia/include/gpu/ganesh/GrDirectContext.h"
 #include "ui/gl/trace_util.h"
 
 namespace gpu {
@@ -25,11 +29,14 @@ class SkiaGpuTraceMemoryDump : public SkTraceMemoryDump {
   // This should never outlive the provided ProcessMemoryDump, as it should
   // always be scoped to a single OnMemoryDump funciton call.
   SkiaGpuTraceMemoryDump(base::trace_event::ProcessMemoryDump* pmd,
-                         absl::optional<uint64_t> share_group_tracing_guid)
+                         std::optional<uint64_t> share_group_tracing_guid)
       : pmd_(pmd),
         share_group_tracing_guid_(share_group_tracing_guid),
         tracing_process_id_(base::trace_event::MemoryDumpManager::GetInstance()
                                 ->GetTracingProcessId()) {}
+
+  SkiaGpuTraceMemoryDump(const SkiaGpuTraceMemoryDump&) = delete;
+  SkiaGpuTraceMemoryDump& operator=(const SkiaGpuTraceMemoryDump&) = delete;
 
   ~SkiaGpuTraceMemoryDump() override = default;
 
@@ -53,14 +60,14 @@ class SkiaGpuTraceMemoryDump : public SkTraceMemoryDump {
                         const char* backing_object_id) override {
     // For uniformity, skia provides this value as a string. Convert back to a
     // uint32_t.
-    uint32_t gl_id =
-        std::strtoul(backing_object_id, nullptr /* str_end */, 10 /* base */);
+    uint32_t gl_id = 0;
+    base::StringToUint(backing_object_id, &gl_id);
 
     // Constants used by SkiaGpuTraceMemoryDump to identify different memory
     // types.
-    const char* kGLTextureBackingType = "gl_texture";
-    const char* kGLBufferBackingType = "gl_buffer";
-    const char* kGLRenderbufferBackingType = "gl_renderbuffer";
+    constexpr std::string_view kGLTextureBackingType = "gl_texture";
+    constexpr std::string_view kGLBufferBackingType = "gl_buffer";
+    constexpr std::string_view kGLRenderbufferBackingType = "gl_renderbuffer";
 
     // Populated in if statements below.
     base::trace_event::MemoryAllocatorDumpGuid guid;
@@ -69,12 +76,12 @@ class SkiaGpuTraceMemoryDump : public SkTraceMemoryDump {
       // If we have a |share_group_tracing_guid_|, we are in a render process
       // and need to create client texture GUIDs for aliasing with the GPU
       // process.
-      if (strcmp(backing_type, kGLTextureBackingType) == 0) {
+      if (backing_type == kGLTextureBackingType) {
         guid = gl::GetGLTextureClientGUIDForTracing(*share_group_tracing_guid_,
                                                     gl_id);
-      } else if (strcmp(backing_type, kGLBufferBackingType) == 0) {
+      } else if (backing_type == kGLBufferBackingType) {
         guid = gl::GetGLBufferGUIDForTracing(tracing_process_id_, gl_id);
-      } else if (strcmp(backing_type, kGLRenderbufferBackingType) == 0) {
+      } else if (backing_type == kGLRenderbufferBackingType) {
         guid = gl::GetGLRenderbufferGUIDForTracing(tracing_process_id_, gl_id);
       }
     } else {
@@ -82,7 +89,7 @@ class SkiaGpuTraceMemoryDump : public SkTraceMemoryDump {
       // process, being used for OOP-R. We need to create Raster dumps for
       // aliasing with the transfer cache. Note that this is currently only
       // needed for textures (not buffers or renderbuffers).
-      if (strcmp(backing_type, kGLTextureBackingType) == 0) {
+      if (backing_type == kGLTextureBackingType) {
         guid = gl::GetGLTextureRasterGUIDForTracing(gl_id);
       }
     }
@@ -126,18 +133,16 @@ class SkiaGpuTraceMemoryDump : public SkTraceMemoryDump {
     return dump;
   }
 
-  base::trace_event::ProcessMemoryDump* pmd_;
-  absl::optional<uint64_t> share_group_tracing_guid_;
+  raw_ptr<base::trace_event::ProcessMemoryDump> pmd_;
+  std::optional<uint64_t> share_group_tracing_guid_;
   uint64_t tracing_process_id_;
-
-  DISALLOW_COPY_AND_ASSIGN(SkiaGpuTraceMemoryDump);
 };
 
 }  // namespace
 
 void DumpGrMemoryStatistics(const GrDirectContext* context,
                             base::trace_event::ProcessMemoryDump* pmd,
-                            absl::optional<uint64_t> tracing_guid) {
+                            std::optional<uint64_t> tracing_guid) {
   SkiaGpuTraceMemoryDump trace_memory_dump(pmd, tracing_guid);
   context->dumpMemoryStatistics(&trace_memory_dump);
 }

@@ -1,14 +1,15 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_EXTENSIONS_API_WEB_NAVIGATION_FRAME_NAVIGATION_STATE_H_
 #define CHROME_BROWSER_EXTENSIONS_API_WEB_NAVIGATION_FRAME_NAVIGATION_STATE_H_
 
-#include "base/compiler_specific.h"
-#include "base/macros.h"
-#include "content/public/browser/render_document_host_user_data.h"
+#include "content/public/browser/document_user_data.h"
+#include "extensions/buildflags/buildflags.h"
 #include "url/gurl.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 namespace content {
 class RenderFrameHost;
@@ -22,8 +23,11 @@ namespace extensions {
 // TODO(carlscab): DocumentState seems like a better name as this track per
 // document state.
 class FrameNavigationState
-    : public content::RenderDocumentHostUserData<FrameNavigationState> {
+    : public content::DocumentUserData<FrameNavigationState> {
  public:
+  FrameNavigationState(const FrameNavigationState&) = delete;
+  FrameNavigationState& operator=(const FrameNavigationState&) = delete;
+
   ~FrameNavigationState() override;
 
   // True if in general webNavigation events may be sent for the given URL.
@@ -70,8 +74,8 @@ class FrameNavigationState
 #endif
 
  private:
-  friend class content::RenderDocumentHostUserData<FrameNavigationState>;
-  RENDER_DOCUMENT_HOST_USER_DATA_KEY_DECL();
+  friend class content::DocumentUserData<FrameNavigationState>;
+  DOCUMENT_USER_DATA_KEY_DECL();
 
   explicit FrameNavigationState(content::RenderFrameHost*);
 
@@ -82,8 +86,6 @@ class FrameNavigationState
 
   // If true, also allow events from chrome-extension:// URLs.
   static bool allow_extension_scheme_;
-
-  DISALLOW_COPY_AND_ASSIGN(FrameNavigationState);
 };
 
 }  // namespace extensions

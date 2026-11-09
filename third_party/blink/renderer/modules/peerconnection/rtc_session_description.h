@@ -31,8 +31,12 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_SESSION_DESCRIPTION_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_PEERCONNECTION_RTC_SESSION_DESCRIPTION_H_
 
+#include <optional>
+
 #include "third_party/blink/renderer/bindings/modules/v8/v8_rtc_sdp_type.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/peerconnection/rtc_session_description_platform.h"
 #include "third_party/blink/renderer/platform/wtf/forward.h"
 
@@ -40,8 +44,8 @@ namespace blink {
 
 class ExecutionContext;
 class RTCSessionDescriptionInit;
+class ScriptObject;
 class ScriptState;
-class ScriptValue;
 
 class RTCSessionDescription final : public ScriptWrappable {
   DEFINE_WRAPPERTYPEINFO();
@@ -53,13 +57,13 @@ class RTCSessionDescription final : public ScriptWrappable {
 
   explicit RTCSessionDescription(RTCSessionDescriptionPlatform*);
 
-  String type() const;
-  void setType(absl::optional<V8RTCSdpType> type);
+  std::optional<V8RTCSdpType> type() const;
+  void setType(std::optional<V8RTCSdpType> type);
 
   String sdp() const;
   void setSdp(const String&);
 
-  ScriptValue toJSONForBinding(ScriptState*);
+  ScriptObject toJSONForBinding(ScriptState*);
 
   RTCSessionDescriptionPlatform* WebSessionDescription();
 

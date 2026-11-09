@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,16 +9,22 @@ syntax = "proto2";
 package content.fuzzing.file_system_manager.proto;
 
 import "third_party/blink/public/mojom/filesystem/file_system.mojom.mojolpm.proto";
+import "third_party/blink/public/common/storage_key/proto/storage_key.proto";
 
 // Bind a new FileSystemManager remote
 message NewFileSystemManagerAction {
+  // To maintain backwards compatibility to a time when the process ID was
+  // allowed to be 0 and these were used as an index into an array of processes,
+  // the int values here are numbered so that they continue to correspond to the
+  // indices but the names match the PID.
   enum RenderProcessId {
-    ZERO = 0;
-    ONE = 1;
+    ONE = 0;
+    TWO = 1;
   }
 
   required uint32 id = 1;
   required RenderProcessId render_process_id = 2;
+  required storage_key_proto.StorageKey storage_key = 3;
 }
 
 // Run the specific sequence for (an indeterminate) period. This is not

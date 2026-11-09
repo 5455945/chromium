@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,8 +8,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "base/byte_size.h"
 #include "base/time/time.h"
 #include "chrome/browser/task_manager/task_manager_interface.h"
+#include "content/public/common/child_process_id.h"
 
 namespace task_manager {
 
@@ -25,17 +27,19 @@ class TestTaskManager : public TaskManagerInterface {
   // task_manager::TaskManagerInterface:
   void ActivateTask(TaskId task_id) override;
   bool IsTaskKillable(TaskId task_id) override;
-  void KillTask(TaskId task_id) override;
+  bool KillTask(TaskId task_id) override;
   double GetPlatformIndependentCPUUsage(TaskId task_id) const override;
   base::Time GetStartTime(TaskId task_id) const override;
   base::TimeDelta GetCpuTime(TaskId task_id) const override;
-  int64_t GetMemoryFootprintUsage(TaskId task_id) const override;
-  int64_t GetSwappedMemoryUsage(TaskId task_id) const override;
-  int64_t GetGpuMemoryUsage(TaskId task_id,
-                            bool* has_duplicates) const override;
+  std::optional<base::ByteSize> GetMemoryFootprintUsage(
+      TaskId task_id) const override;
+  std::optional<base::ByteSize> GetSwappedMemoryUsage(
+      TaskId task_id) const override;
+  std::optional<base::ByteSize> GetGpuMemoryUsage(
+      TaskId task_id,
+      bool* has_duplicates) const override;
   int GetIdleWakeupsPerSecond(TaskId task_id) const override;
   int GetHardFaultsPerSecond(TaskId task_id) const override;
-  int GetNaClDebugStubPort(TaskId task_id) const override;
   void GetGDIHandles(TaskId task_id,
                      int64_t* current,
                      int64_t* peak) const override;
@@ -47,22 +51,30 @@ class TestTaskManager : public TaskManagerInterface {
   const std::u16string& GetTitle(TaskId task_id) const override;
   std::u16string GetProfileName(TaskId task_id) const override;
   const gfx::ImageSkia& GetIcon(TaskId task_id) const override;
+  bool ShouldThemifyIcon(TaskId task_id) const override;
   const base::ProcessHandle& GetProcessHandle(TaskId task_id) const override;
   const base::ProcessId& GetProcessId(TaskId task_id) const override;
+  TaskId GetRootTaskId(TaskId task_id) const override;
   Task::Type GetType(TaskId task_id) const override;
+  Task::SubType GetSubType(TaskId task_id) const override;
   SessionID GetTabId(TaskId task_id) const override;
-  int GetChildProcessUniqueId(TaskId task_id) const override;
+  content::ChildProcessId GetChildProcessUniqueId(
+      TaskId task_id) const override;
   void GetTerminationStatus(TaskId task_id,
                             base::TerminationStatus* out_status,
                             int* out_error_code) const override;
-  int64_t GetNetworkUsage(TaskId task_id) const override;
-  int64_t GetProcessTotalNetworkUsage(TaskId task_id) const override;
-  int64_t GetCumulativeNetworkUsage(TaskId task_id) const override;
-  int64_t GetCumulativeProcessTotalNetworkUsage(TaskId task_id) const override;
-  int64_t GetSqliteMemoryUsed(TaskId task_id) const override;
+  base::ByteSize GetNetworkUsage(TaskId task_id) const override;
+  std::optional<base::ByteSize> GetProcessTotalNetworkUsage(
+      TaskId task_id) const override;
+  base::ByteSize GetCumulativeNetworkUsage(TaskId task_id) const override;
+  std::optional<base::ByteSize> GetSqliteMemoryUsed(
+      TaskId task_id) const override;
   bool GetV8Memory(TaskId task_id,
-                   int64_t* allocated,
-                   int64_t* used) const override;
+                   base::ByteSize* allocated,
+                   base::ByteSize* used) const override;
+  bool GetCppGCMemory(TaskId task_id,
+                      base::ByteSize* allocated,
+                      base::ByteSize* used) const override;
   bool GetWebCacheStats(TaskId task_id,
                         blink::WebCacheResourceTypeStats* stats) const override;
   int GetKeepaliveCount(TaskId task_id) const override;
@@ -72,6 +84,7 @@ class TestTaskManager : public TaskManagerInterface {
   bool IsRunningInVM(TaskId task_id) const override;
   TaskId GetTaskIdForWebContents(
       content::WebContents* web_contents) const override;
+  bool IsTaskValid(TaskId task_id) const override;
 
   base::TimeDelta GetRefreshTime();
   int64_t GetEnabledFlags();
@@ -86,6 +99,7 @@ class TestTaskManager : public TaskManagerInterface {
   base::ProcessId pid_;
   std::u16string title_;
   gfx::ImageSkia icon_;
+  bool should_themify_icon_ = false;
   TaskIdList ids_;
 };
 

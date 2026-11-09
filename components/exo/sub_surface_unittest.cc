@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,8 +9,10 @@
 #include "components/exo/surface.h"
 #include "components/exo/test/exo_test_base.h"
 #include "components/exo/test/exo_test_helper.h"
+#include "components/viz/common/quads/texture_draw_quad.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/aura/client/aura_constants.h"
+#include "ui/gfx/geometry/point_conversions.h"
 
 namespace exo {
 namespace {
@@ -28,7 +30,7 @@ TEST_F(SubSurfaceTest, SetPosition) {
             surface->window()->bounds().origin().ToString());
 
   // Set position to 10, 10.
-  gfx::Point position(10, 10);
+  gfx::PointF position(10, 10);
   sub_surface->SetPosition(position);
 
   // A call to Commit() is required for position to take effect.
@@ -37,7 +39,7 @@ TEST_F(SubSurfaceTest, SetPosition) {
 
   // Check that position is updated when Commit() is called.
   parent->Commit();
-  EXPECT_EQ(position.ToString(),
+  EXPECT_EQ(gfx::ToRoundedPoint(position).ToString(),
             surface->window()->bounds().origin().ToString());
 
   // Create and commit a new sub-surface using the same surface.
@@ -64,6 +66,8 @@ TEST_F(SubSurfaceTest, PlaceAbove) {
   ASSERT_EQ(2u, parent->window()->children().size());
   EXPECT_EQ(surface1->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface2->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().back().first);
 
   sub_surface2->PlaceAbove(parent.get());
   sub_surface1->PlaceAbove(non_sibling_surface.get());  // Invalid
@@ -74,12 +78,25 @@ TEST_F(SubSurfaceTest, PlaceAbove) {
   // order to take effect.
   EXPECT_EQ(surface1->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface2->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().back().first);
 
   parent->Commit();
 
   // surface1 should now be stacked above surface2.
   EXPECT_EQ(surface2->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface1->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().back().first);
+
+  sub_surface1->PlaceAbove(parent.get());
+  parent->Commit();
+
+  // surface2 should now be stacked above surface1.
+  EXPECT_EQ(surface1->window(), parent->window()->children()[0]);
+  EXPECT_EQ(surface2->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().back().first);
 }
 
 TEST_F(SubSurfaceTest, PlaceBelow) {
@@ -96,6 +113,8 @@ TEST_F(SubSurfaceTest, PlaceBelow) {
   ASSERT_EQ(2u, parent->window()->children().size());
   EXPECT_EQ(surface1->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface2->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().back().first);
 
   sub_surface2->PlaceBelow(parent.get());               // Invalid
   sub_surface2->PlaceBelow(non_sibling_surface.get());  // Invalid
@@ -106,12 +125,72 @@ TEST_F(SubSurfaceTest, PlaceBelow) {
   // order to take effect.
   EXPECT_EQ(surface1->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface2->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().back().first);
 
   parent->Commit();
 
   // surface1 should now be stacked above surface2.
   EXPECT_EQ(surface2->window(), parent->window()->children()[0]);
   EXPECT_EQ(surface1->window(), parent->window()->children()[1]);
+  EXPECT_EQ(surface2.get(), parent->sub_surfaces().front().first);
+  EXPECT_EQ(surface1.get(), parent->sub_surfaces().back().first);
+}
+
+TEST_F(SubSurfaceTest, ParentDamageOnReorder) {
+  gfx::Size buffer_size(800, 600);
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
+  auto surface_tree_host = std::make_unique<SurfaceTreeHost>("SubSurfaceTest");
+  LayerTreeFrameSinkHolder* frame_sink_holder =
+      surface_tree_host->layer_tree_frame_sink_holder();
+
+  auto parent = std::make_unique<Surface>();
+  parent->Attach(buffer.get());
+  auto surface1 = std::make_unique<Surface>();
+  auto surface2 = std::make_unique<Surface>();
+  auto non_sibling_surface = std::make_unique<Surface>();
+  auto sub_surface1 =
+      std::make_unique<SubSurface>(surface1.get(), parent.get());
+  auto sub_surface2 =
+      std::make_unique<SubSurface>(surface2.get(), parent.get());
+
+  sub_surface2->PlaceBelow(surface1.get());
+  parent->Commit();
+
+  viz::CompositorFrame frame1;
+  frame1.render_pass_list.push_back(viz::CompositorRenderPass::Create());
+  parent->AppendSurfaceHierarchyContentsToFrame(
+      gfx::PointF{}, gfx::PointF{},
+      /*needs_full_damage=*/false, frame_sink_holder->resource_manager(),
+      /*device_scale_factor=*/std::nullopt, &frame1);
+
+  const viz::TextureDrawQuad* parent_quad1 = viz::TextureDrawQuad::MaterialCast(
+      frame1.render_pass_list.back()->quad_list.back());
+
+  // Parent surface damage is extended when sub_surface stacking order changes.
+  EXPECT_FALSE(frame1.render_pass_list.back()->damage_rect.IsEmpty() &&
+               parent_quad1->damage_rect->IsEmpty());
+
+  sub_surface1->PlaceAbove(surface2.get());  // no-op
+  sub_surface2->PlaceBelow(surface1.get());  // no-op
+  parent->Commit();
+
+  viz::CompositorFrame frame2;
+  frame2.render_pass_list.push_back(viz::CompositorRenderPass::Create());
+  parent->AppendSurfaceHierarchyContentsToFrame(
+      gfx::PointF{}, gfx::PointF{},
+      /*needs_full_damage=*/false, frame_sink_holder->resource_manager(),
+      /*device_scale_factor=*/std::nullopt, &frame2);
+
+  const viz::TextureDrawQuad* parent_quad2 = viz::TextureDrawQuad::MaterialCast(
+      frame2.render_pass_list.back()->quad_list.back());
+
+  gfx::Rect parent_quad2_damage_rect =
+      parent_quad2->damage_rect.value_or(gfx::Rect());
+
+  // Parent surface damage is unaffected.
+  EXPECT_TRUE(frame2.render_pass_list.back()->damage_rect.IsEmpty() &&
+              parent_quad2_damage_rect.IsEmpty());
 }
 
 TEST_F(SubSurfaceTest, SetCommitBehavior) {
@@ -129,7 +208,7 @@ TEST_F(SubSurfaceTest, SetCommitBehavior) {
             grandchild->window()->bounds().origin().ToString());
 
   // Set position to 10, 10.
-  gfx::Point position1(10, 10);
+  gfx::PointF position1(10, 10);
   grandchild_sub_surface->SetPosition(position1);
   child->Commit();
 
@@ -143,27 +222,26 @@ TEST_F(SubSurfaceTest, SetCommitBehavior) {
 
   // Position should have been updated when Commit() has been called on both
   // child and parent.
-  EXPECT_EQ(position1.ToString(),
+  EXPECT_EQ(gfx::ToRoundedPoint(position1).ToString(),
             grandchild->window()->bounds().origin().ToString());
 
   bool synchronized = false;
   child_sub_surface->SetCommitBehavior(synchronized);
 
   // Set position to 20, 20.
-  gfx::Point position2(20, 20);
+  gfx::PointF position2(20, 20);
   grandchild_sub_surface->SetPosition(position2);
   child->Commit();
 
   // A Commit() call on child should be sufficient for the position of
   // grandchild to take effect when synchronous is disabled.
-  EXPECT_EQ(position2.ToString(),
+  EXPECT_EQ(gfx::ToRoundedPoint(position2).ToString(),
             grandchild->window()->bounds().origin().ToString());
 }
 
 TEST_F(SubSurfaceTest, SetOnParent) {
   gfx::Size buffer_size(32, 32);
-  std::unique_ptr<Buffer> buffer(
-      new Buffer(exo_test_helper()->CreateGpuMemoryBuffer(buffer_size)));
+  auto buffer = test::ExoTestHelper::CreateBuffer(buffer_size);
   auto parent = std::make_unique<Surface>();
   auto shell_surface = std::make_unique<ShellSurface>(parent.get());
   parent->Attach(buffer.get());
@@ -178,6 +256,42 @@ TEST_F(SubSurfaceTest, SetOnParent) {
   auto sub_surface = std::make_unique<SubSurface>(surface.get(), parent.get());
   surface->SetParent(parent.get(), gfx::Point(10, 10));
   EXPECT_TRUE(surface->window()->GetProperty(aura::client::kSkipImeProcessing));
+}
+
+TEST_F(SubSurfaceTest, AugmentedSurfaceDoesNotExpandHierarchy) {
+  auto parent = std::make_unique<Surface>();
+  auto shell_surface = std::make_unique<ShellSurface>(parent.get());
+
+  auto sub_layer = std::make_unique<Surface>();
+  sub_layer->set_is_augmented(true);
+  auto sub_surface = std::make_unique<Surface>();
+  auto sub_layer_role =
+      std::make_unique<SubSurface>(sub_layer.get(), parent.get());
+  auto sub_surface_role =
+      std::make_unique<SubSurface>(sub_surface.get(), parent.get());
+
+  auto parent_buffer = exo_test_helper()->CreateBuffer(gfx::Size(800, 600));
+  auto sub_surface_buffer = exo_test_helper()->CreateBuffer(gfx::Size(10, 10));
+  auto sub_layer_buffer = exo_test_helper()->CreateBuffer(gfx::Size(10, 10));
+
+  // Set position to be outside parent surface.
+  sub_layer_role->SetPosition(gfx::PointF(-10, 0));
+  sub_surface_role->SetPosition(gfx::PointF(0, -10));
+
+  parent->Attach(parent_buffer.get());
+  sub_layer->Attach(sub_layer_buffer.get());
+  sub_surface->Attach(sub_surface_buffer.get());
+
+  sub_layer->Commit();
+  sub_surface->Commit();
+  parent->Commit();
+
+  // Only sub_surface affects the surface hierarchy bounds
+  EXPECT_EQ(parent->surface_hierarchy_content_bounds(),
+            gfx::Rect(0, -10, 800, 610));
+  // sub_layer is not in parent aura window's children list.
+  EXPECT_EQ(1u, parent->window()->children().size());
+  EXPECT_EQ(sub_surface->window(), parent->window()->children()[0]);
 }
 
 }  // namespace

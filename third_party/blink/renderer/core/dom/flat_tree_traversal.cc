@@ -26,12 +26,23 @@
 
 #include "third_party/blink/renderer/core/dom/flat_tree_traversal.h"
 
+#include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/element.h"
 #include "third_party/blink/renderer/core/dom/flat_tree_node_data.h"
 #include "third_party/blink/renderer/core/dom/slot_assignment.h"
 #include "third_party/blink/renderer/core/html/html_slot_element.h"
 
 namespace blink {
+
+static_assert(std::forward_iterator<
+              TraversalIterator<TraversalParent<FlatTreeTraversal>>>);
+static_assert(std::forward_iterator<
+              TraversalDescendantIterator<TraversalParent<FlatTreeTraversal>>>);
+static_assert(std::forward_iterator<TraversalDescendantWithFilterIterator<
+                  TraversalParent<FlatTreeTraversal>,
+                  Element::TinyBloomFilter>>);
+static_assert(std::forward_iterator<TraversalInclusiveDescendantIterator<
+                  TraversalParent<FlatTreeTraversal>>>);
 
 #if DCHECK_IS_ON()
 void FlatTreeTraversal::AssertFlatTreeNodeDataUpdated(
@@ -93,7 +104,7 @@ void FlatTreeTraversal::AssertFlatTreeNodeDataUpdated(
 Node* FlatTreeTraversal::TraverseChild(const Node& node,
                                        TraversalDirection direction) {
   if (auto* slot = ToHTMLSlotElementIfSupportsAssignmentOrNull(node)) {
-    if (slot->AssignedNodes().IsEmpty()) {
+    if (slot->AssignedNodes().empty()) {
       return direction == kTraversalDirectionForward ? slot->firstChild()
                                                      : slot->lastChild();
     }
@@ -148,30 +159,34 @@ Node* FlatTreeTraversal::TraverseSiblingsForHostChild(
 }
 
 ContainerNode* FlatTreeTraversal::TraverseParent(const Node& node) {
-  // TODO(hayato): Stop this hack for a pseudo element because a pseudo element
+  // This code is called extensively, so it minimizes repetitive work (such
+  // as avoiding multiple calls to parentElement()).
+
+  // TODO(hayato): Stop this hack for a pseudo-element because a pseudo-element
   // is not a child of its parentOrShadowHostNode() in a flat tree.
   if (node.IsPseudoElement())
     return node.ParentOrShadowHostNode();
 
-  if (node.IsChildOfShadowHost())
-    return node.AssignedSlot();
-
-  if (auto* parent_slot =
-          ToHTMLSlotElementIfSupportsAssignmentOrNull(node.parentElement())) {
-    if (!parent_slot->AssignedNodes().IsEmpty())
-      return nullptr;
-    return parent_slot;
-  }
-  return TraverseParentOrHost(node);
-}
-
-ContainerNode* FlatTreeTraversal::TraverseParentOrHost(const Node& node) {
-  ContainerNode* parent = node.parentNode();
-  if (!parent)
+  ContainerNode* parent_node = node.parentNode();
+  if (!parent_node)
     return nullptr;
-  auto* shadow_root = DynamicTo<ShadowRoot>(parent);
+
+  if (Element* parent_element = DynamicTo<Element>(parent_node)) {
+    if (parent_element->GetShadowRoot())
+      return node.AssignedSlot();
+
+    if (auto* parent_slot =
+            ToHTMLSlotElementIfSupportsAssignmentOrNull(*parent_element)) {
+      if (!parent_slot->AssignedNodes().empty())
+        return nullptr;
+      return parent_slot;
+    }
+  }
+
+  auto* shadow_root = DynamicTo<ShadowRoot>(parent_node);
   if (!shadow_root)
-    return parent;
+    return parent_node;
+
   return &shadow_root->host();
 }
 
@@ -321,6 +336,33 @@ Node& FlatTreeTraversal::LastWithinOrSelf(const Node& node) {
   Node& result = last_descendant ? *last_descendant : const_cast<Node&>(node);
   AssertPostcondition(&result);
   return result;
+}
+
+const Element* FlatTreeTraversal::InclusiveParentElement(const Node& node) {
+  AssertPrecondition(node);
+  const Element* inclusive_parent = DynamicTo<Element>(node);
+  if (!inclusive_parent) {
+    inclusive_parent = ParentElement(node);
+  }
+  AssertPostcondition(inclusive_parent);
+  return inclusive_parent;
+}
+
+// static
+void FlatTreeTraversal::AssertPrecondition(const Node& node) {
+  DCHECK(!node.GetDocument().IsFlatTreeTraversalForbidden());
+  DCHECK(!node.IsShadowRoot())
+      << "Shadow roots don't have layout objects. Their host has one, and "
+         "their children have them, and those two are connected.";
+}
+
+// static
+void FlatTreeTraversal::AssertPostcondition(const Node* node) {
+#if DCHECK_IS_ON()
+  if (node) {
+    AssertPrecondition(*node);
+  }
+#endif
 }
 
 }  // namespace blink

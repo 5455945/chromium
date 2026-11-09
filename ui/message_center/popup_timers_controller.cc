@@ -1,26 +1,31 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/message_center/popup_timers_controller.h"
 
 #include <algorithm>
+#include <memory>
 
-#include "base/containers/contains.h"
-#include "build/chromeos_buildflags.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
+#include "ui/message_center/public/cpp/notification_types.h"
 
 namespace message_center {
 
 namespace {
 
 bool UseHighPriorityDelay(Notification* notification) {
-// Web Notifications are given a longer on-screen time on non-Chrome OS
-// platforms as there is no notification center to dismiss them to.
-#if BUILDFLAG(IS_CHROMEOS_ASH)
+#if BUILDFLAG(IS_CHROMEOS)
+  // ChromeOS is going to ignore the `never_timeout` field so all notification
+  // popups are automatically dismissed in 6 seconds. System priority
+  // notifications with `never_timeout` set will be displayed for 30 minutes.
   const bool use_high_priority_delay =
-      notification->priority() > DEFAULT_PRIORITY;
+      notification->never_timeout() &&
+      notification->priority() == SYSTEM_PRIORITY;
 #else
+  // Web Notifications are given a longer on-screen time on non-Chrome OS
+  // platforms as there is no notification center to dismiss them to.
   const bool use_high_priority_delay =
       notification->priority() > DEFAULT_PRIORITY ||
       notification->notifier_id().type == NotifierType::WEB_PAGE;
@@ -50,12 +55,13 @@ void PopupTimersController::StartTimer(const std::string& id,
                                        const base::TimeDelta& timeout) {
   PopupTimerCollection::const_iterator iter = popup_timers_.find(id);
   if (iter != popup_timers_.end()) {
-    DCHECK(iter->second);
+    CHECK(iter->second, base::NotFatalUntil::M163);
     iter->second->Start();
     return;
   }
 
-  std::unique_ptr<PopupTimer> timer(new PopupTimer(id, timeout, AsWeakPtr()));
+  auto timer =
+      std::make_unique<PopupTimer>(id, timeout, weak_ptr_factory_.GetWeakPtr());
 
   timer->Start();
   popup_timers_.emplace(id, std::move(timer));
@@ -86,7 +92,7 @@ void PopupTimersController::CancelAll() {
 }
 
 void PopupTimersController::TimerFinished(const std::string& id) {
-  if (!base::Contains(popup_timers_, id))
+  if (!popup_timers_.contains(id))
     return;
 
   CancelTimer(id);
@@ -95,10 +101,9 @@ void PopupTimersController::TimerFinished(const std::string& id) {
 
 base::TimeDelta PopupTimersController::GetTimeoutForNotification(
     Notification* notification) {
-  return base::TimeDelta::FromSeconds(
-      UseHighPriorityDelay(notification)
-          ? notification_timeout_high_priority_seconds_
-          : notification_timeout_default_seconds_);
+  return base::Seconds(UseHighPriorityDelay(notification)
+                           ? notification_timeout_high_priority_seconds_
+                           : notification_timeout_default_seconds_);
 }
 
 int PopupTimersController::GetNotificationTimeoutDefault() {
@@ -126,7 +131,22 @@ void PopupTimersController::OnNotificationUpdated(const std::string& id) {
       break;
   }
 
-  if (iter == popup_notifications.end() || (*iter)->never_timeout()) {
+  if (iter == popup_notifications.end()) {
+    CancelTimer(id);
+    return;
+  }
+
+  // ChromeOS is going to ignore the `never_timeout` field for notification
+  // popups. Only enabled behind the `kNotificationsIgnoreRequireInteraction`
+  // flag for now.
+  const bool must_cancel_timer =
+      (*iter)->never_timeout()
+#if BUILDFLAG(IS_CHROMEOS)
+      && !features::IsNotificationsIgnoreRequireInteractionEnabled()
+#endif
+      ;
+
+  if (must_cancel_timer) {
     CancelTimer(id);
     return;
   }
@@ -142,8 +162,7 @@ void PopupTimersController::OnNotificationUpdated(const std::string& id) {
   // If a timer was paused before, pause it afterwards as well.
   // See crbug.com/710298
   if (was_paused) {
-    auto timer = popup_timers_.find(id);
-    timer->second->Pause();
+    popup_timers_.find(id)->second->Pause();
   }
 }
 

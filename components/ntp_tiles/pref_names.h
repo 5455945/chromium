@@ -1,29 +1,27 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef COMPONENTS_NTP_TILES_PREF_NAMES_H_
 #define COMPONENTS_NTP_TILES_PREF_NAMES_H_
 
-namespace ntp_tiles {
-namespace prefs {
+namespace ntp_tiles::prefs {
 
-extern const char kNumPersonalTiles[];
+// The pref that stores if the Tab Resumption Home Module is enabled.
+inline constexpr char kTabResumptionHomeModuleEnabled[] =
+    "home.module.tab_resumption.enabled";
 
-extern const char kPopularSitesOverrideURL[];
-extern const char kPopularSitesOverrideDirectory[];
-extern const char kPopularSitesOverrideCountry[];
-extern const char kPopularSitesOverrideVersion[];
+// The pref that stores if the Tips Home Module is enabled.
+inline constexpr char kTipsHomeModuleEnabled[] = "home.module.tips.enabled";
 
-extern const char kPopularSitesLastDownloadPref[];
-extern const char kPopularSitesURLPref[];
-extern const char kPopularSitesJsonPref[];
-extern const char kPopularSitesVersionPref[];
+// Stores if the Magic Stack Home Module (i.e. cards on the NTP) is enabled.
+inline constexpr char kMagicStackHomeModuleEnabled[] =
+    "home.module.magic_stack.enabled";
 
-extern const char kCustomLinksList[];
-extern const char kCustomLinksInitialized[];
+// The pref that stores if the Most Visited Tiles Home Module is enabled.
+inline constexpr char kMostVisitedHomeModuleEnabled[] =
+    "home.module.most_visited.enabled";
 
-}  // namespace prefs
-}  // namespace ntp_tiles
+}  // namespace ntp_tiles::prefs
 
 #endif  // COMPONENTS_NTP_TILES_PREF_NAMES_H_

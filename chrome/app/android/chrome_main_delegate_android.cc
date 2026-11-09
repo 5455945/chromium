@@ -1,37 +1,40 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/app/android/chrome_main_delegate_android.h"
 
 #include <memory>
+#include <variant>
 
+#include "base/android/application_status_listener.h"
 #include "base/android/jni_android.h"
-#include "base/base_paths_android.h"
-#include "base/files/file_path.h"
-#include "base/files/file_util.h"
+#include "base/android/pre_freeze_background_memory_trimmer.h"
+#include "base/android/sys_utils.h"
 #include "base/logging.h"
-#include "base/path_service.h"
+#include "base/sampling_heap_profiler/poisson_allocation_sampler.h"
 #include "base/trace_event/trace_event.h"
 #include "chrome/browser/android/chrome_startup_flags.h"
 #include "chrome/browser/android/metrics/uma_utils.h"
+#include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "components/policy/core/common/android/android_combined_policy_provider.h"
-#include "components/safe_browsing/buildflags.h"
-#include "components/startup_metric_utils/browser/startup_metric_utils.h"
+#include "components/startup_metric_utils/common/startup_metric_utils.h"
 #include "content/public/browser/browser_main_runner.h"
-
-#if BUILDFLAG(SAFE_BROWSING_DB_REMOTE)
-#include "components/safe_browsing/android/safe_browsing_api_handler.h"
-#include "components/safe_browsing/android/safe_browsing_api_handler_bridge.h"
-#endif
+#include "content/public/common/content_switches.h"
 
 namespace {
-using safe_browsing::SafeBrowsingApiHandler;
-
-// Whether to use the process start time for startup metrics.
-const base::Feature kUseProcessStartTimeForMetrics{
-    "UseProcessStartTimeForMetrics", base::FEATURE_DISABLED_BY_DEFAULT};
+class ChromePreFreezeDelegate
+    : public base::android::PreFreezeBackgroundMemoryTrimmer::Delegate {
+ public:
+  bool ShouldThawPreFrozenProcess() const override {
+    // HasVisibleActivities() is a cheap local check. We use it as a fast-path
+    // to avoid the expensive JNI/Binder IPC call to IsProcessInBackground()
+    // when the app is visibly in the foreground.
+    return base::android::ApplicationStatusListener::HasVisibleActivities() ||
+           !base::android::IsProcessInBackground();
+  }
+};
 }  // namespace
 
 // ChromeMainDelegateAndroid is created when the library is loaded. It is always
@@ -40,52 +43,50 @@ const base::Feature kUseProcessStartTimeForMetrics{
 ChromeMainDelegateAndroid::ChromeMainDelegateAndroid() = default;
 ChromeMainDelegateAndroid::~ChromeMainDelegateAndroid() = default;
 
-bool ChromeMainDelegateAndroid::BasicStartupComplete(int* exit_code) {
-#if BUILDFLAG(SAFE_BROWSING_DB_REMOTE)
-  safe_browsing_api_handler_ =
-      std::make_unique<safe_browsing::SafeBrowsingApiHandlerBridge>();
-  SafeBrowsingApiHandler::SetInstance(safe_browsing_api_handler_.get());
-#endif
-
+std::optional<int> ChromeMainDelegateAndroid::BasicStartupComplete() {
+  TRACE_EVENT0("startup", "ChromeMainDelegateAndroid::BasicStartupComplete");
   policy::android::AndroidCombinedPolicyProvider::SetShouldWaitForPolicy(true);
   SetChromeSpecificCommandLineFlags();
 
-  return ChromeMainDelegate::BasicStartupComplete(exit_code);
+  base::android::PreFreezeBackgroundMemoryTrimmer::SetDelegate(
+      std::make_unique<ChromePreFreezeDelegate>());
+
+  return ChromeMainDelegate::BasicStartupComplete();
 }
 
 void ChromeMainDelegateAndroid::PreSandboxStartup() {
   ChromeMainDelegate::PreSandboxStartup();
 
-  // Start the sampling profiler after crashpad initialization.
-  sampling_profiler_ = std::make_unique<MainThreadStackSamplingProfiler>();
+  // PoissonAllocationSampler's TLS slots need to be set up before
+  // MainThreadStackSamplingProfiler, which can allocate TLS slots of its own.
+  // On some platforms pthreads can malloc internally to access higher-numbered
+  // TLS slots, which can cause reentry in the heap profiler. (See the comment
+  // on ReentryGuard::InitTLSSlot().)
+  // TODO(crbug.com/40062835): Clean up other paths that call this Init()
+  // function, which are now redundant.
+  base::PoissonAllocationSampler::Init();
+
+  // We only create a MainThreadStackSamplingProfiler for the browser process.
+  // `ChromeContentGpuClient` and `ChromeContentRendererClient` create their own
+  // `ThreadProfiler` for the child processes.
+  auto type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+      switches::kProcessType);
+  if (type.empty()) {
+    CHECK(chrome_content_browser_client_);
+    // Start the sampling profiler after crashpad initialization.
+    chrome_content_browser_client_->SetSamplingProfiler(
+        std::make_unique<MainThreadStackSamplingProfiler>());
+  }
 }
 
-void ChromeMainDelegateAndroid::SecureDataDirectory() {
-  // By default, Android creates the directory accessible by others.
-  // We'd like to tighten security and make it accessible only by
-  // the browser process.
-  // TODO(crbug.com/832388): Remove this once minsdk >= 21,
-  // at which point this will be handled by PathUtils.java.
-  base::FilePath data_path;
-  bool ok = base::PathService::Get(base::DIR_ANDROID_APP_DATA, &data_path);
-  if (ok) {
-    ok = base::SetPosixFilePermissions(data_path,
-                                       base::FILE_PERMISSION_USER_MASK);
-  }
-  if (!ok) {
-    LOG(ERROR) << "Failed to set data directory permissions";
-  }
-}
-
-int ChromeMainDelegateAndroid::RunProcess(
+std::variant<int, content::MainFunctionParams>
+ChromeMainDelegateAndroid::RunProcess(
     const std::string& process_type,
-    const content::MainFunctionParams& main_function_params) {
+    content::MainFunctionParams main_function_params) {
   TRACE_EVENT0("startup", "ChromeMainDelegateAndroid::RunProcess");
   // Defer to the default main method outside the browser process.
   if (!process_type.empty())
-    return -1;
-
-  SecureDataDirectory();
+    return std::move(main_function_params);
 
   // Because the browser process can be started asynchronously as a series of
   // UI thread tasks a second request to start it can come in while the
@@ -95,33 +96,19 @@ int ChromeMainDelegateAndroid::RunProcess(
   // start time of the application, and will be same for all requests.
   if (!browser_runner_) {
     base::TimeTicks process_start_time = chrome::android::GetProcessStartTime();
-    base::TimeTicks application_start_time =
-        chrome::android::GetApplicationStartTime();
     if (!process_start_time.is_null()) {
-      startup_metric_utils::RecordStartupProcessCreationTime(
+      startup_metric_utils::GetCommon().RecordStartupProcessCreationTime(
           process_start_time);
-      // TODO(crbug.com/1127482): Perf bots should add support for measuring
-      // Startup.LoadTime.ProcessCreateToApplicationStart, then the
-      // kUseProcessStartTimeForMetrics feature can be removed.
-      if (base::FeatureList::IsEnabled(kUseProcessStartTimeForMetrics))
-        application_start_time = process_start_time;
     }
-    startup_metric_utils::RecordApplicationStartTime(application_start_time);
+    startup_metric_utils::GetCommon().RecordApplicationStartTime(
+        chrome::android::GetApplicationStartTime());
     browser_runner_ = content::BrowserMainRunner::Create();
   }
 
-  int exit_code = browser_runner_->Initialize(main_function_params);
+  int exit_code = browser_runner_->Initialize(std::move(main_function_params));
   // On Android we do not run BrowserMain(), so the above initialization of a
-  // BrowserMainRunner is all we want to occur. Return >= 0 to avoid running
-  // BrowserMain, while preserving any error codes > 0.
+  // BrowserMainRunner is all we want to occur. Preserve any error codes > 0.
   if (exit_code > 0)
     return exit_code;
   return 0;
-}
-
-void ChromeMainDelegateAndroid::ProcessExiting(
-    const std::string& process_type) {
-#if BUILDFLAG(SAFE_BROWSING_DB_REMOTE)
-  SafeBrowsingApiHandler::SetInstance(nullptr);
-#endif
 }

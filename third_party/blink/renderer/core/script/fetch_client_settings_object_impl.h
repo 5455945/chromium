@@ -1,4 +1,4 @@
-// Copyright 2018 The Chromium Authors. All rights reserved.
+// Copyright 2018 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -13,7 +13,6 @@
 #include "third_party/blink/renderer/platform/loader/fetch/https_state.h"
 #include "third_party/blink/renderer/platform/weborigin/kurl.h"
 #include "third_party/blink/renderer/platform/weborigin/security_origin.h"
-#include "third_party/blink/renderer/platform/wtf/cross_thread_copier.h"
 
 namespace blink {
 
@@ -35,16 +34,15 @@ class CORE_EXPORT FetchClientSettingsObjectImpl final
   const KURL& GlobalObjectUrl() const override;
   const KURL& BaseUrl() const override;
   const SecurityOrigin* GetSecurityOrigin() const override;
-  network::mojom::ReferrerPolicy GetReferrerPolicy() const override;
+  const mojom::blink::PolicyContainerPolicies& GetPolicyContainerPolicies()
+      const override;
 
-  const String GetOutgoingReferrer() const override;
+  KURL GetOutgoingReferrerUrl() const override;
 
   HttpsState GetHttpsState() const override;
 
   AllowedByNosniff::MimeTypeCheck MimeTypeCheckForClassicWorkerScript()
       const override;
-
-  network::mojom::IPAddressSpace GetAddressSpace() const override;
 
   mojom::blink::InsecureRequestPolicy GetInsecureRequestsPolicy()
       const override;

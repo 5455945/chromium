@@ -1,4 +1,4 @@
-// Copyright (c) 2011 The Chromium Authors. All rights reserved.
+// Copyright 2011 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,14 @@
 
 #include <stddef.h>
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 
 #include "base/at_exit.h"
 #include "base/check_op.h"
 #include "base/command_line.h"
-#include "base/cxx17_backports.h"
+#include "base/compiler_specific.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/path_service.h"
@@ -43,14 +44,16 @@ enum ErrorCode {
   GENERATION_FAILED
 };
 
-const wchar_t* const Messages[] = {
-    nullptr, L"original mini_installer.exe not found",
+constexpr auto Messages = std::to_array<const wchar_t*>({
+    nullptr,
+    L"original mini_installer.exe not found",
     L"output file already exists",
-    L"failed to generate a newly versioned mini_installer.exe"};
+    L"failed to generate a newly versioned mini_installer.exe",
+});
 
 const wchar_t* GetErrorMessage(ErrorCode error_code) {
   DCHECK_LE(0, error_code);
-  DCHECK_GT(base::size(Messages), static_cast<size_t>(error_code));
+  DCHECK_GT(std::size(Messages), static_cast<size_t>(error_code));
   return Messages[error_code];
 }
 
@@ -63,15 +66,17 @@ void DumpUsage(const base::CommandLine& cmd_line,
                const std::wstring& detail) {
   const wchar_t* error_message = errors::GetErrorMessage(error_code);
   if (error_message != nullptr) {
-    fwprintf(stderr, L"%s: %s", cmd_line.GetProgram().value().c_str(),
-             errors::GetErrorMessage(error_code));
-    if (!detail.empty())
-      fwprintf(stderr, L" (%s)\n", detail.c_str());
-    else
-      fwprintf(stderr, L"\n");
+    UNSAFE_TODO(fwprintf(stderr, L"%s: %s",
+                         cmd_line.GetProgram().value().c_str(),
+                         errors::GetErrorMessage(error_code)));
+    if (!detail.empty()) {
+      UNSAFE_TODO(fwprintf(stderr, L" (%s)\n", detail.c_str()));
+    } else {
+      UNSAFE_TODO(fwprintf(stderr, L"\n"));
+    }
   }
 
-  fwprintf(
+  UNSAFE_TODO(fwprintf(
       stderr,
       L"Usage: %s [ OPTIONS ]\n"
       L" Where OPTIONS is one or more of:\n"
@@ -93,8 +98,10 @@ void DumpUsage(const base::CommandLine& cmd_line,
       L"Defaults\n"
       L"                            to "
       L"..\\..\\third_party\\lzma_sdk\\Executable\n"
-      L"                            relative to this program's location.\n",
-      cmd_line.GetProgram().value().c_str());
+      L"                            relative to this program's location.\n"
+      L" --fast_archive_compression Use fast compression of chrome.7z into\n"
+      L"                            chrome.packed.7z.\n",
+      cmd_line.GetProgram().value().c_str()));
 }
 
 // Gets the path to the source mini_installer.exe on which to operate, putting

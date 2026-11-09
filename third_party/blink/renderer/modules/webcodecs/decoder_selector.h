@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,6 +8,7 @@
 #include <memory>
 
 #include "base/memory/weak_ptr.h"
+#include "base/task/sequenced_task_runner.h"
 #include "media/base/demuxer_stream.h"
 #include "media/base/media_util.h"
 #include "media/filters/decoder_selector.h"
@@ -25,6 +26,8 @@ class DecoderSelector {
   typedef media::DecoderStreamTraits<StreamType> StreamTraits;
   typedef typename StreamTraits::DecoderType Decoder;
   typedef typename StreamTraits::DecoderConfigType DecoderConfig;
+  using DecoderOrError =
+      typename media::DecoderSelector<StreamType>::DecoderOrError;
 
   // Callback to create a list of decoders to select from.
   using CreateDecodersCB =
@@ -33,7 +36,7 @@ class DecoderSelector {
   // Emits the result of a single call to SelectDecoder(). Parameter is
   // the initialized Decoder. nullptr if selection failed. The caller owns the
   // Decoder.
-  using SelectDecoderCB = base::OnceCallback<void(std::unique_ptr<Decoder>)>;
+  using SelectDecoderCB = base::OnceCallback<void(DecoderOrError)>;
 
   // Construction can happen on any thread, but all subsequent API calls
   // including destruction must use |task_runner| thread.
@@ -41,6 +44,7 @@ class DecoderSelector {
   // be Post()'ed.
   DecoderSelector(scoped_refptr<base::SequencedTaskRunner> task_runner,
                   CreateDecodersCB create_decoders_cb,
+                  media::MediaLog* media_log,
                   typename Decoder::OutputCB output_cb);
 
   // Aborts any pending decoder selection.
@@ -57,14 +61,22 @@ class DecoderSelector {
                      bool low_delay,
                      SelectDecoderCB select_decoder_cb);
 
+  // Used to indicate the existing decoder should be preferred if `config` is
+  // supported by it.
+  void PrependDecoder(std::unique_ptr<Decoder> decoder) {
+    impl_.PrependDecoder(std::move(decoder));
+  }
+
  private:
   // Helper to create |stream_traits_|.
   std::unique_ptr<StreamTraits> CreateStreamTraits();
 
   // Proxy SelectDecoderCB from impl_ to our |select_decoder_cb|.
   void OnDecoderSelected(SelectDecoderCB select_decoder_cb,
-                         std::unique_ptr<Decoder> decoder,
+                         DecoderOrError decoder_or_error,
                          std::unique_ptr<media::DecryptingDemuxerStream>);
+
+  const raw_ptr<media::MediaLog> media_log_;
 
   // Implements heavy lifting for decoder selection.
   media::DecoderSelector<StreamType> impl_;
@@ -77,9 +89,6 @@ class DecoderSelector {
 
   // Repeating callback for decoder outputs.
   typename Decoder::OutputCB output_cb_;
-
-  // TODO(chcunningham): Route MEDIA_LOG for WebCodecs.
-  media::NullMediaLog null_media_log_;
 
   base::WeakPtrFactory<DecoderSelector<StreamType>> weak_factory_{this};
 };

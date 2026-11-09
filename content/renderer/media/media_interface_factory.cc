@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,18 +6,22 @@
 
 #include <string>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/task/single_thread_task_runner.h"
+#include "build/build_config.h"
 #include "media/mojo/mojom/content_decryption_module.mojom.h"
 #include "media/mojo/mojom/renderer.mojom.h"
 #include "media/mojo/mojom/renderer_extensions.mojom.h"
-#include "third_party/blink/public/common/browser_interface_broker_proxy.h"
+#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
 
 namespace content {
 
 MediaInterfaceFactory::MediaInterfaceFactory(
-    blink::BrowserInterfaceBrokerProxy* interface_broker)
-    : interface_broker_(interface_broker) {
-  task_runner_ = base::ThreadTaskRunnerHandle::Get();
+    const blink::BrowserInterfaceBrokerProxy* interface_broker,
+    scoped_refptr<base::SingleThreadTaskRunner> task_runner)
+    : interface_broker_(interface_broker),
+      task_runner_(std::move(task_runner)) {
+  DCHECK(task_runner_);
   weak_this_ = weak_factory_.GetWeakPtr();
 }
 
@@ -49,16 +53,46 @@ void MediaInterfaceFactory::CreateAudioDecoder(
 }
 
 void MediaInterfaceFactory::CreateVideoDecoder(
-    mojo::PendingReceiver<media::mojom::VideoDecoder> receiver) {
+    mojo::PendingReceiver<media::mojom::VideoDecoder> receiver,
+    mojo::PendingRemote<media::mojom::VideoDecoder> dst_video_decoder) {
+  // The renderer process cannot act as a proxy for video decoding.
+  DCHECK(!dst_video_decoder);
   if (!task_runner_->BelongsToCurrentThread()) {
     task_runner_->PostTask(
-        FROM_HERE, base::BindOnce(&MediaInterfaceFactory::CreateVideoDecoder,
+        FROM_HERE,
+        base::BindOnce(&MediaInterfaceFactory::CreateVideoDecoder, weak_this_,
+                       std::move(receiver),
+                       /*dst_video_decoder=*/
+                       mojo::PendingRemote<media::mojom::VideoDecoder>()));
+    return;
+  }
+
+  DVLOG(1) << __func__;
+  GetMediaInterfaceFactory()->CreateVideoDecoder(std::move(receiver),
+                                                 /*dst_video_decoder=*/{});
+}
+
+#if BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+void MediaInterfaceFactory::CreateVideoDecoderWithTracker(
+    mojo::PendingReceiver<media::mojom::VideoDecoder> receiver,
+    mojo::PendingRemote<media::mojom::VideoDecoderTracker> tracker) {
+  // CreateVideoDecoderWithTracker() should not be called by the renderer
+  // process.
+  NOTREACHED();
+}
+#endif  // BUILDFLAG(ENABLE_OOP_VIDEO_DECODER)
+
+void MediaInterfaceFactory::CreateAudioEncoder(
+    mojo::PendingReceiver<media::mojom::AudioEncoder> receiver) {
+  if (!task_runner_->BelongsToCurrentThread()) {
+    task_runner_->PostTask(
+        FROM_HERE, base::BindOnce(&MediaInterfaceFactory::CreateAudioEncoder,
                                   weak_this_, std::move(receiver)));
     return;
   }
 
   DVLOG(1) << __func__;
-  GetMediaInterfaceFactory()->CreateVideoDecoder(std::move(receiver));
+  GetMediaInterfaceFactory()->CreateAudioEncoder(std::move(receiver));
 }
 
 void MediaInterfaceFactory::CreateDefaultRenderer(
@@ -95,29 +129,7 @@ void MediaInterfaceFactory::CreateCastRenderer(
 }
 #endif
 
-#if defined(OS_ANDROID)
-void MediaInterfaceFactory::CreateMediaPlayerRenderer(
-    mojo::PendingRemote<media::mojom::MediaPlayerRendererClientExtension>
-        client_extension_remote,
-    mojo::PendingReceiver<media::mojom::Renderer> receiver,
-    mojo::PendingReceiver<media::mojom::MediaPlayerRendererExtension>
-        renderer_extension_receiver) {
-  if (!task_runner_->BelongsToCurrentThread()) {
-    task_runner_->PostTask(
-        FROM_HERE,
-        base::BindOnce(&MediaInterfaceFactory::CreateMediaPlayerRenderer,
-                       weak_this_, std::move(client_extension_remote),
-                       std::move(receiver),
-                       std::move(renderer_extension_receiver)));
-    return;
-  }
-
-  DVLOG(1) << __func__;
-  GetMediaInterfaceFactory()->CreateMediaPlayerRenderer(
-      std::move(client_extension_remote), std::move(receiver),
-      std::move(renderer_extension_receiver));
-}
-
+#if BUILDFLAG(IS_ANDROID)
 void MediaInterfaceFactory::CreateFlingingRenderer(
     const std::string& presentation_id,
     mojo::PendingRemote<media::mojom::FlingingRendererClientExtension>
@@ -136,10 +148,11 @@ void MediaInterfaceFactory::CreateFlingingRenderer(
   GetMediaInterfaceFactory()->CreateFlingingRenderer(
       presentation_id, std::move(client_extension), std::move(receiver));
 }
-#endif  // defined(OS_ANDROID)
+#endif  // BUILDFLAG(IS_ANDROID)
 
-#if defined(OS_WIN)
+#if BUILDFLAG(IS_WIN)
 void MediaInterfaceFactory::CreateMediaFoundationRenderer(
+    mojo::PendingRemote<media::mojom::MediaLog> media_log_remote,
     mojo::PendingReceiver<media::mojom::Renderer> receiver,
     mojo::PendingReceiver<media::mojom::MediaFoundationRendererExtension>
         renderer_extension_receiver) {
@@ -147,30 +160,30 @@ void MediaInterfaceFactory::CreateMediaFoundationRenderer(
     task_runner_->PostTask(
         FROM_HERE,
         base::BindOnce(&MediaInterfaceFactory::CreateMediaFoundationRenderer,
-                       weak_this_, std::move(receiver),
+                       weak_this_, std::move(media_log_remote),
+                       std::move(receiver),
                        std::move(renderer_extension_receiver)));
     return;
   }
 
   DVLOG(1) << __func__;
   GetMediaInterfaceFactory()->CreateMediaFoundationRenderer(
-      std::move(receiver), std::move(renderer_extension_receiver));
+      std::move(media_log_remote), std::move(receiver),
+      std::move(renderer_extension_receiver));
 }
-#endif  // defined(OS_WIN)
+#endif  // BUILDFLAG(IS_WIN)
 
-void MediaInterfaceFactory::CreateCdm(const std::string& key_system,
-                                      const media::CdmConfig& cdm_config,
+void MediaInterfaceFactory::CreateCdm(const media::CdmConfig& cdm_config,
                                       CreateCdmCallback callback) {
   if (!task_runner_->BelongsToCurrentThread()) {
     task_runner_->PostTask(
         FROM_HERE, base::BindOnce(&MediaInterfaceFactory::CreateCdm, weak_this_,
-                                  key_system, cdm_config, std::move(callback)));
+                                  cdm_config, std::move(callback)));
     return;
   }
 
-  DVLOG(1) << __func__ << ": key_system = " << key_system;
-  GetMediaInterfaceFactory()->CreateCdm(key_system, cdm_config,
-                                        std::move(callback));
+  DVLOG(1) << __func__ << ": cdm_config=" << cdm_config;
+  GetMediaInterfaceFactory()->CreateCdm(cdm_config, std::move(callback));
 }
 
 media::mojom::InterfaceFactory*
@@ -180,7 +193,7 @@ MediaInterfaceFactory::GetMediaInterfaceFactory() {
 
   if (!media_interface_factory_) {
     interface_broker_->GetInterface(
-        media_interface_factory_.BindNewPipeAndPassReceiver());
+        media_interface_factory_.BindNewPipeAndPassReceiver(task_runner_));
     media_interface_factory_.set_disconnect_handler(base::BindOnce(
         &MediaInterfaceFactory::OnConnectionError, base::Unretained(this)));
   }

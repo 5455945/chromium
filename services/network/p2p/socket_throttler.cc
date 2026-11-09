@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,16 +19,19 @@ const int kMaxIceMessageBandwidth = 256 * 1024;
 }  // namespace
 
 P2PMessageThrottler::P2PMessageThrottler()
-    : rate_limiter_(new rtc::DataRateLimiter(kMaxIceMessageBandwidth, 1.0)) {}
+    : rate_limiter_(new webrtc::DataRateLimiter(kMaxIceMessageBandwidth, 1.0)) {
+}
 
 P2PMessageThrottler::~P2PMessageThrottler() {}
 
 void P2PMessageThrottler::SetSendIceBandwidth(int bandwidth_kbps) {
-  rate_limiter_ = std::make_unique<rtc::DataRateLimiter>(bandwidth_kbps, 1.0);
+  rate_limiter_ =
+      std::make_unique<webrtc::DataRateLimiter>(bandwidth_kbps, 1.0);
 }
 
 bool P2PMessageThrottler::DropNextPacket(size_t packet_len) {
-  double now = rtc::TimeNanos() / static_cast<double>(rtc::kNumNanosecsPerSec);
+  double now =
+      webrtc::TimeNanos() / static_cast<double>(webrtc::kNumNanosecsPerSec);
   if (!rate_limiter_->CanUse(packet_len, now)) {
     // Exceeding the send rate, this packet should be dropped.
     return true;

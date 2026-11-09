@@ -1,40 +1,26 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "components/variations/service/safe_seed_manager.h"
 
+#include <algorithm>
+
 #include "base/base_switches.h"
 #include "base/command_line.h"
+#include "base/functional/callback_helpers.h"
+#include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
-#include "base/metrics/histogram_macros.h"
-#include "base/numerics/ranges.h"
+#include "components/metrics/startup_visibility.h"
 #include "components/prefs/pref_registry.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
 #include "components/variations/client_filterable_state.h"
 #include "components/variations/pref_names.h"
 #include "components/variations/variations_seed_store.h"
+#include "components/variations/variations_switches.h"
 
 namespace variations {
-
-// As of the time of this writing, January 2018, users at the 99.5th percentile,
-// across all platforms, tend to experience fewer than 3 consecutive crashes:
-// [1], [2], [3], [4]. Note, however, that this is less true for the less-stable
-// channels on some platforms.
-// [1] All platforms, stable channel (consistently stable):
-//     https://uma.googleplex.com/timeline_v2?sid=90ac80f4573249fb341a8e49501bfcfd
-// [2] Most platforms, all channels (consistently stable other than occasional
-//     spikes on Canary):
-//     https://uma.googleplex.com/timeline_v2?sid=7af5ba1969db76689a401f982a1db539
-// [3] A less stable platform, all channels:
-//     https://uma.googleplex.com/timeline_v2?sid=07dbc8e4fa9f08e332fb609309a21882
-// [4] Another less stable platform, all channels:
-//     https://uma.googleplex.com/timeline_v2?sid=a7b529ef5d52863fae2d216e963c4cbc
-// Overall, the only {platform, channel} combinations that spike above 3
-// consecutive crashes are ones with very few users, plus Canary. It's probably
-// not realistic to avoid false positives for these less-stable configurations.
-constexpr int kCrashStreakThreshold = 3;
 
 // Consecutive seed fetch failures are, unfortunately, a bit more common. As of
 // January 2018, users at the 99.5th percentile tend to see fewer than 4
@@ -63,14 +49,15 @@ constexpr int kCrashStreakThreshold = 3;
 // set a threshold that should minimize false-positives.
 // TODO(isherman): Check in with the networking team about their thoughts on how
 // to find a better balance here.
-constexpr int kFetchFailureStreakThreshold = 25;
+constexpr int kFetchFailureStreakSafeSeedThreshold = 25;
+constexpr int kFetchFailureStreakNullSeedThreshold = 50;
 
 SafeSeedManager::SafeSeedManager(PrefService* local_state)
     : local_state_(local_state) {
   int num_failed_fetches =
       local_state_->GetInteger(prefs::kVariationsFailedToFetchSeedStreak);
   base::UmaHistogramSparse("Variations.SafeMode.Streak.FetchFailures",
-                           base::ClampToRange(num_failed_fetches, 0, 100));
+                           std::clamp(num_failed_fetches, 0, 100));
 }
 
 SafeSeedManager::~SafeSeedManager() = default;
@@ -88,36 +75,41 @@ void SafeSeedManager::RegisterPrefs(PrefRegistrySimple* registry) {
   registry->RegisterIntegerPref(prefs::kVariationsFailedToFetchSeedStreak, 0);
 }
 
-bool SafeSeedManager::ShouldRunInSafeMode() const {
-  // Ignore any number of failures if the --force-fieldtrials flag is set. This
-  // flag is only used by developers, and there's no need to make the
-  // development process flakier.
+SeedType SafeSeedManager::GetSeedType() const {
+  // Ignore any number of failures if the --disable-variations-safe-mode flag is
+  // set.
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          ::switches::kForceFieldTrials)) {
-    return false;
+          switches::kDisableVariationsSafeMode)) {
+    return SeedType::kRegularSeed;
   }
-
   int num_crashes = local_state_->GetInteger(prefs::kVariationsCrashStreak);
   int num_failed_fetches =
       local_state_->GetInteger(prefs::kVariationsFailedToFetchSeedStreak);
-  return num_crashes >= kCrashStreakThreshold ||
-         num_failed_fetches >= kFetchFailureStreakThreshold;
+  if (num_crashes >= kCrashStreakNullSeedThreshold ||
+      num_failed_fetches >= kFetchFailureStreakNullSeedThreshold) {
+#if BUILDFLAG(IS_CHROMEOS)
+    // Logging is useful in listnr reports for ChromeOS (http://b/277650823).
+    LOG(ERROR) << "Using finch safe mode null seed: num_crashes=" << num_crashes
+               << ", num_failed_fetches=" << num_failed_fetches;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    return SeedType::kNullSeed;
+  }
+  if (num_crashes >= kCrashStreakSafeSeedThreshold ||
+      num_failed_fetches >= kFetchFailureStreakSafeSeedThreshold) {
+#if BUILDFLAG(IS_CHROMEOS)
+    LOG(ERROR) << "Using finch safe mode safe seed: num_crashes=" << num_crashes
+               << ", num_failed_fetches=" << num_failed_fetches;
+#endif  // BUILDFLAG(IS_CHROMEOS)
+    return SeedType::kSafeSeed;
+  }
+  return SeedType::kRegularSeed;
 }
 
-void SafeSeedManager::SetActiveSeedState(
-    const std::string& seed_data,
-    const std::string& base64_seed_signature,
-    std::unique_ptr<ClientFilterableState> client_filterable_state,
-    base::Time seed_fetch_time) {
-  DCHECK(!has_set_active_seed_state_);
-  has_set_active_seed_state_ = true;
-
-  active_seed_state_ = std::make_unique<ActiveSeedState>(
-      seed_data, base64_seed_signature, std::move(client_filterable_state),
-      seed_fetch_time);
-}
-
-void SafeSeedManager::RecordFetchStarted() {
+void SafeSeedManager::RecordFetchStarted(
+    metrics::StartupVisibility startup_visibility) {
+  if (startup_visibility == metrics::StartupVisibility::kBackground) {
+    return;
+  }
   // Pessimistically assume the fetch will fail. The failure streak will be
   // reset upon success.
   int num_failures_to_fetch =
@@ -133,12 +125,15 @@ void SafeSeedManager::RecordSuccessfulFetch(VariationsSeedStore* seed_store) {
   // not change while Chrome is running. Also, note that it's fine to do this
   // even if running in safe mode, as the saved seed in that case will just be
   // the existing safe seed.
-  if (active_seed_state_) {
-    seed_store->StoreSafeSeed(active_seed_state_->seed_data,
-                              active_seed_state_->base64_seed_signature,
-                              *active_seed_state_->client_filterable_state,
-                              active_seed_state_->seed_fetch_time);
-
+  const std::optional<ActiveSeedState>& active_seed_state =
+      GetActiveSeedState();
+  if (active_seed_state) {
+    seed_store->StoreSafeSeed(/*done_callback=*/base::DoNothing(),
+                              active_seed_state->seed_data,
+                              active_seed_state->base64_seed_signature,
+                              active_seed_state->seed_milestone,
+                              *active_seed_state->client_filterable_state,
+                              active_seed_state->seed_fetch_time);
     // The active seed state is only needed for the first time this code path is
     // reached, so free up its memory once the data is no longer needed.
     active_seed_state_.reset();
@@ -152,16 +147,36 @@ void SafeSeedManager::RecordSuccessfulFetch(VariationsSeedStore* seed_store) {
   local_state_->SetInteger(prefs::kVariationsFailedToFetchSeedStreak, 0);
 }
 
+void SafeSeedManager::SetActiveSeedState(
+    std::string seed_data,
+    std::string base64_seed_signature,
+    int seed_milestone,
+    std::unique_ptr<ClientFilterableState> client_filterable_state,
+    base::Time seed_fetch_time) {
+  DCHECK(!active_seed_state_.has_value());
+
+  active_seed_state_.emplace(
+      std::move(seed_data), std::move(base64_seed_signature), seed_milestone,
+      std::move(client_filterable_state), seed_fetch_time);
+}
+
 SafeSeedManager::ActiveSeedState::ActiveSeedState(
-    const std::string& seed_data,
-    const std::string& base64_seed_signature,
+    std::string seed_data,
+    std::string base64_seed_signature,
+    int seed_milestone,
     std::unique_ptr<ClientFilterableState> client_filterable_state,
     base::Time seed_fetch_time)
-    : seed_data(seed_data),
-      base64_seed_signature(base64_seed_signature),
+    : seed_data(std::move(seed_data)),
+      base64_seed_signature(std::move(base64_seed_signature)),
+      seed_milestone(seed_milestone),
       client_filterable_state(std::move(client_filterable_state)),
       seed_fetch_time(seed_fetch_time) {}
 
 SafeSeedManager::ActiveSeedState::~ActiveSeedState() = default;
+
+const std::optional<SafeSeedManager::ActiveSeedState>&
+SafeSeedManager::GetActiveSeedState() const {
+  return active_seed_state_;
+}
 
 }  // namespace variations

@@ -1,35 +1,37 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "chrome/browser/optimization_guide/android/optimization_guide_bridge.h"
 
 #include <jni.h>
+
 #include <string>
+#include <typeinfo>
 #include <vector>
 
 #include "base/android/jni_android.h"
 #include "base/android/jni_array.h"
 #include "base/android/jni_string.h"
-#include "chrome/browser/optimization_guide/android/jni_headers/OptimizationGuideBridge_jni.h"
-#include "chrome/browser/optimization_guide/optimization_guide_hints_manager.h"
+#include "base/strings/string_view_util.h"
+#include "chrome/browser/optimization_guide/chrome_hints_manager.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service.h"
 #include "chrome/browser/optimization_guide/optimization_guide_keyed_service_factory.h"
-#include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/profiles/profile_manager.h"
-#include "components/optimization_guide/content/browser/optimization_guide_decider.h"
-#include "components/optimization_guide/core/hint_cache.h"
-#include "components/optimization_guide/core/optimization_guide_store.h"
-#include "components/optimization_guide/core/push_notification_manager.h"
+#include "components/optimization_guide/core/hints/hint_cache.h"
+#include "components/optimization_guide/core/hints/optimization_guide_decider.h"
+#include "components/optimization_guide/core/hints/optimization_guide_store.h"
+#include "components/optimization_guide/core/hints/push_notification_manager.h"
+#include "components/optimization_guide/proto/hints.pb.h"
+#include "third_party/jni_zero/default_conversions.h"
 #include "url/android/gurl_android.h"
 #include "url/gurl.h"
 
+// Must come after headers that provide symbols used by @JniType.
+#include "chrome/browser/optimization_guide/android/jni_headers/OptimizationGuideBridge_jni.h"
+
 using base::android::AttachCurrentThread;
-using base::android::ConvertJavaStringToUTF8;
 using base::android::JavaArrayOfByteArrayToBytesVector;
 using base::android::JavaByteArrayToString;
-using base::android::JavaIntArrayToIntVector;
-using base::android::JavaParamRef;
 using base::android::JavaRef;
 using base::android::ScopedJavaGlobalRef;
 using base::android::ScopedJavaLocalRef;
@@ -42,12 +44,11 @@ namespace {
 
 ScopedJavaLocalRef<jbyteArray> ToJavaSerializedAnyMetadata(
     JNIEnv* env,
-    const optimization_guide::OptimizationMetadata optimization_metadata) {
+    const optimization_guide::OptimizationMetadata& optimization_metadata) {
   // We do not expect the following metadatas to be populated for optimization
   // types getting called from Java.
-  DCHECK(!optimization_metadata.loading_predictor_metadata());
-  DCHECK(!optimization_metadata.public_image_metadata());
-  DCHECK(!optimization_metadata.performance_hints_metadata());
+  CHECK(!optimization_metadata.loading_predictor_metadata(),
+        base::NotFatalUntil::M161);
 
   if (optimization_metadata.any_metadata()) {
     std::string serialized;
@@ -65,6 +66,33 @@ void OnOptimizationGuideDecision(
   Java_OptimizationGuideBridge_onOptimizationGuideDecision(
       env, java_callback, static_cast<int>(decision),
       ToJavaSerializedAnyMetadata(env, metadata));
+}
+
+base::flat_set<proto::OptimizationType> ToOptTypesSet(
+    const std::vector<int32_t>& optimization_types) {
+  base::flat_set<optimization_guide::proto::OptimizationType> opt_types;
+  for (const int32_t optimization_type : optimization_types) {
+    // Handles parsing of reserved tag numbers.
+    if (proto::OptimizationType_IsValid(optimization_type)) {
+      opt_types.insert(static_cast<proto::OptimizationType>(optimization_type));
+    }
+  }
+  return opt_types;
+}
+
+void OnOnDemandOptimizationGuideDecision(
+    const JavaRef<jobject>& java_callback,
+    const GURL& url,
+    const base::flat_map<proto::OptimizationType,
+                         OptimizationGuideDecisionWithMetadata>& metadata) {
+  JNIEnv* env = AttachCurrentThread();
+  for (const auto& type_and_decision : metadata) {
+    Java_OptimizationGuideBridge_onOnDemandOptimizationGuideDecision(
+        env, java_callback, url::GURLAndroid::FromNativeGURL(env, url),
+        static_cast<int>(type_and_decision.first),
+        static_cast<int>(type_and_decision.second.decision),
+        ToJavaSerializedAnyMetadata(env, type_and_decision.second.metadata));
+  }
 }
 
 }  // namespace
@@ -87,9 +115,9 @@ OptimizationGuideBridge::GetCachedNotifications(
   std::vector<proto::HintNotificationPayload> notifications;
   for (const auto& encoded_notification : encoded_notifications) {
     proto::HintNotificationPayload notification;
-    if (notification.ParseFromString(std::string(encoded_notification.begin(),
-                                                 encoded_notification.end()))) {
-      notifications.push_back(notification);
+    if (notification.ParseFromString(
+            base::as_string_view(encoded_notification))) {
+      notifications.push_back(std::move(notification));
     }
   }
 
@@ -100,40 +128,17 @@ OptimizationGuideBridge::GetCachedNotifications(
 base::flat_set<proto::OptimizationType>
 OptimizationGuideBridge::GetOptTypesWithPushNotifications() {
   JNIEnv* env = AttachCurrentThread();
-  std::vector<int> cached_int_types;
-  JavaIntArrayToIntVector(
-      env, Java_OptimizationGuideBridge_getOptTypesWithPushNotifications(env),
-      &cached_int_types);
-
-  base::flat_set<proto::OptimizationType> cached_types;
-  for (int int_type : cached_int_types) {
-    // Handles parsing of reserved tag numbers.
-    if (proto::OptimizationType_IsValid(int_type)) {
-      cached_types.insert(static_cast<proto::OptimizationType>(int_type));
-    }
-  }
-  return cached_types;
+  return ToOptTypesSet(
+      Java_OptimizationGuideBridge_getOptTypesWithPushNotifications(env));
 }
 
 // static
 base::flat_set<proto::OptimizationType>
 OptimizationGuideBridge::GetOptTypesThatOverflowedPushNotifications() {
   JNIEnv* env = AttachCurrentThread();
-  std::vector<int> overflowed_int_types;
-  JavaIntArrayToIntVector(
-      env,
+  return ToOptTypesSet(
       Java_OptimizationGuideBridge_getOptTypesThatOverflowedPushNotifications(
-          env),
-      &overflowed_int_types);
-
-  base::flat_set<proto::OptimizationType> overflowed_types;
-  for (int int_type : overflowed_int_types) {
-    // Handles parsing of reserved tag numbers.
-    if (proto::OptimizationType_IsValid(int_type)) {
-      overflowed_types.insert(static_cast<proto::OptimizationType>(int_type));
-    }
-  }
-  return overflowed_types;
+          env));
 }
 
 // static
@@ -156,77 +161,94 @@ void OptimizationGuideBridge::OnNotificationNotHandledByNative(
       env, ToJavaByteArray(env, encoded_notification));
 }
 
-static jlong JNI_OptimizationGuideBridge_Init(JNIEnv* env) {
-  // TODO(sophiechang): Figure out how to separate factory to avoid circular
-  // deps when getting last used profile is no longer allowed.
-  Profile* profile = ProfileManager::GetLastUsedProfile();
-  if (!profile)
-    return 0;
-  OptimizationGuideKeyedService* optimization_guide_keyed_service =
-      OptimizationGuideKeyedServiceFactory::GetForProfile(profile);
-  if (!optimization_guide_keyed_service)
-    return 0;
-  return reinterpret_cast<intptr_t>(
-      new OptimizationGuideBridge(optimization_guide_keyed_service));
+void OptimizationGuideBridge::OnDeferredStartup(JNIEnv* env) {
+  optimization_guide_keyed_service_->GetHintsManager()->OnDeferredStartup();
 }
 
 OptimizationGuideBridge::OptimizationGuideBridge(
     OptimizationGuideKeyedService* optimization_guide_keyed_service)
     : optimization_guide_keyed_service_(optimization_guide_keyed_service) {
-  DCHECK(optimization_guide_keyed_service_);
+  CHECK(optimization_guide_keyed_service_, base::NotFatalUntil::M161);
 }
 
-void OptimizationGuideBridge::Destroy(JNIEnv* env) {
-  delete this;
+OptimizationGuideBridge::~OptimizationGuideBridge() = default;
+
+ScopedJavaLocalRef<JOptimizationGuideBridge>
+OptimizationGuideBridge::GetJavaObject() {
+  JNIEnv* env = AttachCurrentThread();
+  if (!java_ref_) {
+    java_ref_.Reset(
+        OptimizationGuideBridgeJni::New(env, reinterpret_cast<intptr_t>(this)));
+  }
+  return ScopedJavaLocalRef<JOptimizationGuideBridge>(java_ref_);
 }
 
 void OptimizationGuideBridge::RegisterOptimizationTypes(
-    JNIEnv* env,
-    const JavaParamRef<jintArray>& joptimization_types) {
-  // Convert optimization types to proto.
-  std::vector<int> joptimization_types_vector;
-  JavaIntArrayToIntVector(env, joptimization_types,
-                          &joptimization_types_vector);
-  std::vector<optimization_guide::proto::OptimizationType> optimization_types;
-  for (const int joptimization_type : joptimization_types_vector) {
-    optimization_types.push_back(
-        static_cast<optimization_guide::proto::OptimizationType>(
-            joptimization_type));
-  }
-
+    const std::vector<int32_t>& optimization_types) {
+  base::flat_set<proto::OptimizationType> opt_types_set =
+      ToOptTypesSet(optimization_types);
   optimization_guide_keyed_service_->RegisterOptimizationTypes(
-      optimization_types);
-}
-
-void OptimizationGuideBridge::CanApplyOptimizationAsync(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& java_gurl,
-    jint optimization_type,
-    const JavaParamRef<jobject>& java_callback) {
-  DCHECK(optimization_guide_keyed_service_->GetHintsManager());
-  optimization_guide_keyed_service_->GetHintsManager()
-      ->CanApplyOptimizationAsync(
-          *url::GURLAndroid::ToNativeGURL(env, java_gurl),
-          /*navigation_id=*/absl::nullopt,
-          static_cast<optimization_guide::proto::OptimizationType>(
-              optimization_type),
-          base::BindOnce(&OnOptimizationGuideDecision,
-                         ScopedJavaGlobalRef<jobject>(env, java_callback)));
+      {opt_types_set.begin(), opt_types_set.end()});
 }
 
 void OptimizationGuideBridge::CanApplyOptimization(
     JNIEnv* env,
-    const JavaParamRef<jobject>& java_gurl,
-    jint optimization_type,
-    const JavaParamRef<jobject>& java_callback) {
-  OptimizationMetadata optimization_metadata;
-  optimization_guide::OptimizationGuideDecision decision =
-      optimization_guide_keyed_service_->CanApplyOptimization(
-          *url::GURLAndroid::ToNativeGURL(env, java_gurl),
-          static_cast<optimization_guide::proto::OptimizationType>(
-              optimization_type),
-          &optimization_metadata);
-  OnOptimizationGuideDecision(java_callback, decision, optimization_metadata);
+    const GURL& url,
+    int32_t optimization_type,
+    const JavaRef<jobject>& java_callback) {
+  optimization_guide_keyed_service_->CanApplyOptimization(
+      url,
+      static_cast<optimization_guide::proto::OptimizationType>(
+          optimization_type),
+      base::BindOnce(&OnOptimizationGuideDecision,
+                     ScopedJavaGlobalRef<jobject>(env, java_callback)));
+}
+
+base::android::ScopedJavaLocalRef<jobject>
+OptimizationGuideBridge::CanApplyOptimizationSync(JNIEnv* env,
+                                                  const GURL& url,
+                                                  int32_t optimization_type) {
+  optimization_guide::OptimizationMetadata metadata;
+
+  auto decision = optimization_guide_keyed_service_->CanApplyOptimization(
+      url,
+      static_cast<optimization_guide::proto::OptimizationType>(
+          optimization_type),
+      /* optimization_metadata = */ &metadata);
+
+  return Java_OptimizationGuideBridge_createDecisionWithMetadata(
+      env, static_cast<int>(decision),
+      ToJavaSerializedAnyMetadata(env, metadata));
+}
+
+void OptimizationGuideBridge::CanApplyOptimizationOnDemand(
+    JNIEnv* env,
+    const std::vector<GURL>& urls,
+    const std::vector<int32_t>& optimization_types,
+    int32_t request_context,
+    const JavaRef<jobject>& java_callback,
+    const JavaRef<JArray<int8_t>>& request_context_metadata_serialized) {
+  std::optional<optimization_guide::proto::RequestContextMetadata>
+      request_context_metadata;
+  {
+    jni_zero::JArrayViewCritical<int8_t> serialized_view =
+        request_context_metadata_serialized.CreateViewCritical(env);
+    if (!serialized_view.empty()) {
+      proto::RequestContextMetadata request_context_metadata_deserialized;
+      request_context_metadata_deserialized.ParseFromArray(
+          reinterpret_cast<const uint8_t*>(serialized_view.data()),
+          serialized_view.size());
+      request_context_metadata =
+          std::move(request_context_metadata_deserialized);
+    }
+  }
+
+  optimization_guide_keyed_service_->CanApplyOptimizationOnDemand(
+      urls, ToOptTypesSet(optimization_types),
+      static_cast<proto::RequestContext>(request_context),
+      base::BindRepeating(&OnOnDemandOptimizationGuideDecision,
+                          ScopedJavaGlobalRef<jobject>(env, java_callback)),
+      request_context_metadata);
 }
 
 void OptimizationGuideBridge::OnNewPushNotification(
@@ -244,7 +266,7 @@ void OptimizationGuideBridge::OnNewPushNotification(
   if (!notification.has_hint_key())
     return;
 
-  OptimizationGuideHintsManager* hints_manager =
+  optimization_guide::ChromeHintsManager* hints_manager =
       optimization_guide_keyed_service_->GetHintsManager();
   PushNotificationManager* push_manager =
       hints_manager ? hints_manager->push_notification_manager() : nullptr;
@@ -256,3 +278,5 @@ void OptimizationGuideBridge::OnNewPushNotification(
 
 }  // namespace android
 }  // namespace optimization_guide
+
+DEFINE_JNI(OptimizationGuideBridge)

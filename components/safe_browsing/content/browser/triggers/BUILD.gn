@@ -1,14 +1,13 @@
-# Copyright 2017 The Chromium Authors. All rights reserved.
+# Copyright 2017 The Chromium Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
-
-import("//build/config/features.gni")
 
 source_set("triggers") {
   sources = [
     "trigger_manager.cc",
     "trigger_manager.h",
   ]
+
   public_deps = [
     "//components/security_interstitials/content:security_interstitial_page",
     "//components/security_interstitials/core",
@@ -17,12 +16,13 @@ source_set("triggers") {
   ]
   deps = [
     ":trigger_throttler",
-    "//base:base",
+    "//base",
     "//components/prefs",
     "//components/safe_browsing/content/browser",
     "//components/safe_browsing/core/browser",
     "//components/safe_browsing/core/browser:referrer_chain_provider",
     "//components/safe_browsing/core/common",
+    "//components/safe_browsing/core/common:safe_browsing_prefs",
     "//net",
   ]
 }
@@ -32,6 +32,7 @@ source_set("trigger_throttler") {
     "trigger_throttler.cc",
     "trigger_throttler.h",
   ]
+
   deps = [
     "//base",
     "//components/prefs",
@@ -45,6 +46,7 @@ source_set("trigger_util") {
     "trigger_util.cc",
     "trigger_util.h",
   ]
+
   deps = [
     ":triggers",
     "//content/public/browser",
@@ -56,11 +58,13 @@ source_set("ad_sampler_trigger") {
     "ad_sampler_trigger.cc",
     "ad_sampler_trigger.h",
   ]
+
   deps = [
     ":trigger_throttler",
     ":trigger_util",
     ":triggers",
-    "//base:base",
+    "//base",
+    "//components/safe_browsing/content/browser",
     "//components/safe_browsing/core/browser:referrer_chain_provider",
     "//components/safe_browsing/core/common",
     "//content/public/browser",
@@ -72,16 +76,21 @@ source_set("suspicious_site_trigger") {
     "suspicious_site_trigger.cc",
     "suspicious_site_trigger.h",
   ]
+
+  public_deps = [ "//ui/base/unowned_user_data" ]
+
   deps = [
     ":trigger_throttler",
     ":triggers",
-    "//base:base",
-    "//components/history/core/browser:browser",
-    "//components/prefs:prefs",
+    "//base",
+    "//components/history/core/browser",
+    "//components/prefs",
+    "//components/safe_browsing/content/browser",
     "//components/safe_browsing/core/browser:referrer_chain_provider",
     "//components/safe_browsing/core/common",
+    "//components/tabs:public",
     "//content/public/browser",
-    "//net:net",
+    "//net",
   ]
 }
 
@@ -104,11 +113,13 @@ source_set("unit_tests") {
     "//base/test:test_support",
     "//components/prefs:test_support",
     "//components/safe_browsing/content/browser",
-    "//components/safe_browsing/core/browser:browser",
+    "//components/safe_browsing/core/browser",
     "//components/safe_browsing/core/browser:referrer_chain_provider",
     "//components/safe_browsing/core/common",
     "//components/subresource_filter/content/browser:test_support",
-    "//content/public/browser:browser",
+    "//components/tabs:public",
+    "//components/tabs:test_support",
+    "//content/public/browser",
     "//content/test:test_support",
     "//testing/gmock",
     "//testing/gtest",

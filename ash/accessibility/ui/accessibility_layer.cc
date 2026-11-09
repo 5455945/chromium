@@ -1,15 +1,12 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ash/accessibility/ui/accessibility_layer.h"
 
 #include "ui/aura/window.h"
-#include "ui/compositor/compositor_animation_observer.h"
-#include "ui/compositor/layer.h"
+#include "ui/compositor/layer_textured.h"
 #include "ui/compositor/paint_recorder.h"
-#include "ui/display/display.h"
-#include "ui/display/screen.h"
 #include "ui/gfx/canvas.h"
 
 namespace ui {
@@ -32,7 +29,7 @@ void AccessibilityLayer::Set(aura::Window* root_window,
   layer_rect_ = bounds;
   gfx::Rect layer_bounds = bounds;
   int inset = -(GetInset());
-  layer_bounds.Inset(inset, inset, inset, inset);
+  layer_bounds.Inset(inset);
   CreateOrUpdateLayer(root_window, "AccessibilityLayer", layer_bounds,
                       stack_at_top);
 }
@@ -48,10 +45,6 @@ void AccessibilityLayer::SetSubpixelPositionOffset(
   layer_->SetSubpixelPositionOffset(offset);
 }
 
-bool AccessibilityLayer::CanAnimate() const {
-  return animation_observation_.IsObserving();
-}
-
 void AccessibilityLayer::CreateOrUpdateLayer(aura::Window* root_window,
                                              const char* layer_name,
                                              const gfx::Rect& bounds,
@@ -59,7 +52,7 @@ void AccessibilityLayer::CreateOrUpdateLayer(aura::Window* root_window,
   if (!layer_ || root_window != root_window_) {
     root_window_ = root_window;
     ui::Layer* root_layer = root_window->layer();
-    layer_ = std::make_unique<ui::Layer>(ui::LAYER_TEXTURED);
+    layer_ = std::make_unique<ui::LayerTextured>();
     layer_->SetName(layer_name);
     layer_->SetFillsBoundsOpaquely(false);
     root_layer->Add(layer_.get());
@@ -80,17 +73,6 @@ void AccessibilityLayer::CreateOrUpdateLayer(aura::Window* root_window,
   layer_->SetBounds(bounds);
   gfx::Rect layer_bounds(0, 0, bounds.width(), bounds.height());
   layer_->SchedulePaint(layer_bounds);
-
-  if (NeedToAnimate()) {
-    // Update the animation observer.
-    display::Display display =
-        display::Screen::GetScreen()->GetDisplayMatching(bounds);
-    ui::Compositor* compositor = root_window->layer()->GetCompositor();
-    if (compositor && !animation_observation_.IsObservingSource(compositor)) {
-      animation_observation_.Reset();
-      animation_observation_.Observe(compositor);
-    }
-  }
 }
 
 void AccessibilityLayer::OnDeviceScaleFactorChanged(
@@ -98,16 +80,6 @@ void AccessibilityLayer::OnDeviceScaleFactorChanged(
     float new_device_scale_factor) {
   if (delegate_)
     delegate_->OnDeviceScaleFactorChanged();
-}
-
-void AccessibilityLayer::OnAnimationStep(base::TimeTicks timestamp) {
-  if (delegate_->OnAnimationStep(timestamp))
-    animation_observation_.Reset();
-}
-
-void AccessibilityLayer::OnCompositingShuttingDown(ui::Compositor* compositor) {
-  if (compositor && animation_observation_.IsObservingSource(compositor))
-    animation_observation_.Reset();
 }
 
 }  // namespace ash

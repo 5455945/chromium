@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,16 +7,15 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
-#include "chrome/browser/ash/arc/video/gpu_arc_video_service_host.h"
+#include "base/functional/bind.h"
+#include "chromeos/ash/experiences/arc/video/gpu_arc_video_service_host.h"
 #include "dbus/bus.h"
 #include "dbus/message.h"
-#include "mojo/public/cpp/system/platform_handle.h"
 #include "third_party/cros_system_api/dbus/service_constants.h"
 
-namespace chromeos {
+namespace ash {
 
-LibvdaServiceProvider::LibvdaServiceProvider() {}
+LibvdaServiceProvider::LibvdaServiceProvider() = default;
 
 LibvdaServiceProvider::~LibvdaServiceProvider() = default;
 
@@ -50,9 +49,9 @@ void LibvdaServiceProvider::ProvideMojoConnection(
 void LibvdaServiceProvider::OnBootstrapVideoAcceleratorFactoryCallback(
     dbus::MethodCall* method_call,
     dbus::ExportedObject::ResponseSender response_sender,
-    mojo::ScopedHandle handle,
+    mojo::PlatformHandle handle,
     const std::string& pipe_name) {
-  base::ScopedFD fd = mojo::UnwrapPlatformHandle(std::move(handle)).TakeFD();
+  base::ScopedFD fd = handle.TakeFD();
 
   std::unique_ptr<dbus::Response> response =
       dbus::Response::FromMethodCall(method_call);
@@ -62,4 +61,4 @@ void LibvdaServiceProvider::OnBootstrapVideoAcceleratorFactoryCallback(
   std::move(response_sender).Run(std::move(response));
 }
 
-}  // namespace chromeos
+}  // namespace ash

@@ -1,4 +1,4 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,9 +6,9 @@
 
 #include <memory>
 
-#include "base/bind.h"
-#include "base/callback_helpers.h"
-#include "base/macros.h"
+#include "base/functional/bind.h"
+#include "base/functional/callback_helpers.h"
+#include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/notreached.h"
 #include "base/run_loop.h"
@@ -39,6 +39,8 @@ class PipelineControllerTest : public ::testing::Test, public Pipeline::Client {
       : pipeline_(new StrictMock<MockPipeline>()),
         pipeline_controller_(
             std::unique_ptr<Pipeline>(pipeline_),
+            base::BindRepeating(&PipelineControllerTest::OnStarted,
+                                base::Unretained(this)),
             base::BindRepeating(&PipelineControllerTest::OnSeeked,
                                 base::Unretained(this)),
             base::BindRepeating(&PipelineControllerTest::OnSuspended,
@@ -49,6 +51,9 @@ class PipelineControllerTest : public ::testing::Test, public Pipeline::Client {
                                 base::Unretained(this)),
             base::BindRepeating(&PipelineControllerTest::OnError,
                                 base::Unretained(this))) {}
+
+  PipelineControllerTest(const PipelineControllerTest&) = delete;
+  PipelineControllerTest& operator=(const PipelineControllerTest&) = delete;
 
   ~PipelineControllerTest() override = default;
 
@@ -127,6 +132,8 @@ class PipelineControllerTest : public ::testing::Test, public Pipeline::Client {
   }
 
  protected:
+  void OnStarted(PipelineStatus status) { was_started_ = true; }
+
   void OnSeeked(bool time_updated) {
     was_seeked_ = true;
     last_seeked_time_updated_ = time_updated;
@@ -138,44 +145,51 @@ class PipelineControllerTest : public ::testing::Test, public Pipeline::Client {
 
   // Pipeline::Client overrides
   void OnError(PipelineStatus status) override { NOTREACHED(); }
+  void OnFallback(PipelineStatus status) override { NOTREACHED(); }
   void OnEnded() override {}
   void OnMetadata(const PipelineMetadata& metadata) override {}
   void OnBufferingStateChange(BufferingState state,
                               BufferingStateChangeReason reason) override {}
   void OnDurationChange() override {}
-  void OnAddTextTrack(const TextTrackConfig& config,
-                      AddTextTrackDoneCB done_cb) override {}
   void OnWaiting(WaitingReason reason) override {}
   void OnVideoNaturalSizeChange(const gfx::Size& size) override {}
   void OnAudioConfigChange(const AudioDecoderConfig& config) override {}
   void OnVideoConfigChange(const VideoDecoderConfig& config) override {}
   void OnVideoOpacityChange(bool opaque) override {}
-  void OnVideoFrameRateChange(absl::optional<int>) override {}
+  void OnVideoFrameRateChange(std::optional<int>) override {}
   void OnVideoAverageKeyframeDistanceUpdate() override {}
   void OnAudioPipelineInfoChange(const AudioPipelineInfo& info) override {}
   void OnVideoPipelineInfoChange(const VideoPipelineInfo& info) override {}
 
+  // testing::Test overrides
+  void TearDown() override {
+    pipeline_ = nullptr;
+    testing::Test::TearDown();
+  }
+
   base::test::SingleThreadTaskEnvironment task_environment_;
 
   NiceMock<MockDemuxer> demuxer_;
-  StrictMock<MockPipeline>* pipeline_;
+  // Owned by PipelineController.
+  raw_ptr<StrictMock<MockPipeline>> pipeline_;
   PipelineController pipeline_controller_;
 
+  bool was_started_ = false;
   bool was_seeked_ = false;
   bool last_seeked_time_updated_ = false;
   bool was_suspended_ = false;
   bool was_resuming_ = false;
   bool was_resumed_ = false;
   base::TimeDelta last_resume_time_;
-
-  DISALLOW_COPY_AND_ASSIGN(PipelineControllerTest);
 };
 
 TEST_F(PipelineControllerTest, Startup) {
   PipelineStatusCallback start_cb = StartPipeline();
+  EXPECT_FALSE(was_started_);
   EXPECT_FALSE(was_seeked_);
 
   Complete(std::move(start_cb));
+  EXPECT_TRUE(was_started_);
   EXPECT_TRUE(was_seeked_);
   EXPECT_FALSE(last_seeked_time_updated_);
   EXPECT_FALSE(was_suspended_);
@@ -191,15 +205,15 @@ TEST_F(PipelineControllerTest, StartSuspendedSeekAndResume) {
   Mock::VerifyAndClear(pipeline_);
 
   // Initiate a seek before the pipeline completes suspended startup.
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   EXPECT_CALL(demuxer_, StartWaitingForSeek(seek_time));
   pipeline_controller_.Seek(seek_time, true);
   base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(was_started_);
   EXPECT_FALSE(was_seeked_);
 
   PipelineStatusCallback resume_cb;
-  EXPECT_CALL(*pipeline_, OnResume(_, _))
-      .WillOnce(DoAll(MoveArg<1>(&resume_cb)));
+  EXPECT_CALL(*pipeline_, OnResume(_, _)).WillOnce(MoveArg<1>(&resume_cb));
   EXPECT_CALL(*pipeline_, GetMediaTime())
       .WillRepeatedly(Return(base::TimeDelta()));
 
@@ -207,6 +221,8 @@ TEST_F(PipelineControllerTest, StartSuspendedSeekAndResume) {
   EXPECT_FALSE(pipeline_controller_.IsStable());
   Complete(std::move(start_cb));
 
+  EXPECT_TRUE(was_started_);
+  EXPECT_FALSE(was_seeked_);
   EXPECT_FALSE(pipeline_controller_.IsStable());
   EXPECT_FALSE(pipeline_controller_.IsPipelineSuspended());
   EXPECT_FALSE(pipeline_controller_.IsSuspended());
@@ -232,8 +248,11 @@ TEST_F(PipelineControllerTest, StartSuspendedAndResume) {
   Mock::VerifyAndClear(pipeline_);
   EXPECT_CALL(*pipeline_, IsSuspended()).WillRepeatedly(Return(true));
   EXPECT_FALSE(pipeline_controller_.IsStable());
+  EXPECT_FALSE(was_started_);
   Complete(std::move(start_cb));
+  EXPECT_TRUE(was_started_);
   EXPECT_TRUE(was_seeked_);
+  was_started_ = false;
   was_seeked_ = false;
 
   EXPECT_FALSE(pipeline_controller_.IsStable());
@@ -250,13 +269,17 @@ TEST_F(PipelineControllerTest, StartSuspendedAndResume) {
   EXPECT_TRUE(was_resumed_);
   EXPECT_TRUE(pipeline_controller_.IsStable());
 
-  // |was_seeked_| should not be affected by Suspend()/Resume() at all.
+  // |was_started_|, |was_seeked_| should not be affected by Suspend()/Resume()
+  // at all.
+  EXPECT_FALSE(was_started_);
   EXPECT_FALSE(was_seeked_);
 }
 
 TEST_F(PipelineControllerTest, SuspendResume) {
   Complete(StartPipeline());
+  EXPECT_TRUE(was_started_);
   EXPECT_TRUE(was_seeked_);
+  was_started_ = false;
   was_seeked_ = false;
 
   Complete(SuspendPipeline());
@@ -271,7 +294,9 @@ TEST_F(PipelineControllerTest, SuspendResume) {
   EXPECT_TRUE(was_resumed_);
   EXPECT_TRUE(pipeline_controller_.IsStable());
 
-  // |was_seeked_| should not be affected by Suspend()/Resume() at all.
+  // |was_started_|, |was_seeked_| should not be affected by Suspend()/Resume()
+  // at all.
+  EXPECT_FALSE(was_started_);
   EXPECT_FALSE(was_seeked_);
 }
 
@@ -282,7 +307,7 @@ TEST_F(PipelineControllerTest, Seek) {
   Complete(StartPipeline());
   was_seeked_ = false;
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   EXPECT_CALL(demuxer_, StartWaitingForSeek(seek_time));
   PipelineStatusCallback seek_cb = SeekPipeline(seek_time);
   base::RunLoop().RunUntilIdle();
@@ -297,7 +322,7 @@ TEST_F(PipelineControllerTest, Seek) {
 TEST_F(PipelineControllerTest, DecoderStateLost) {
   Complete(StartPipeline());
 
-  constexpr auto kCurrentMediaTime = base::TimeDelta::FromSeconds(7);
+  constexpr auto kCurrentMediaTime = base::Seconds(7);
   EXPECT_CALL(*pipeline_, GetMediaTime())
       .WillRepeatedly(Return(kCurrentMediaTime));
 
@@ -313,7 +338,7 @@ TEST_F(PipelineControllerTest, DecoderStateLost_DuringPendingSeek) {
   Complete(StartPipeline());
 
   // Create a pending seek.
-  base::TimeDelta kSeekTime = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta kSeekTime = base::Seconds(5);
   EXPECT_CALL(demuxer_, StartWaitingForSeek(kSeekTime));
   PipelineStatusCallback seek_cb = SeekPipeline(kSeekTime);
   base::RunLoop().RunUntilIdle();
@@ -331,7 +356,7 @@ TEST_F(PipelineControllerTest, SuspendResumeTime) {
   Complete(StartPipeline());
   Complete(SuspendPipeline());
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   pipeline_controller_.Seek(seek_time, true);
   base::RunLoop().RunUntilIdle();
 
@@ -343,7 +368,7 @@ TEST_F(PipelineControllerTest, SuspendResumeTime_WithStreamingData) {
   Complete(StartPipeline_WithStreamingData());
   Complete(SuspendPipeline());
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   pipeline_controller_.Seek(seek_time, true);
   base::RunLoop().RunUntilIdle();
 
@@ -355,14 +380,14 @@ TEST_F(PipelineControllerTest, SeekAborted) {
   Complete(StartPipeline());
 
   // Create a first pending seek.
-  base::TimeDelta seek_time_1 = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time_1 = base::Seconds(5);
   EXPECT_CALL(demuxer_, StartWaitingForSeek(seek_time_1));
   PipelineStatusCallback seek_cb_1 = SeekPipeline(seek_time_1);
   base::RunLoop().RunUntilIdle();
   Mock::VerifyAndClear(&demuxer_);
 
   // Create a second seek; the first should be aborted.
-  base::TimeDelta seek_time_2 = base::TimeDelta::FromSeconds(10);
+  base::TimeDelta seek_time_2 = base::Seconds(10);
   EXPECT_CALL(demuxer_, CancelPendingSeek(seek_time_2));
   pipeline_controller_.Seek(seek_time_2, true);
   base::RunLoop().RunUntilIdle();
@@ -377,7 +402,7 @@ TEST_F(PipelineControllerTest, SeekAborted) {
 TEST_F(PipelineControllerTest, PendingSuspend) {
   Complete(StartPipeline());
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   PipelineStatusCallback seek_cb = SeekPipeline(seek_time);
   base::RunLoop().RunUntilIdle();
 
@@ -401,7 +426,7 @@ TEST_F(PipelineControllerTest, SeekMergesWithResume) {
 
   // Request a seek while suspended.
   // It will be a mock failure if pipeline_.Seek() is called.
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   pipeline_controller_.Seek(seek_time, true);
   base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(was_seeked_);
@@ -415,17 +440,17 @@ TEST_F(PipelineControllerTest, SeekMergesWithResume) {
 TEST_F(PipelineControllerTest, SeekMergesWithSeek) {
   Complete(StartPipeline());
 
-  base::TimeDelta seek_time_1 = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time_1 = base::Seconds(5);
   PipelineStatusCallback seek_cb_1 = SeekPipeline(seek_time_1);
   base::RunLoop().RunUntilIdle();
 
   // Request another seek while the first is ongoing.
-  base::TimeDelta seek_time_2 = base::TimeDelta::FromSeconds(10);
+  base::TimeDelta seek_time_2 = base::Seconds(10);
   pipeline_controller_.Seek(seek_time_2, true);
   base::RunLoop().RunUntilIdle();
 
   // Request a third seek. (It should replace the second.)
-  base::TimeDelta seek_time_3 = base::TimeDelta::FromSeconds(15);
+  base::TimeDelta seek_time_3 = base::Seconds(15);
   pipeline_controller_.Seek(seek_time_3, true);
   base::RunLoop().RunUntilIdle();
 
@@ -437,7 +462,7 @@ TEST_F(PipelineControllerTest, SeekMergesWithSeek) {
 TEST_F(PipelineControllerTest, SeekToSeekTimeElided) {
   Complete(StartPipeline());
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   PipelineStatusCallback seek_cb_1 = SeekPipeline(seek_time);
   base::RunLoop().RunUntilIdle();
 
@@ -454,7 +479,7 @@ TEST_F(PipelineControllerTest, SeekToSeekTimeElided) {
 TEST_F(PipelineControllerTest, SeekToSeekTimeNotElided) {
   Complete(StartPipeline_WithDynamicData());
 
-  base::TimeDelta seek_time = base::TimeDelta::FromSeconds(5);
+  base::TimeDelta seek_time = base::Seconds(5);
   PipelineStatusCallback seek_cb_1 = SeekPipeline(seek_time);
   base::RunLoop().RunUntilIdle();
 

@@ -1,4 +1,4 @@
-// Copyright 2019 The Chromium Authors. All rights reserved.
+// Copyright 2019 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,8 +6,8 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/media/router/media_router_feature.h"
 #include "chrome/browser/policy/policy_test_utils.h"
-#include "chrome/browser/ui/browser.h"
-#include "chrome/browser/ui/toolbar/media_router_action_controller.h"
+#include "chrome/browser/ui/toolbar/cast/cast_toolbar_button_controller.h"
+#include "components/media_router/common/pref_names.h"
 #include "components/policy/core/common/policy_map.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
@@ -33,11 +33,11 @@ using MediaRouterEnabledPolicyTest = MediaRouterPolicyTest<true>;
 using MediaRouterDisabledPolicyTest = MediaRouterPolicyTest<false>;
 
 IN_PROC_BROWSER_TEST_F(MediaRouterEnabledPolicyTest, MediaRouterEnabled) {
-  EXPECT_TRUE(media_router::MediaRouterEnabled(browser()->profile()));
+  EXPECT_TRUE(media_router::MediaRouterEnabled(browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaRouterDisabledPolicyTest, MediaRouterDisabled) {
-  EXPECT_FALSE(media_router::MediaRouterEnabled(browser()->profile()));
+  EXPECT_FALSE(media_router::MediaRouterEnabled(browser()->GetProfile()));
 }
 
 template <bool enable>
@@ -58,14 +58,14 @@ using MediaRouterActionDisabledPolicyTest = MediaRouterActionPolicyTest<false>;
 
 IN_PROC_BROWSER_TEST_F(MediaRouterActionEnabledPolicyTest,
                        MediaRouterActionEnabled) {
-  EXPECT_TRUE(
-      MediaRouterActionController::IsActionShownByPolicy(browser()->profile()));
+  EXPECT_TRUE(CastToolbarButtonController::IsActionShownByPolicy(
+      browser()->GetProfile()));
 }
 
 IN_PROC_BROWSER_TEST_F(MediaRouterActionDisabledPolicyTest,
                        MediaRouterActionDisabled) {
-  EXPECT_FALSE(
-      MediaRouterActionController::IsActionShownByPolicy(browser()->profile()));
+  EXPECT_FALSE(CastToolbarButtonController::IsActionShownByPolicy(
+      browser()->GetProfile()));
 }
 
 class MediaRouterCastAllowAllIPsPolicyTest

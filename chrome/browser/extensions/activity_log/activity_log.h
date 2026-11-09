@@ -1,4 +1,4 @@
-// Copyright (c) 2012 The Chromium Authors. All rights reserved.
+// Copyright 2012 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,13 +7,12 @@
 
 #include <stdint.h>
 
-#include <map>
 #include <string>
 #include <vector>
 
-#include "base/callback.h"
+#include "base/functional/callback.h"
 #include "base/gtest_prod_util.h"
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/scoped_observation.h"
 #include "base/threading/thread.h"
@@ -23,7 +22,10 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_registry_observer.h"
 #include "extensions/browser/script_executor.h"
+#include "extensions/buildflags/buildflags.h"
 #include "extensions/common/dom_action_types.h"
+
+static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
 
 class Profile;
 
@@ -51,8 +53,14 @@ class ActivityLog : public BrowserContextKeyedAPI,
   // observer: the activityLogPrivate API.
   class Observer {
    public:
+    virtual ~Observer() = default;
     virtual void OnExtensionActivity(scoped_refptr<Action> activity) = 0;
   };
+
+  explicit ActivityLog(content::BrowserContext* context);
+  ~ActivityLog() override;
+  ActivityLog(const ActivityLog&) = delete;
+  ActivityLog& operator=(const ActivityLog&) = delete;
 
   static BrowserContextKeyedAPIFactory<ActivityLog>* GetFactoryInstance();
 
@@ -65,7 +73,7 @@ class ActivityLog : public BrowserContextKeyedAPI,
                          const ExecutingScriptsMap& extension_ids,
                          const GURL& on_url);
 
-  // Observe tabs.executeScript on the given |executor|.
+  // Observe tabs.executeScript on the given `executor`.
   void ObserveScripts(ScriptExecutor* executor);
 
   // Add/remove observer: the activityLogPrivate API only listens when the
@@ -73,13 +81,30 @@ class ActivityLog : public BrowserContextKeyedAPI,
   void AddObserver(Observer* observer);
   void RemoveObserver(Observer* observer);
 
+  // Controls enterprise telemetry logging.
+  // If enabled, all active renderers are notified to send telemetry
+  // events. The `callback` is stored and invoked for each extension
+  // activity received from a renderer.
+  // If disabled, all active renderers are notified to stop sending
+  // telemetry events and the stored `callback` is cleared.
+  // Note that the `callback` parameter is ignored when `enabled` is
+  // false.
+  using TelemetryCallback =
+      base::RepeatingCallback<void(scoped_refptr<Action>)>;
+  void SetTelemetryLoggingEnabled(bool enabled, TelemetryCallback callback);
+
+  // Returns true if the telemetry service is currently active.
+  bool IsTelemetryLoggingActive() const;
+
   // Logs an extension action: passes it to any installed policy to be logged
   // to the database, to any observers, and logs to the console if in testing
   // mode.
   void LogAction(scoped_refptr<Action> action);
 
   // Returns true if an event for the given extension should be logged.
-  bool ShouldLog(const std::string& extension_id) const;
+  bool ShouldLog(const std::string& extension_id,
+                 Action::ActionType type,
+                 const std::string& api_name) const;
 
   // Gets all actions that match the specified fields. URLs are treated like
   // prefixes; other fields are exact matches. Empty strings are not matched to
@@ -141,9 +166,6 @@ class ActivityLog : public BrowserContextKeyedAPI,
   friend class ActivityLogTest;
   friend class BrowserContextKeyedAPIFactory<ActivityLog>;
 
-  explicit ActivityLog(content::BrowserContext* context);
-  ~ActivityLog() override;
-
   // Specifies if the Watchdog app is active (installed & enabled).
   // If so, we need to log to the database and stream to the API.
   // TODO(kelvinjiang): eliminate this check if possible to simplify logic and
@@ -166,8 +188,8 @@ class ActivityLog : public BrowserContextKeyedAPI,
   void ChooseDatabasePolicy();
   void SetDatabasePolicy(ActivityLogPolicy::PolicyType policy_type);
 
-  // Checks the current |is_active_| state and modifies it if appropriate.
-  // If |use_cached| is true, then this checks the cached_consumer_count_ for
+  // Checks the current `is_active_` state and modifies it if appropriate.
+  // If `use_cached` is true, then this checks the cached_consumer_count_ for
   // whether or not a consumer is active. Otherwise, checks active_consumers_.
   void CheckActive(bool use_cached);
 
@@ -190,12 +212,12 @@ class ActivityLog : public BrowserContextKeyedAPI,
   // The database policy object takes care of recording & looking up data:
   // data summarization, compression, and logging. There should only be a
   // database_policy_ if the Watchdog app is installed or flag is set.
-  ActivityLogDatabasePolicy* database_policy_;
+  raw_ptr<ActivityLogDatabasePolicy, DanglingUntriaged> database_policy_;
   ActivityLogPolicy::PolicyType database_policy_type_;
 
-  Profile* profile_;
+  raw_ptr<Profile> profile_;
 
-  ExtensionSystem* extension_system_;
+  raw_ptr<ExtensionSystem> extension_system_;
 
   bool db_enabled_;  // Whether logging to disk is currently enabled.
   // testing_mode_ controls which policy is selected.
@@ -232,6 +254,12 @@ class ActivityLog : public BrowserContextKeyedAPI,
   // reasons.
   bool is_active_;
 
+  // A callback that is notified of extension activity even if the
+  // standard activity log is inactive.
+  TelemetryCallback telemetry_callback_;
+
+  void NotifyRenderersOfTelemetryLogging();
+
   base::WeakPtrFactory<ActivityLog> weak_factory_{this};
 
   FRIEND_TEST_ALL_PREFIXES(ActivityLogApiTest, TriggerEvent);
@@ -240,7 +268,6 @@ class ActivityLog : public BrowserContextKeyedAPI,
   FRIEND_TEST_ALL_PREFIXES(ActivityLogEnabledTest, NoSwitch);
   FRIEND_TEST_ALL_PREFIXES(ActivityLogEnabledTest, PrefSwitch);
   FRIEND_TEST_ALL_PREFIXES(ActivityLogEnabledTest, WatchdogSwitch);
-  DISALLOW_COPY_AND_ASSIGN(ActivityLog);
 };
 
 template <>

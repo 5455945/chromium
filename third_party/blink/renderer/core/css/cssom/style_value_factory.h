@@ -1,10 +1,11 @@
-// Copyright 2016 The Chromium Authors. All rights reserved.
+// Copyright 2016 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_STYLE_VALUE_FACTORY_H_
 #define THIRD_PARTY_BLINK_RENDERER_CORE_CSS_CSSOM_STYLE_VALUE_FACTORY_H_
 
+#include "third_party/blink/renderer/core/core_export.h"
 #include "third_party/blink/renderer/core/css/css_property_names.h"
 #include "third_party/blink/renderer/core/css/cssom/css_style_value.h"
 #include "third_party/blink/renderer/platform/wtf/allocator/allocator.h"
@@ -16,6 +17,7 @@ class CSSProperty;
 class CSSPropertyName;
 class CSSValue;
 class ExecutionContext;
+class ResourceFetcher;
 class V8UnionCSSStyleValueOrString;
 
 class CORE_EXPORT StyleValueFactory {
@@ -28,9 +30,12 @@ class CORE_EXPORT StyleValueFactory {
       const String&,
       const CSSParserContext*);
   static CSSStyleValue* CssValueToStyleValue(const CSSPropertyName&,
-                                             const CSSValue&);
-  static CSSStyleValueVector CssValueToStyleValueVector(const CSSPropertyName&,
-                                                        const CSSValue&);
+                                             const CSSValue&,
+                                             ResourceFetcher* fetcher);
+  static CSSStyleValueVector CssValueToStyleValueVector(
+      const CSSPropertyName&,
+      const CSSValue&,
+      ResourceFetcher* fetcher);
   // Returns an empty vector on error conditions.
   static CSSStyleValueVector CoerceStyleValuesOrStrings(
       const CSSProperty& property,

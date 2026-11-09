@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -19,7 +19,7 @@ DragEvent::DragEvent(const AtomicString& type,
                      base::TimeTicks platform_time_stamp,
                      SyntheticEventType synthetic_event_type)
     : MouseEvent(type, initializer, platform_time_stamp, synthetic_event_type),
-      data_transfer_(initializer->getDataTransfer()) {}
+      data_transfer_(initializer->dataTransfer()) {}
 
 bool DragEvent::IsDragEvent() const {
   return true;

@@ -1,20 +1,26 @@
 Name: Android SDK bundletool
 Short Name:  bundletool
-Version: 1.4.0
-License: Apache Version 2.0
-License File: NOT_SHIPPED
+Version: N/A
+Revision: DEPS
+Update Mechanism: Autoroll
+License: Apache-2.0
+License File: LICENSE
 Security Critical: No
+Shipped: no
 URL: https://github.com/google/bundletool
 
 Description:
 Bundletool is a tool to manipulate Android App Bundles.
-It is distributed here as a CIPD package. See cipd.yaml for details.
 
 Local Modifications:
 None
 
-Update Instructions:
-1. Download the latest .jar from the GitHub Release page.
-  E.g.: https://github.com/google/bundletool/releases
-2. Look at previous commit to //third_party/android_build_tools/bundletools to
-  see what other files need updating.
+What version is this:
+  * Run print_version.sh to find out the version.
+  * New instances are uploaded by the packager bot:
+    https://ci.chromium.org/p/chromium/builders/ci/3pp-linux-amd64-packager
+  * The bot autoruns every 6 hours. Ping a trooper or a clank-build-core@ dev to
+    trigger it if you need it sooner:
+    https://luci-scheduler.appspot.com/jobs/chromium/3pp-linux-amd64-packager
+  * New versions are rolled automatically by:
+    https://autoroll.skia.org/r/bundletool-chromium

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,23 +6,25 @@
 
 #include <string>
 
-#include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 #include "chrome/browser/ui/test/test_browser_dialog.h"
 #include "content/public/test/browser_test.h"
 
 class ImportLockDialogViewBrowserTest : public DialogBrowserTest {
  public:
-  ImportLockDialogViewBrowserTest() {}
+  ImportLockDialogViewBrowserTest() = default;
+
+  ImportLockDialogViewBrowserTest(const ImportLockDialogViewBrowserTest&) =
+      delete;
+  ImportLockDialogViewBrowserTest& operator=(
+      const ImportLockDialogViewBrowserTest&) = delete;
 
   // DialogBrowserTest:
   void ShowUi(const std::string& name) override {
-    gfx::NativeWindow native_window = browser()->window()->GetNativeWindow();
+    gfx::NativeWindow native_window = browser()->GetWindow()->GetNativeWindow();
     ImportLockDialogView::Show(native_window, base::OnceCallback<void(bool)>());
   }
-
- private:
-  DISALLOW_COPY_AND_ASSIGN(ImportLockDialogViewBrowserTest);
 };
 
 // Invokes a dialog that implores the user to close Firefox before trying to

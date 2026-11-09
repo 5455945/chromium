@@ -1,60 +1,46 @@
 // Protocol Buffers - Google's data interchange format
 // Copyright 2008 Google Inc.  All rights reserved.
-// https://developers.google.com/protocol-buffers/
 //
-// Redistribution and use in source and binary forms, with or without
-// modification, are permitted provided that the following conditions are
-// met:
-//
-//     * Redistributions of source code must retain the above copyright
-// notice, this list of conditions and the following disclaimer.
-//     * Redistributions in binary form must reproduce the above
-// copyright notice, this list of conditions and the following disclaimer
-// in the documentation and/or other materials provided with the
-// distribution.
-//     * Neither the name of Google Inc. nor the names of its
-// contributors may be used to endorse or promote products derived from
-// this software without specific prior written permission.
-//
-// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file or at
+// https://developers.google.com/open-source/licenses/bsd
 
 // Implements the DescriptorPool, which collects all descriptors.
 
-#include <unordered_map>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
+#include "absl/base/const_init.h"
+
+#define PY_SSIZE_T_CLEAN
 #include <Python.h>
 
-#include <google/protobuf/descriptor.pb.h>
-#include <google/protobuf/pyext/descriptor.h>
-#include <google/protobuf/pyext/descriptor_database.h>
-#include <google/protobuf/pyext/descriptor_pool.h>
-#include <google/protobuf/pyext/message.h>
-#include <google/protobuf/pyext/message_factory.h>
-#include <google/protobuf/pyext/scoped_pyobject_ptr.h>
-#include <google/protobuf/stubs/hash.h>
+#include "google/protobuf/descriptor.pb.h"
+#include "absl/container/flat_hash_map.h"
+#include "absl/status/status.h"
+#include "absl/strings/str_cat.h"
+#include "absl/strings/string_view.h"
+#include "google/protobuf/descriptor_database.h"
+#include "google/protobuf/pyext/descriptor.h"
+#include "google/protobuf/pyext/descriptor_database.h"
+#include "google/protobuf/pyext/descriptor_pool.h"
+#include "google/protobuf/pyext/free_threading_mutex.h"
+#include "google/protobuf/pyext/message.h"
+#include "google/protobuf/pyext/message_factory.h"
+#include "google/protobuf/pyext/scoped_pyobject_ptr.h"
 
-#if PY_MAJOR_VERSION >= 3
-  #define PyString_FromStringAndSize PyUnicode_FromStringAndSize
-  #if PY_VERSION_HEX < 0x03030000
-    #error "Python 3.0 - 3.2 are not supported."
-  #endif
-#define PyString_AsStringAndSize(ob, charpp, sizep)                           \
-  (PyUnicode_Check(ob) ? ((*(charpp) = const_cast<char*>(                     \
-                               PyUnicode_AsUTF8AndSize(ob, (sizep)))) == NULL \
-                              ? -1                                            \
-                              : 0)                                            \
-                       : PyBytes_AsStringAndSize(ob, (charpp), (sizep)))
-#endif
+// Must be included last.
+#include "google/protobuf/port_def.inc"
+
+#define PyString_AsStringAndSize(ob, charpp, sizep)              \
+  (PyUnicode_Check(ob)                                           \
+       ? ((*(charpp) = const_cast<char*>(                        \
+               PyUnicode_AsUTF8AndSize(ob, (sizep)))) == nullptr \
+              ? -1                                               \
+              : 0)                                               \
+       : PyBytes_AsStringAndSize(ob, (charpp), (sizep)))
 
 namespace google {
 namespace protobuf {
@@ -62,8 +48,23 @@ namespace python {
 
 // A map to cache Python Pools per C++ pointer.
 // Pointers are not owned here, and belong to the PyDescriptorPool.
-static std::unordered_map<const DescriptorPool*, PyDescriptorPool*>*
+static absl::flat_hash_map<const DescriptorPool*, PyDescriptorPool*>*
     descriptor_pool_map;
+
+static FreeThreadingMutex descriptor_pool_map_mutex(absl::kConstInit);
+
+// Create a shared_ptr to the pool, with a custom deleter that does nothing.
+//
+// This shared pointer does not truly share ownership with the raw pointer:
+// when it's deallocated it will NOT delete the actual pool because of the empty
+// deleter. Furthermore, we cannot guarantee that the underlying raw pointer
+// will outlive surviving copies of this shared_ptr. We only do this to strictly
+// fit the PyDescriptorPool structure without behavior changes.
+static std::shared_ptr<const DescriptorPool> UnsafeSharedPointerFromRaw(
+    const DescriptorPool* ptr) {
+  return std::shared_ptr<const DescriptorPool>(ptr,
+                                               [](const DescriptorPool*) {});
+}
 
 namespace cdescriptor_pool {
 
@@ -73,19 +74,19 @@ class BuildFileErrorCollector : public DescriptorPool::ErrorCollector {
  public:
   BuildFileErrorCollector() : error_message(""), had_errors_(false) {}
 
-  void AddError(const std::string& filename, const std::string& element_name,
-                const Message* descriptor, ErrorLocation location,
-                const std::string& message) override {
+  void RecordError(absl::string_view filename, absl::string_view element_name,
+                   const Message* descriptor, ErrorLocation location,
+                   absl::string_view message) override {
     // Replicates the logging behavior that happens in the C++ implementation
     // when an error collector is not passed in.
     if (!had_errors_) {
-      error_message +=
-          ("Invalid proto descriptor for file \"" + filename + "\":\n");
+      absl::StrAppend(&error_message, "Invalid proto descriptor for file \"",
+                      filename, "\":\n");
       had_errors_ = true;
     }
     // As this only happens on failure and will result in the program not
     // running at all, no effort is made to optimize this string manipulation.
-    error_message += ("  " + element_name + ": " + message + "\n");
+    absl::StrAppend(&error_message, "  ", element_name, ": ", message, "\n");
   }
 
   void Clear() {
@@ -102,23 +103,28 @@ class BuildFileErrorCollector : public DescriptorPool::ErrorCollector {
 // Create a Python DescriptorPool object, but does not fill the "pool"
 // attribute.
 static PyDescriptorPool* _CreateDescriptorPool() {
-  PyDescriptorPool* cpool = PyObject_GC_New(
-      PyDescriptorPool, &PyDescriptorPool_Type);
-  if (cpool == NULL) {
-    return NULL;
+  PyDescriptorPool* cpool =
+      PyObject_GC_New(PyDescriptorPool, &PyDescriptorPool_Type);
+  if (cpool == nullptr) {
+    return nullptr;
   }
 
   cpool->error_collector = nullptr;
-  cpool->underlay = NULL;
-  cpool->database = NULL;
+  cpool->underlay = nullptr;
+  cpool->is_mutable = false;
+  cpool->pool = nullptr;
+  cpool->database = nullptr;
 
-  cpool->descriptor_options = new std::unordered_map<const void*, PyObject*>();
+  cpool->descriptor_options = new absl::flat_hash_map<const void*, PyObject*>();
+  cpool->descriptor_features =
+      new absl::flat_hash_map<const void*, PyObject*>();
+  cpool->cache_mutex = new FreeThreadingMutex();
 
-  cpool->py_message_factory = message_factory::NewMessageFactory(
-      &PyMessageFactory_Type, cpool);
-  if (cpool->py_message_factory == NULL) {
+  cpool->py_message_factory =
+      message_factory::NewMessageFactory(&PyMessageFactory_Type, cpool);
+  if (cpool->py_message_factory == nullptr) {
     Py_DECREF(cpool);
-    return NULL;
+    return nullptr;
   }
 
   PyObject_GC_Track(cpool);
@@ -134,17 +140,22 @@ static PyDescriptorPool* _CreateDescriptorPool() {
 static PyDescriptorPool* PyDescriptorPool_NewWithUnderlay(
     const DescriptorPool* underlay) {
   PyDescriptorPool* cpool = _CreateDescriptorPool();
-  if (cpool == NULL) {
-    return NULL;
+  if (cpool == nullptr) {
+    return nullptr;
   }
-  cpool->pool = new DescriptorPool(underlay);
+  cpool->pool =
+      new std::shared_ptr<const DescriptorPool>(new DescriptorPool(underlay));
+  cpool->is_mutable = true;
   cpool->underlay = underlay;
 
-  if (!descriptor_pool_map->insert(
-      std::make_pair(cpool->pool, cpool)).second) {
-    // Should never happen -- would indicate an internal error / bug.
-    PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
-    return NULL;
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    if (!descriptor_pool_map->insert(std::make_pair(cpool->pool->get(), cpool))
+             .second) {
+      // Should never happen -- would indicate an internal error / bug.
+      PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+      return nullptr;
+    }
   }
 
   return cpool;
@@ -153,55 +164,77 @@ static PyDescriptorPool* PyDescriptorPool_NewWithUnderlay(
 static PyDescriptorPool* PyDescriptorPool_NewWithDatabase(
     DescriptorDatabase* database) {
   PyDescriptorPool* cpool = _CreateDescriptorPool();
-  if (cpool == NULL) {
-    return NULL;
+  if (cpool == nullptr) {
+    return nullptr;
   }
-  if (database != NULL) {
+  std::shared_ptr<DescriptorPool> pool_sp;
+  if (database != nullptr) {
     cpool->error_collector = new BuildFileErrorCollector();
-    cpool->pool = new DescriptorPool(database, cpool->error_collector);
-    cpool->database = database;
+    pool_sp =
+        std::make_shared<DescriptorPool>(database, cpool->error_collector);
+    cpool->is_mutable = false;
+    cpool->database = new std::shared_ptr<const DescriptorDatabase>(database);
   } else {
-    cpool->pool = new DescriptorPool();
+    pool_sp = std::make_shared<DescriptorPool>();
+    cpool->is_mutable = true;
   }
+  cpool->pool = new std::shared_ptr<const DescriptorPool>(pool_sp);
 
-  if (!descriptor_pool_map->insert(std::make_pair(cpool->pool, cpool)).second) {
-    // Should never happen -- would indicate an internal error / bug.
-    PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
-    return NULL;
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    if (!descriptor_pool_map->insert(std::make_pair(cpool->pool->get(), cpool))
+             .second) {
+      // Should never happen -- would indicate an internal error / bug.
+      PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+      return nullptr;
+    }
   }
 
   return cpool;
 }
 
 // The public DescriptorPool constructor.
-static PyObject* New(PyTypeObject* type,
-                     PyObject* args, PyObject* kwargs) {
-  static char* kwlist[] = {"descriptor_db", 0};
-  PyObject* py_database = NULL;
-  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O", kwlist, &py_database)) {
-    return NULL;
+static PyObject* New(PyTypeObject* type, PyObject* args, PyObject* kwargs) {
+  static const char* kwlist[] = {"descriptor_db", nullptr};
+  PyObject* py_database = nullptr;
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|O",
+                                   const_cast<char**>(kwlist), &py_database)) {
+    return nullptr;
   }
-  DescriptorDatabase* database = NULL;
+  DescriptorDatabase* database = nullptr;
   if (py_database && py_database != Py_None) {
     database = new PyDescriptorDatabase(py_database);
   }
-  return reinterpret_cast<PyObject*>(
-      PyDescriptorPool_NewWithDatabase(database));
+  return reinterpret_cast<PyObject*>(PyDescriptorPool_NewWithDatabase(
+      database));
 }
 
 static void Dealloc(PyObject* pself) {
   PyDescriptorPool* self = reinterpret_cast<PyDescriptorPool*>(pself);
-  descriptor_pool_map->erase(self->pool);
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    descriptor_pool_map->erase(self->pool->get());
+  }
   Py_CLEAR(self->py_message_factory);
-  for (std::unordered_map<const void*, PyObject*>::iterator it =
-           self->descriptor_options->begin();
+  for (auto it = self->descriptor_options->begin();
        it != self->descriptor_options->end(); ++it) {
     Py_DECREF(it->second);
   }
   delete self->descriptor_options;
-  delete self->database;
-  delete self->pool;
+  for (auto it = self->descriptor_features->begin();
+       it != self->descriptor_features->end(); ++it) {
+    Py_DECREF(it->second);
+  }
+  delete self->descriptor_features;
+  delete self->cache_mutex;
+  if (self->pool != nullptr) {
+    delete self->pool;
+  }
+  if (self->database != nullptr) {
+    delete self->database;
+  }
   delete self->error_collector;
+  PyObject_GC_UnTrack(pself);
   Py_TYPE(self)->tp_free(pself);
 }
 
@@ -218,33 +251,34 @@ static int GcClear(PyObject* pself) {
 }
 
 PyObject* SetErrorFromCollector(DescriptorPool::ErrorCollector* self,
-                                char* name, char* error_type) {
+                                PyObject* arg, const char* error_type) {
   BuildFileErrorCollector* error_collector =
       reinterpret_cast<BuildFileErrorCollector*>(self);
   if (error_collector && !error_collector->error_message.empty()) {
-    PyErr_Format(PyExc_KeyError, "Couldn't build file for %s %.200s\n%s",
-                 error_type, name, error_collector->error_message.c_str());
+    PyErr_Format(PyExc_KeyError, "Couldn't build file for %s %S\n%s",
+                 error_type, arg, error_collector->error_message.c_str());
     error_collector->Clear();
-    return NULL;
+    return nullptr;
   }
-  PyErr_Format(PyExc_KeyError, "Couldn't find %s %.200s", error_type, name);
-  return NULL;
+  PyErr_Format(PyExc_KeyError, "Couldn't find %s %S", error_type, arg);
+  return nullptr;
 }
 
 static PyObject* FindMessageByName(PyObject* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const Descriptor* message_descriptor =
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindMessageTypeByName(
-          StringParam(name, name_size));
+      reinterpret_cast<PyDescriptorPool*>(self)
+          ->pool->get()
+          ->FindMessageTypeByName(absl::string_view(name, name_size));
 
-  if (message_descriptor == NULL) {
+  if (message_descriptor == nullptr) {
     return SetErrorFromCollector(
-        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, name,
+        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, arg,
         "message");
   }
 
@@ -253,21 +287,19 @@ static PyObject* FindMessageByName(PyObject* self, PyObject* arg) {
 }
 
 
-
-
 static PyObject* FindFileByName(PyObject* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   PyDescriptorPool* py_pool = reinterpret_cast<PyDescriptorPool*>(self);
   const FileDescriptor* file_descriptor =
-      py_pool->pool->FindFileByName(StringParam(name, name_size));
+      py_pool->pool->get()->FindFileByName(absl::string_view(name, name_size));
 
-  if (file_descriptor == NULL) {
-    return SetErrorFromCollector(py_pool->error_collector, name, "file");
+  if (file_descriptor == nullptr) {
+    return SetErrorFromCollector(py_pool->error_collector, arg, "file");
   }
   return PyFileDescriptor_FromDescriptor(file_descriptor);
 }
@@ -276,13 +308,13 @@ PyObject* FindFieldByName(PyDescriptorPool* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const FieldDescriptor* field_descriptor =
-      self->pool->FindFieldByName(StringParam(name, name_size));
-  if (field_descriptor == NULL) {
-    return SetErrorFromCollector(self->error_collector, name, "field");
+      self->pool->get()->FindFieldByName(absl::string_view(name, name_size));
+  if (field_descriptor == nullptr) {
+    return SetErrorFromCollector(self->error_collector, arg, "field");
   }
 
 
@@ -297,14 +329,14 @@ PyObject* FindExtensionByName(PyDescriptorPool* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const FieldDescriptor* field_descriptor =
-      self->pool->FindExtensionByName(StringParam(name, name_size));
-  if (field_descriptor == NULL) {
-    return SetErrorFromCollector(self->error_collector, name,
-                                 "extension field");
+      self->pool->get()->FindExtensionByName(
+          absl::string_view(name, name_size));
+  if (field_descriptor == nullptr) {
+    return SetErrorFromCollector(self->error_collector, arg, "extension field");
   }
 
 
@@ -319,13 +351,13 @@ PyObject* FindEnumTypeByName(PyDescriptorPool* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const EnumDescriptor* enum_descriptor =
-      self->pool->FindEnumTypeByName(StringParam(name, name_size));
-  if (enum_descriptor == NULL) {
-    return SetErrorFromCollector(self->error_collector, name, "enum");
+      self->pool->get()->FindEnumTypeByName(absl::string_view(name, name_size));
+  if (enum_descriptor == nullptr) {
+    return SetErrorFromCollector(self->error_collector, arg, "enum");
   }
 
 
@@ -340,13 +372,13 @@ PyObject* FindOneofByName(PyDescriptorPool* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const OneofDescriptor* oneof_descriptor =
-      self->pool->FindOneofByName(StringParam(name, name_size));
-  if (oneof_descriptor == NULL) {
-    return SetErrorFromCollector(self->error_collector, name, "oneof");
+      self->pool->get()->FindOneofByName(absl::string_view(name, name_size));
+  if (oneof_descriptor == nullptr) {
+    return SetErrorFromCollector(self->error_collector, arg, "oneof");
   }
 
 
@@ -361,15 +393,15 @@ static PyObject* FindServiceByName(PyObject* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const ServiceDescriptor* service_descriptor =
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindServiceByName(
-          StringParam(name, name_size));
-  if (service_descriptor == NULL) {
+      reinterpret_cast<PyDescriptorPool*>(self)->pool->get()->FindServiceByName(
+          absl::string_view(name, name_size));
+  if (service_descriptor == nullptr) {
     return SetErrorFromCollector(
-        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, name,
+        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, arg,
         "service");
   }
 
@@ -381,15 +413,15 @@ static PyObject* FindMethodByName(PyObject* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const MethodDescriptor* method_descriptor =
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindMethodByName(
-          StringParam(name, name_size));
-  if (method_descriptor == NULL) {
+      reinterpret_cast<PyDescriptorPool*>(self)->pool->get()->FindMethodByName(
+          absl::string_view(name, name_size));
+  if (method_descriptor == nullptr) {
     return SetErrorFromCollector(
-        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, name,
+        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, arg,
         "method");
   }
 
@@ -401,15 +433,16 @@ static PyObject* FindFileContainingSymbol(PyObject* self, PyObject* arg) {
   Py_ssize_t name_size;
   char* name;
   if (PyString_AsStringAndSize(arg, &name, &name_size) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   const FileDescriptor* file_descriptor =
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindFileContainingSymbol(
-          StringParam(name, name_size));
-  if (file_descriptor == NULL) {
+      reinterpret_cast<PyDescriptorPool*>(self)
+          ->pool->get()
+          ->FindFileContainingSymbol(absl::string_view(name, name_size));
+  if (file_descriptor == nullptr) {
     return SetErrorFromCollector(
-        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, name,
+        reinterpret_cast<PyDescriptorPool*>(self)->error_collector, arg,
         "symbol");
   }
 
@@ -421,18 +454,19 @@ static PyObject* FindExtensionByNumber(PyObject* self, PyObject* args) {
   PyObject* message_descriptor;
   int number;
   if (!PyArg_ParseTuple(args, "Oi", &message_descriptor, &number)) {
-    return NULL;
+    return nullptr;
   }
-  const Descriptor* descriptor = PyMessageDescriptor_AsDescriptor(
-      message_descriptor);
-  if (descriptor == NULL) {
-    return NULL;
+  const Descriptor* descriptor =
+      PyMessageDescriptor_AsDescriptor(message_descriptor);
+  if (descriptor == nullptr) {
+    return nullptr;
   }
 
   const FieldDescriptor* extension_descriptor =
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindExtensionByNumber(
-          descriptor, number);
-  if (extension_descriptor == NULL) {
+      reinterpret_cast<PyDescriptorPool*>(self)
+          ->pool->get()
+          ->FindExtensionByNumber(descriptor, number);
+  if (extension_descriptor == nullptr) {
     BuildFileErrorCollector* error_collector =
         reinterpret_cast<BuildFileErrorCollector*>(
             reinterpret_cast<PyDescriptorPool*>(self)->error_collector);
@@ -440,10 +474,10 @@ static PyObject* FindExtensionByNumber(PyObject* self, PyObject* args) {
       PyErr_Format(PyExc_KeyError, "Couldn't build file for Extension %.d\n%s",
                    number, error_collector->error_message.c_str());
       error_collector->Clear();
-      return NULL;
+      return nullptr;
     }
     PyErr_Format(PyExc_KeyError, "Couldn't find Extension %d", number);
-    return NULL;
+    return nullptr;
   }
 
 
@@ -452,120 +486,26 @@ static PyObject* FindExtensionByNumber(PyObject* self, PyObject* args) {
 
 static PyObject* FindAllExtensions(PyObject* self, PyObject* arg) {
   const Descriptor* descriptor = PyMessageDescriptor_AsDescriptor(arg);
-  if (descriptor == NULL) {
-    return NULL;
+  if (descriptor == nullptr) {
+    return nullptr;
   }
 
   std::vector<const FieldDescriptor*> extensions;
-  reinterpret_cast<PyDescriptorPool*>(self)->pool->FindAllExtensions(
+  reinterpret_cast<PyDescriptorPool*>(self)->pool->get()->FindAllExtensions(
       descriptor, &extensions);
 
   ScopedPyObjectPtr result(PyList_New(extensions.size()));
-  if (result == NULL) {
-    return NULL;
+  if (result == nullptr) {
+    return nullptr;
   }
   for (int i = 0; i < extensions.size(); i++) {
     PyObject* extension = PyFieldDescriptor_FromDescriptor(extensions[i]);
-    if (extension == NULL) {
-      return NULL;
+    if (extension == nullptr) {
+      return nullptr;
     }
     PyList_SET_ITEM(result.get(), i, extension);  // Steals the reference.
   }
   return result.release();
-}
-
-// These functions should not exist -- the only valid way to create
-// descriptors is to call Add() or AddSerializedFile().
-// But these AddDescriptor() functions were created in Python and some people
-// call them, so we support them for now for compatibility.
-// However we do check that the existing descriptor already exists in the pool,
-// which appears to always be true for existing calls -- but then why do people
-// call a function that will just be a no-op?
-// TODO(amauryfa): Need to investigate further.
-
-static PyObject* AddFileDescriptor(PyObject* self, PyObject* descriptor) {
-  const FileDescriptor* file_descriptor =
-      PyFileDescriptor_AsDescriptor(descriptor);
-  if (!file_descriptor) {
-    return NULL;
-  }
-  if (file_descriptor !=
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindFileByName(
-          file_descriptor->name())) {
-    PyErr_Format(PyExc_ValueError,
-                 "The file descriptor %s does not belong to this pool",
-                 file_descriptor->name().c_str());
-    return NULL;
-  }
-  Py_RETURN_NONE;
-}
-
-static PyObject* AddDescriptor(PyObject* self, PyObject* descriptor) {
-  const Descriptor* message_descriptor =
-      PyMessageDescriptor_AsDescriptor(descriptor);
-  if (!message_descriptor) {
-    return NULL;
-  }
-  if (message_descriptor !=
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindMessageTypeByName(
-          message_descriptor->full_name())) {
-    PyErr_Format(PyExc_ValueError,
-                 "The message descriptor %s does not belong to this pool",
-                 message_descriptor->full_name().c_str());
-    return NULL;
-  }
-  Py_RETURN_NONE;
-}
-
-static PyObject* AddEnumDescriptor(PyObject* self, PyObject* descriptor) {
-  const EnumDescriptor* enum_descriptor =
-      PyEnumDescriptor_AsDescriptor(descriptor);
-  if (!enum_descriptor) {
-    return NULL;
-  }
-  if (enum_descriptor !=
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindEnumTypeByName(
-          enum_descriptor->full_name())) {
-    PyErr_Format(PyExc_ValueError,
-                 "The enum descriptor %s does not belong to this pool",
-                 enum_descriptor->full_name().c_str());
-    return NULL;
-  }
-  Py_RETURN_NONE;
-}
-
-static PyObject* AddExtensionDescriptor(PyObject* self, PyObject* descriptor) {
-  const FieldDescriptor* extension_descriptor =
-      PyFieldDescriptor_AsDescriptor(descriptor);
-  if (!extension_descriptor) {
-    return NULL;
-  }
-  if (extension_descriptor !=
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindExtensionByName(
-          extension_descriptor->full_name())) {
-    PyErr_Format(PyExc_ValueError,
-                 "The extension descriptor %s does not belong to this pool",
-                 extension_descriptor->full_name().c_str());
-    return NULL;
-  }
-  Py_RETURN_NONE;
-}
-
-static PyObject* AddServiceDescriptor(PyObject* self, PyObject* descriptor) {
-  const ServiceDescriptor* service_descriptor =
-      PyServiceDescriptor_AsDescriptor(descriptor);
-  if (!service_descriptor) {
-    return NULL;
-  }
-  if (service_descriptor !=
-      reinterpret_cast<PyDescriptorPool*>(self)->pool->FindServiceByName(
-          service_descriptor->full_name())) {
-    PyErr_Format(PyExc_ValueError,
-                 "The service descriptor %s does not belong to this pool",
-                 service_descriptor->full_name().c_str());
-    return NULL;
-  }
-  Py_RETURN_NONE;
 }
 
 // The code below loads new Descriptors from a serialized FileDescriptorProto.
@@ -574,199 +514,354 @@ static PyObject* AddSerializedFile(PyObject* pself, PyObject* serialized_pb) {
   char* message_type;
   Py_ssize_t message_len;
 
-  if (self->database != NULL) {
+  if (self->database != nullptr) {
     PyErr_SetString(
         PyExc_ValueError,
         "Cannot call Add on a DescriptorPool that uses a DescriptorDatabase. "
         "Add your file to the underlying database.");
-    return NULL;
+    return nullptr;
+  }
+  if (!self->is_mutable) {
+    PyErr_SetString(
+        PyExc_ValueError,
+        "This DescriptorPool is not mutable and cannot add new definitions.");
+    return nullptr;
   }
 
   if (PyBytes_AsStringAndSize(serialized_pb, &message_type, &message_len) < 0) {
-    return NULL;
+    return nullptr;
   }
 
   FileDescriptorProto file_proto;
-  if (!file_proto.ParseFromArray(message_type, message_len)) {
+  if (!file_proto.ParseFromString(
+          absl::string_view(message_type, message_len))) {
     PyErr_SetString(PyExc_TypeError, "Couldn't parse file content!");
-    return NULL;
+    return nullptr;
   }
 
   // If the file was already part of a C++ library, all its descriptors are in
   // the underlying pool.  No need to do anything else.
-  const FileDescriptor* generated_file = NULL;
+  const FileDescriptor* generated_file = nullptr;
   if (self->underlay) {
     generated_file = self->underlay->FindFileByName(file_proto.name());
   }
-  if (generated_file != NULL) {
-    return PyFileDescriptor_FromDescriptorWithSerializedPb(
-        generated_file, serialized_pb);
+  if (generated_file != nullptr) {
+    return PyFileDescriptor_FromDescriptorWithSerializedPb(generated_file,
+                                                           serialized_pb);
   }
 
   BuildFileErrorCollector error_collector;
   const FileDescriptor* descriptor =
-      self->pool->BuildFileCollectingErrors(file_proto,
-                                            &error_collector);
-  if (descriptor == NULL) {
+      // Pool is mutable, we can remove the "const".
+      const_cast<DescriptorPool*>(self->pool->get())
+          ->BuildFileCollectingErrors(file_proto, &error_collector);
+  if (descriptor == nullptr) {
     PyErr_Format(PyExc_TypeError,
                  "Couldn't build proto file into descriptor pool!\n%s",
                  error_collector.error_message.c_str());
-    return NULL;
+    return nullptr;
   }
 
-  return PyFileDescriptor_FromDescriptorWithSerializedPb(
-      descriptor, serialized_pb);
+
+  return PyFileDescriptor_FromDescriptorWithSerializedPb(descriptor,
+                                                         serialized_pb);
 }
 
 static PyObject* Add(PyObject* self, PyObject* file_descriptor_proto) {
   ScopedPyObjectPtr serialized_pb(
-      PyObject_CallMethod(file_descriptor_proto, "SerializeToString", NULL));
-  if (serialized_pb == NULL) {
-    return NULL;
+      PyObject_CallMethod(file_descriptor_proto, "SerializeToString", nullptr));
+  if (serialized_pb == nullptr) {
+    return nullptr;
   }
   return AddSerializedFile(self, serialized_pb.get());
 }
 
+static PyObject* SetFeatureSetDefaults(PyObject* pself, PyObject* pdefaults) {
+  PyDescriptorPool* self = reinterpret_cast<PyDescriptorPool*>(pself);
+
+  if (!self->is_mutable) {
+    PyErr_SetString(
+        PyExc_RuntimeError,
+        "This DescriptorPool is not mutable and cannot add new definitions.");
+    return nullptr;
+  }
+
+  if (!PyObject_TypeCheck(pdefaults, CMessage_Type)) {
+    PyErr_Format(PyExc_TypeError,
+                 "SetFeatureSetDefaults called with invalid type: got %s.",
+                 Py_TYPE(pdefaults)->tp_name);
+    return nullptr;
+  }
+
+  CMessage* defaults = reinterpret_cast<CMessage*>(pdefaults);
+  if (defaults->message->GetDescriptor() !=
+      FeatureSetDefaults::GetDescriptor()) {
+    PyErr_Format(
+        PyExc_TypeError,
+        "SetFeatureSetDefaults called with invalid type: "
+        " got %s.",
+        std::string(defaults->message->GetDescriptor()->full_name()).c_str());
+    return nullptr;
+  }
+
+  absl::Status status =
+      const_cast<DescriptorPool*>(self->pool->get())
+          ->SetFeatureSetDefaults(
+              *reinterpret_cast<const FeatureSetDefaults*>(defaults->message));
+  if (!status.ok()) {
+    PyErr_SetString(PyExc_ValueError, std::string(status.message()).c_str());
+    return nullptr;
+  }
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef Methods[] = {
-  { "Add", Add, METH_O,
-    "Adds the FileDescriptorProto and its types to this pool." },
-  { "AddSerializedFile", AddSerializedFile, METH_O,
-    "Adds a serialized FileDescriptorProto to this pool." },
+    {"Add", Add, METH_O,
+     "Adds the FileDescriptorProto and its types to this pool."},
+    {"AddSerializedFile", AddSerializedFile, METH_O,
+     "Adds a serialized FileDescriptorProto to this pool."},
+    {"SetFeatureSetDefaults", SetFeatureSetDefaults, METH_O,
+     "Sets the default feature mappings used during the build."},
 
-  // TODO(amauryfa): Understand why the Python implementation differs from
-  // this one, ask users to use another API and deprecate these functions.
-  { "AddFileDescriptor", AddFileDescriptor, METH_O,
-    "No-op. Add() must have been called before." },
-  { "AddDescriptor", AddDescriptor, METH_O,
-    "No-op. Add() must have been called before." },
-  { "AddEnumDescriptor", AddEnumDescriptor, METH_O,
-    "No-op. Add() must have been called before." },
-  { "AddExtensionDescriptor", AddExtensionDescriptor, METH_O,
-    "No-op. Add() must have been called before." },
-  { "AddServiceDescriptor", AddServiceDescriptor, METH_O,
-    "No-op. Add() must have been called before." },
+    {"FindFileByName", FindFileByName, METH_O,
+     "Searches for a file descriptor by its .proto name."},
+    {"FindMessageTypeByName", FindMessageByName, METH_O,
+     "Searches for a message descriptor by full name."},
+    {"FindFieldByName", FindFieldByNameMethod, METH_O,
+     "Searches for a field descriptor by full name."},
+    {"FindExtensionByName", FindExtensionByNameMethod, METH_O,
+     "Searches for extension descriptor by full name."},
+    {"FindEnumTypeByName", FindEnumTypeByNameMethod, METH_O,
+     "Searches for enum type descriptor by full name."},
+    {"FindOneofByName", FindOneofByNameMethod, METH_O,
+     "Searches for oneof descriptor by full name."},
+    {"FindServiceByName", FindServiceByName, METH_O,
+     "Searches for service descriptor by full name."},
+    {"FindMethodByName", FindMethodByName, METH_O,
+     "Searches for method descriptor by full name."},
 
-  { "FindFileByName", FindFileByName, METH_O,
-    "Searches for a file descriptor by its .proto name." },
-  { "FindMessageTypeByName", FindMessageByName, METH_O,
-    "Searches for a message descriptor by full name." },
-  { "FindFieldByName", FindFieldByNameMethod, METH_O,
-    "Searches for a field descriptor by full name." },
-  { "FindExtensionByName", FindExtensionByNameMethod, METH_O,
-    "Searches for extension descriptor by full name." },
-  { "FindEnumTypeByName", FindEnumTypeByNameMethod, METH_O,
-    "Searches for enum type descriptor by full name." },
-  { "FindOneofByName", FindOneofByNameMethod, METH_O,
-    "Searches for oneof descriptor by full name." },
-  { "FindServiceByName", FindServiceByName, METH_O,
-    "Searches for service descriptor by full name." },
-  { "FindMethodByName", FindMethodByName, METH_O,
-    "Searches for method descriptor by full name." },
-
-  { "FindFileContainingSymbol", FindFileContainingSymbol, METH_O,
-    "Gets the FileDescriptor containing the specified symbol." },
-  { "FindExtensionByNumber", FindExtensionByNumber, METH_VARARGS,
-    "Gets the extension descriptor for the given number." },
-  { "FindAllExtensions", FindAllExtensions, METH_O,
-    "Gets all known extensions of the given message descriptor." },
-  {NULL}
+    {"FindFileContainingSymbol", FindFileContainingSymbol, METH_O,
+     "Gets the FileDescriptor containing the specified symbol."},
+    {"FindExtensionByNumber", FindExtensionByNumber, METH_VARARGS,
+     "Gets the extension descriptor for the given number."},
+    {"FindAllExtensions", FindAllExtensions, METH_O,
+     "Gets all known extensions of the given message descriptor."},
+    {nullptr},
 };
 
 }  // namespace cdescriptor_pool
 
 PyTypeObject PyDescriptorPool_Type = {
     PyVarObject_HEAD_INIT(&PyType_Type, 0) FULL_MODULE_NAME
-    ".DescriptorPool",                        // tp_name
-    sizeof(PyDescriptorPool),                 // tp_basicsize
-    0,                                        // tp_itemsize
-    cdescriptor_pool::Dealloc,                // tp_dealloc
-    0,                                        // tp_print
-    0,                                        // tp_getattr
-    0,                                        // tp_setattr
-    0,                                        // tp_compare
-    0,                                        // tp_repr
-    0,                                        // tp_as_number
-    0,                                        // tp_as_sequence
-    0,                                        // tp_as_mapping
-    0,                                        // tp_hash
-    0,                                        // tp_call
-    0,                                        // tp_str
-    0,                                        // tp_getattro
-    0,                                        // tp_setattro
-    0,                                        // tp_as_buffer
+    ".DescriptorPool",          // tp_name
+    sizeof(PyDescriptorPool),   // tp_basicsize
+    0,                          // tp_itemsize
+    cdescriptor_pool::Dealloc,  // tp_dealloc
+#if PY_VERSION_HEX < 0x03080000
+    nullptr,  // tp_print
+#else
+    0,  // tp_vectorcall_offset
+#endif
+    nullptr,                                  // tp_getattr
+    nullptr,                                  // tp_setattr
+    nullptr,                                  // tp_compare
+    nullptr,                                  // tp_repr
+    nullptr,                                  // tp_as_number
+    nullptr,                                  // tp_as_sequence
+    nullptr,                                  // tp_as_mapping
+    nullptr,                                  // tp_hash
+    nullptr,                                  // tp_call
+    nullptr,                                  // tp_str
+    nullptr,                                  // tp_getattro
+    nullptr,                                  // tp_setattro
+    nullptr,                                  // tp_as_buffer
     Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,  // tp_flags
     "A Descriptor Pool",                      // tp_doc
     cdescriptor_pool::GcTraverse,             // tp_traverse
     cdescriptor_pool::GcClear,                // tp_clear
-    0,                                        // tp_richcompare
+    nullptr,                                  // tp_richcompare
     0,                                        // tp_weaklistoffset
-    0,                                        // tp_iter
-    0,                                        // tp_iternext
+    nullptr,                                  // tp_iter
+    nullptr,                                  // tp_iternext
     cdescriptor_pool::Methods,                // tp_methods
-    0,                                        // tp_members
-    0,                                        // tp_getset
-    0,                                        // tp_base
-    0,                                        // tp_dict
-    0,                                        // tp_descr_get
-    0,                                        // tp_descr_set
+    nullptr,                                  // tp_members
+    nullptr,                                  // tp_getset
+    nullptr,                                  // tp_base
+    nullptr,                                  // tp_dict
+    nullptr,                                  // tp_descr_get
+    nullptr,                                  // tp_descr_set
     0,                                        // tp_dictoffset
-    0,                                        // tp_init
-    0,                                        // tp_alloc
+    nullptr,                                  // tp_init
+    nullptr,                                  // tp_alloc
     cdescriptor_pool::New,                    // tp_new
     PyObject_GC_Del,                          // tp_free
 };
 
 // This is the DescriptorPool which contains all the definitions from the
 // generated _pb2.py modules.
-static PyDescriptorPool* python_generated_pool = NULL;
+static PyDescriptorPool* python_generated_pool = nullptr;
 
 bool InitDescriptorPool() {
-  if (PyType_Ready(&PyDescriptorPool_Type) < 0)
-    return false;
+  if (PyType_Ready(&PyDescriptorPool_Type) < 0) return false;
 
   // The Pool of messages declared in Python libraries.
   // generated_pool() contains all messages already linked in C++ libraries, and
   // is used as underlay.
   descriptor_pool_map =
-      new std::unordered_map<const DescriptorPool*, PyDescriptorPool*>;
+      new absl::flat_hash_map<const DescriptorPool*, PyDescriptorPool*>;
   python_generated_pool = cdescriptor_pool::PyDescriptorPool_NewWithUnderlay(
       DescriptorPool::generated_pool());
-  if (python_generated_pool == NULL) {
+  if (python_generated_pool == nullptr) {
     delete descriptor_pool_map;
     return false;
   }
 
   // Register this pool to be found for C++-generated descriptors.
   descriptor_pool_map->insert(
-      std::make_pair(DescriptorPool::generated_pool(),
-                     python_generated_pool));
-
+      std::make_pair(DescriptorPool::generated_pool(), python_generated_pool));
   return true;
 }
 
 // The default DescriptorPool used everywhere in this module.
 // Today it's the python_generated_pool.
-// TODO(amauryfa): Remove all usages of this function: the pool should be
+// TODO: Remove all usages of this function: the pool should be
 // derived from the context.
-PyDescriptorPool* GetDefaultDescriptorPool() {
-  return python_generated_pool;
-}
+PyDescriptorPool* GetDefaultDescriptorPool() { return python_generated_pool; }
 
 PyDescriptorPool* GetDescriptorPool_FromPool(const DescriptorPool* pool) {
   // Fast path for standard descriptors.
-  if (pool == python_generated_pool->pool ||
+  if (pool == python_generated_pool->pool->get() ||
       pool == DescriptorPool::generated_pool()) {
     return python_generated_pool;
   }
-  std::unordered_map<const DescriptorPool*, PyDescriptorPool*>::iterator it =
-      descriptor_pool_map->find(pool);
+  FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+  auto it = descriptor_pool_map->find(pool);
   if (it == descriptor_pool_map->end()) {
     PyErr_SetString(PyExc_KeyError, "Unknown descriptor pool");
-    return NULL;
+    return nullptr;
   }
   return it->second;
+}
+
+PyObject* PyDescriptorPool_FromPool(const DescriptorPool* pool) {
+  PyDescriptorPool* existing_pool = GetDescriptorPool_FromPool(pool);
+  if (existing_pool != nullptr) {
+    Py_INCREF(existing_pool);
+    return reinterpret_cast<PyObject*>(existing_pool);
+  } else {
+    PyErr_Clear();
+  }
+
+  PyDescriptorPool* cpool = cdescriptor_pool::_CreateDescriptorPool();
+  if (cpool == nullptr) {
+    return nullptr;
+  }
+  cpool->pool = new std::shared_ptr<const DescriptorPool>(
+      UnsafeSharedPointerFromRaw(pool));
+  cpool->is_mutable = false;
+  cpool->underlay = nullptr;
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    if (!descriptor_pool_map->insert(std::make_pair(cpool->pool->get(), cpool))
+             .second) {
+      // Should never happen -- We already checked the existence above.
+      PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+      return nullptr;
+    }
+  }
+
+  return reinterpret_cast<PyObject*>(cpool);
+}
+
+PyObject* PyDescriptorPool_FromSharedPool(
+    std::shared_ptr<const DescriptorPool> pool,
+    std::shared_ptr<const DescriptorDatabase> database) {
+  if (pool == nullptr) {
+    PyErr_SetString(PyExc_ValueError, "DescriptorPool is null");
+    return nullptr;
+  }
+  PyDescriptorPool* existing_pool = GetDescriptorPool_FromPool(pool.get());
+  if (existing_pool != nullptr) {
+    Py_INCREF(existing_pool);
+    return reinterpret_cast<PyObject*>(existing_pool);
+  } else {
+    PyErr_Clear();
+  }
+
+  PyDescriptorPool* cpool = cdescriptor_pool::_CreateDescriptorPool();
+  if (cpool == nullptr) {
+    return nullptr;
+  }
+  cpool->pool = new std::shared_ptr<const DescriptorPool>(pool);
+  if (database != nullptr) {
+    cpool->database = new std::shared_ptr<const DescriptorDatabase>(database);
+  }
+  cpool->is_mutable = false;
+  cpool->underlay = nullptr;
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    if (!descriptor_pool_map->insert(std::make_pair(cpool->pool->get(), cpool))
+             .second) {
+      PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+      return nullptr;
+    }
+  }
+
+  return reinterpret_cast<PyObject*>(cpool);
+}
+
+PyObject* PyDescriptorPool_FromPool(
+    std::unique_ptr<const google::protobuf::DescriptorPool> pool,
+    std::unique_ptr<const google::protobuf::DescriptorDatabase> database) {
+  if (pool == nullptr) {
+    PyErr_SetString(PyExc_ValueError, "DescriptorPool is null");
+    return nullptr;
+  }
+  // There should not be any Python-side pool for this C++ object.
+  PyDescriptorPool* existing_pool = GetDescriptorPool_FromPool(pool.get());
+  if (existing_pool != nullptr) {
+    PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+    return nullptr;
+  } else {
+    PyErr_Clear();
+  }
+
+  PyDescriptorPool* cpool = cdescriptor_pool::_CreateDescriptorPool();
+  if (cpool == nullptr) {
+    return nullptr;
+  }
+  cpool->pool = new std::shared_ptr<const DescriptorPool>(std::move(pool));
+  if (database != nullptr) {
+    cpool->database =
+        new std::shared_ptr<const DescriptorDatabase>(std::move(database));
+  }
+  cpool->is_mutable = false;
+  cpool->underlay = nullptr;
+
+  {
+    FreeThreadingLockGuard lock(descriptor_pool_map_mutex);
+    if (!descriptor_pool_map->insert(std::make_pair(cpool->pool->get(), cpool))
+             .second) {
+      // Should never happen -- We already checked the existence above.
+      PyErr_SetString(PyExc_ValueError, "DescriptorPool already registered");
+      return nullptr;
+    }
+  }
+
+  return reinterpret_cast<PyObject*>(cpool);
+}
+
+const DescriptorPool* PyDescriptorPool_AsPool(PyObject* pool) {
+  if (!PyObject_TypeCheck(pool, &PyDescriptorPool_Type)) {
+    PyErr_SetString(PyExc_TypeError, "Not a DescriptorPool");
+    return nullptr;
+  }
+  PyDescriptorPool* cpool = reinterpret_cast<PyDescriptorPool*>(pool);
+  return cpool->pool != nullptr ? cpool->pool->get() : nullptr;
 }
 
 }  // namespace python
 }  // namespace protobuf
 }  // namespace google
+
+#include "google/protobuf/port_undef.inc"

@@ -1,4 +1,4 @@
-// Copyright 2017 The Chromium Authors. All rights reserved.
+// Copyright 2017 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -10,6 +10,10 @@
 #include "cc/layers/surface_layer.h"
 #include "components/viz/common/surfaces/surface_id.h"
 #include "third_party/blink/public/platform/web_common.h"
+
+namespace viz {
+class FrameSinkId;
+}
 
 namespace blink {
 
@@ -32,12 +36,9 @@ class BLINK_PLATFORM_EXPORT WebSurfaceLayerBridgeObserver {
 // Maintains and exposes the SurfaceLayer.
 class BLINK_PLATFORM_EXPORT WebSurfaceLayerBridge {
  public:
-  enum class ContainsVideo { kYes, kNo };
-
   // |parent_frame_sink_id| identifies the local root widget's FrameSinkId.
   static std::unique_ptr<WebSurfaceLayerBridge> Create(
       viz::FrameSinkId parent_frame_sink_id,
-      ContainsVideo contains_video,
       WebSurfaceLayerBridgeObserver*,
       cc::UpdateSubmissionStateCB);
   virtual ~WebSurfaceLayerBridge();
@@ -47,6 +48,10 @@ class BLINK_PLATFORM_EXPORT WebSurfaceLayerBridge {
   virtual void SetContentsOpaque(bool) = 0;
   virtual void CreateSurfaceLayer() = 0;
   virtual void ClearObserver() = 0;
+  virtual void RegisterFrameSinkHierarchy() = 0;
+  virtual void UnregisterFrameSinkHierarchy() = 0;
+  virtual void ReparentFrameSinkHierarchy(
+      const viz::FrameSinkId& new_parent_frame_sink_id) = 0;
 };
 
 }  // namespace blink

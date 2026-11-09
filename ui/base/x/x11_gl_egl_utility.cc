@@ -1,10 +1,13 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #include "ui/base/x/x11_gl_egl_utility.h"
 
+#include <algorithm>
+
 #include "ui/base/x/x11_util.h"
+#include "ui/gfx/x/visual_manager.h"
 #include "ui/gl/gl_surface_egl.h"
 
 #ifndef EGL_ANGLE_x11_visual
@@ -39,25 +42,33 @@ namespace ui {
 
 void GetPlatformExtraDisplayAttribs(EGLenum platform_type,
                                     std::vector<EGLAttrib>* attributes) {
-  attributes->push_back(EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
-  attributes->push_back(EGL_PLATFORM_X11_EXT);
+  // ANGLE_NULL and SwiftShader backends don't use the visual,
+  // and may run without X11 where we can't get it anyway.
+  if ((platform_type != EGL_PLATFORM_ANGLE_TYPE_NULL_ANGLE) &&
+      !std::ranges::contains(
+          *attributes, EGL_PLATFORM_ANGLE_DEVICE_TYPE_SWIFTSHADER_ANGLE)) {
+    x11::VisualId visual_id;
+    x11::Connection::Get()->GetOrCreateVisualManager().ChooseVisualForWindow(
+        true, &visual_id, nullptr, nullptr, nullptr);
+    attributes->push_back(EGL_X11_VISUAL_ID_ANGLE);
+    attributes->push_back(static_cast<EGLAttrib>(visual_id));
+    attributes->push_back(EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE);
+    attributes->push_back(EGL_PLATFORM_X11_EXT);
+  }
 }
 
 void ChoosePlatformCustomAlphaAndBufferSize(EGLint* alpha_size,
                                             EGLint* buffer_size) {
   // If we're using ANGLE_NULL, we may not have a display, in which case we
   // can't use XVisualManager.
-  if (gl::GLSurfaceEGL::GetNativeDisplay() != EGL_DEFAULT_DISPLAY) {
+  if (gl::GLSurfaceEGL::GetGLDisplayEGL()->GetNativeDisplay().GetDisplay() !=
+      EGL_DEFAULT_DISPLAY) {
     uint8_t depth;
-    XVisualManager::GetInstance()->ChooseVisualForWindow(true, nullptr, &depth,
-                                                         nullptr, nullptr);
+    x11::Connection::Get()->GetOrCreateVisualManager().ChooseVisualForWindow(
+        true, nullptr, &depth, nullptr, nullptr);
     *buffer_size = depth;
     *alpha_size = *buffer_size == 32 ? 8 : 0;
   }
-}
-
-bool IsTransparentBackgroundSupported() {
-  return ui::XVisualManager::GetInstance()->ArgbVisualAvailable();
 }
 
 }  // namespace ui

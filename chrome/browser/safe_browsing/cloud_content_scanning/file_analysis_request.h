@@ -1,62 +1,60 @@
-// Copyright (c) 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef CHROME_BROWSER_SAFE_BROWSING_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_H_
 #define CHROME_BROWSER_SAFE_BROWSING_CLOUD_CONTENT_SCANNING_FILE_ANALYSIS_REQUEST_H_
 
-#include "base/feature_list.h"
-#include "chrome/browser/enterprise/connectors/common.h"
-#include "chrome/browser/safe_browsing/cloud_content_scanning/binary_upload_service.h"
+#include "base/functional/callback_helpers.h"
+#include "components/enterprise/connectors/core/cloud_content_scanning/file_analysis_request_base.h"
+#include "components/enterprise/connectors/core/service_provider_config.h"
+#include "components/file_access/scoped_file_access.h"
+
+#if !BUILDFLAG(IS_ANDROID)
 #include "chrome/common/safe_browsing/archive_analyzer_results.h"
+#include "chrome/services/file_util/public/cpp/sandboxed_rar_analyzer.h"
+#include "chrome/services/file_util/public/cpp/sandboxed_zip_analyzer.h"
+#endif  //! BUILDFLAG(IS_ANDROID)
 
 namespace safe_browsing {
 
-// A BinaryUploadService::Request implementation that gets the data to scan
-// from the contents of a file. It caches the results so that future calls to
-// GetRequestData will return quickly.
-class FileAnalysisRequest : public BinaryUploadService::Request {
+// A specialization of `FileAnalysisRequestBase` for analyzing archive files
+// (e.g., ZIP, RAR). It uses sandboxed analyzers to check for encryption before
+// uploading the file, allowing for an early result for encrypted files.
+class FileAnalysisRequest
+    : public enterprise_connectors::FileAnalysisRequestBase {
  public:
   FileAnalysisRequest(
       const enterprise_connectors::AnalysisSettings& analysis_settings,
       base::FilePath path,
       base::FilePath file_name,
       std::string mime_type,
-      BinaryUploadService::ContentAnalysisCallback callback);
+      bool delay_opening_file,
+      enterprise_connectors::BinaryUploadRequest::ContentAnalysisCallback
+          callback,
+      enterprise_connectors::BinaryUploadRequest::RequestStartCallback
+          start_callback = base::DoNothing(),
+      bool is_obfuscated = false,
+      bool force_sync_hash_computation = true);
   FileAnalysisRequest(const FileAnalysisRequest&) = delete;
   FileAnalysisRequest& operator=(const FileAnalysisRequest&) = delete;
   ~FileAnalysisRequest() override;
 
-  // BinaryUploadService::Request implementation.
-  void GetRequestData(DataCallback callback) override;
-
  private:
-  void OnGotFileData(
-      DataCallback callback,
-      std::pair<BinaryUploadService::Result, Data> result_and_data);
+#if !BUILDFLAG(IS_ANDROID)
+  void ProcessZipFile(Data data) override;
+  void ProcessRarFile(Data data) override;
 
-  void OnCheckedForEncryption(DataCallback callback,
-                              Data data,
+  void OnCheckedForEncryption(Data data,
                               const ArchiveAnalyzerResults& analyzer_result);
 
-  // Helper functions to access the request proto.
-  bool FileSupportedByDlp(const std::string& mime_type) const;
-  bool HasMalwareRequest() const;
+  // Used to unpack and analyze archives in a sandbox.
+  std::unique_ptr<SandboxedZipAnalyzer, base::OnTaskRunnerDeleter>
+      zip_analyzer_{nullptr, base::OnTaskRunnerDeleter(nullptr)};
+  std::unique_ptr<SandboxedRarAnalyzer, base::OnTaskRunnerDeleter>
+      rar_analyzer_{nullptr, base::OnTaskRunnerDeleter(nullptr)};
 
-  void CacheResultAndData(BinaryUploadService::Result result, Data data);
-
-  bool has_cached_result_;
-  BinaryUploadService::Result cached_result_;
-  Data cached_data_;
-
-  bool block_unsupported_types_;
-
-  // Path to the file on disk.
-  base::FilePath path_;
-
-  // File name excluding the path.
-  base::FilePath file_name_;
-
+#endif
   base::WeakPtrFactory<FileAnalysisRequest> weakptr_factory_{this};
 };
 

@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -8,16 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "base/macros.h"
-#include "base/values.h"
 #include "chrome/common/extensions/api/passwords_private.h"
 #include "components/keyed_service/core/keyed_service.h"
-#include "extensions/browser/event_router.h"
-#include "third_party/abseil-cpp/absl/types/optional.h"
-
-namespace content {
-class BrowserContext;
-}
 
 namespace extensions {
 
@@ -26,71 +18,41 @@ namespace extensions {
 // onPasswordExceptionsListChanged events of changes.
 class PasswordsPrivateEventRouter : public KeyedService {
  public:
-  static PasswordsPrivateEventRouter* Create(
-      content::BrowserContext* browser_context);
-  ~PasswordsPrivateEventRouter() override;
+  PasswordsPrivateEventRouter() = default;
+
+  ~PasswordsPrivateEventRouter() override = default;
 
   // Notifies listeners of updated passwords.
   // |entries| The new list of saved passwords.
-  void OnSavedPasswordsListChanged(
-      const std::vector<api::passwords_private::PasswordUiEntry>& entries);
+  virtual void OnSavedPasswordsListChanged(
+      const std::vector<api::passwords_private::PasswordUiEntry>& entries) = 0;
 
   // Notifies listeners of updated exceptions.
   // |exceptions| The new list of password exceptions.
-  void OnPasswordExceptionsListChanged(
-      const std::vector<api::passwords_private::ExceptionEntry>& exceptions);
+  virtual void OnPasswordExceptionsListChanged(
+      const std::vector<api::passwords_private::ExceptionEntry>&
+          exceptions) = 0;
 
-  // Notifies listeners after fetching a plain-text password.
-  // |id| the id for the password entry being shown.
-  // |plaintext_password| The human-readable password.
-  void OnPlaintextPasswordFetched(int id,
-                                  const std::string& plaintext_password);
-
-  // Notifies listeners after the passwords have been written to the export
-  // destination.
-  // |folder_name| In case of failure to export, this will describe destination
-  // we tried to write on.
-  void OnPasswordsExportProgress(
-      api::passwords_private::ExportProgressStatus status,
-      const std::string& folder_name);
-
-  // Notifies listeners about a (possible) change to the opt-in state for the
+  // Notifies listeners about a (possible) change to the active state for the
   // account-scoped password storage.
-  void OnAccountStorageOptInStateChanged(bool opted_in);
+  virtual void OnAccountStorageActiveStateChanged(bool active) = 0;
 
-  // Notifies listeners about a change to the information about compromised
+  // Notifies listeners about a change to the information about insecure
   // credentials.
-  void OnCompromisedCredentialsChanged(
-      std::vector<api::passwords_private::InsecureCredential>
-          compromised_credentials);
-
-  // Notifies listeners about a change to the information about weak
-  // credentials.
-  void OnWeakCredentialsChanged(
-      std::vector<api::passwords_private::InsecureCredential> weak_credentials);
+  virtual void OnInsecureCredentialsChanged(
+      std::vector<api::passwords_private::PasswordUiEntry>
+          insecure_credentials) = 0;
 
   // Notifies listeners about a change to the status of the password check.
-  void OnPasswordCheckStatusChanged(
-      const api::passwords_private::PasswordCheckStatus& status);
+  virtual void OnPasswordCheckStatusChanged(
+      const api::passwords_private::PasswordCheckStatus& status) = 0;
 
- protected:
-  explicit PasswordsPrivateEventRouter(content::BrowserContext* context);
+  // Notifies listeners about the timeout for password manager access.
+  virtual void OnPasswordManagerAuthTimeout() = 0;
 
- private:
-  void SendSavedPasswordListToListeners();
-  void SendPasswordExceptionListToListeners();
-
-  content::BrowserContext* context_;
-
-  EventRouter* event_router_;
-
-  // Cached parameters which are saved so that when new listeners are added, the
-  // most up-to-date lists can be sent to them immediately.
-  absl::optional<std::vector<base::Value>> cached_saved_password_parameters_;
-  absl::optional<std::vector<base::Value>>
-      cached_password_exception_parameters_;
-
-  DISALLOW_COPY_AND_ASSIGN(PasswordsPrivateEventRouter);
+  // Notifies listeners about a change to the password manager actionable error.
+  virtual void OnPasswordManagerActionableErrorChanged(
+      api::passwords_private::PasswordManagerActionableError error) = 0;
 };
 
 }  // namespace extensions

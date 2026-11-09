@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,11 @@
 #include <memory>
 #include <utility>
 
-#include "base/bind.h"
+#include "base/functional/bind.h"
+#include "base/notimplemented.h"
 #include "base/sequence_checker.h"
 #include "base/task/current_thread.h"
+#include "base/task/single_thread_task_runner.h"
 #include "base/time/time.h"
 #include "components/device_event_log/device_event_log.h"
 
@@ -152,8 +154,10 @@ bool SerialIoHandlerWin::PostOpen() {
   DCHECK(!read_context_);
   DCHECK(!write_context_);
 
-  base::CurrentIOThread::Get()->RegisterIOHandler(file().GetPlatformFile(),
-                                                  this);
+  if (!base::CurrentIOThread::Get()->RegisterIOHandler(file().GetPlatformFile(),
+                                                       this)) {
+    return false;
+  }
 
   read_context_ = std::make_unique<base::MessagePumpForIO::IOContext>();
   write_context_ = std::make_unique<base::MessagePumpForIO::IOContext>();
@@ -172,8 +176,7 @@ bool SerialIoHandlerWin::PostOpen() {
   COMMTIMEOUTS timeouts = {0};
   timeouts.ReadIntervalTimeout = MAXDWORD;
   timeouts.ReadTotalTimeoutMultiplier = MAXDWORD;
-  timeouts.ReadTotalTimeoutConstant =
-      base::TimeDelta::FromMinutes(5).InMilliseconds();
+  timeouts.ReadTotalTimeoutConstant = base::Minutes(5).InMilliseconds();
   if (!::SetCommTimeouts(file().GetPlatformFile(), &timeouts)) {
     SERIAL_PLOG(DEBUG) << "Failed to set serial timeouts";
     return false;
@@ -186,18 +189,13 @@ void SerialIoHandlerWin::ReadImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(IsReadPending());
 
-  if (!file().IsValid()) {
-    QueueReadCompleted(0, mojom::SerialReceiveError::DISCONNECTED);
-    return;
-  }
-
   ClearPendingError();
   if (!IsReadPending())
     return;
 
   if (!ReadFile(file().GetPlatformFile(), pending_read_buffer().data(),
                 pending_read_buffer().size(), nullptr,
-                &read_context_->overlapped) &&
+                read_context_->GetOverlapped()) &&
       GetLastError() != ERROR_IO_PENDING) {
     OnIOCompleted(read_context_.get(), 0, GetLastError());
   }
@@ -207,14 +205,9 @@ void SerialIoHandlerWin::WriteImpl() {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(IsWritePending());
 
-  if (!file().IsValid()) {
-    QueueWriteCompleted(0, mojom::SerialSendError::DISCONNECTED);
-    return;
-  }
-
   if (!WriteFile(file().GetPlatformFile(), pending_write_buffer().data(),
                  pending_write_buffer().size(), nullptr,
-                 &write_context_->overlapped) &&
+                 write_context_->GetOverlapped()) &&
       GetLastError() != ERROR_IO_PENDING) {
     OnIOCompleted(write_context_.get(), 0, GetLastError());
   }
@@ -318,7 +311,6 @@ void SerialIoHandlerWin::OnIOCompleted(
     } else {
       SERIAL_LOG(DEBUG) << "Write failed: "
                         << logging::SystemErrorCodeToString(error);
-      WriteCompleted(0, mojom::SerialSendError::SYSTEM_ERROR);
       if (error == ERROR_GEN_FAILURE && IsReadPending()) {
         // For devices using drivers such as FTDI, CP2xxx, when device is
         // disconnected, the context is |read_context_| and the error is
@@ -331,6 +323,7 @@ void SerialIoHandlerWin::OnIOCompleted(
         // disconnection.
         CancelRead(mojom::SerialReceiveError::SYSTEM_ERROR);
       }
+      WriteCompleted(0, mojom::SerialSendError::SYSTEM_ERROR);
     }
   } else {
     NOTREACHED() << "Invalid IOContext";

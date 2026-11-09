@@ -1,4 +1,4 @@
-// Copyright 2015 The Chromium Authors. All rights reserved.
+// Copyright 2015 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,46 +7,46 @@
 
 #include <memory>
 
-#include "base/macros.h"
+#include "base/memory/raw_ptr.h"
 #include "base/threading/thread_checker.h"
 #include "base/timer/timer.h"
-#include "third_party/webrtc/modules/desktop_capture/mouse_cursor_monitor.h"
+#include "remoting/protocol/mouse_cursor_monitor.h"
 
 namespace remoting {
 
 namespace protocol {
 class CursorShapeStub;
-}  // namespace
+}  // namespace protocol
 
 // MouseShapePump is responsible for capturing mouse shape using
 // MouseCursorMonitor and sending it to a CursorShapeStub.
-class MouseShapePump : public webrtc::MouseCursorMonitor::Callback {
+// TODO: crbug.com/447440351 - Maybe rename this class to CursorInfoPump.
+class MouseShapePump : public protocol::MouseCursorMonitor::Callback {
  public:
   MouseShapePump(
-      std::unique_ptr<webrtc::MouseCursorMonitor> mouse_cursor_monitor,
+      std::unique_ptr<protocol::MouseCursorMonitor> mouse_cursor_monitor,
       protocol::CursorShapeStub* cursor_shape_stub);
+
+  MouseShapePump(const MouseShapePump&) = delete;
+  MouseShapePump& operator=(const MouseShapePump&) = delete;
+
   ~MouseShapePump() override;
 
-  // Sets or unsets the callback to which to delegate MouseCursorMonitor events
-  // after they have been processed.
-  void SetMouseCursorMonitorCallback(
-      webrtc::MouseCursorMonitor::Callback* callback);
+  void SetCursorCaptureInterval(base::TimeDelta new_interval);
+  void SetSendCursorPositionToClient(bool send_cursor_position_to_client);
 
  private:
-  void Capture();
-
-  // webrtc::MouseCursorMonitor::Callback implementation.
-  void OnMouseCursor(webrtc::MouseCursor* mouse_cursor) override;
-  void OnMouseCursorPosition(const webrtc::DesktopVector& position) override;
+  // protocol::MouseCursorMonitor::Callback interface.
+  void OnMouseCursor(
+      std::unique_ptr<webrtc::MouseCursor> mouse_cursor) override;
+  void OnMouseCursorFractionalPosition(
+      const protocol::FractionalCoordinate& fractional_position) override;
 
   base::ThreadChecker thread_checker_;
-  std::unique_ptr<webrtc::MouseCursorMonitor> mouse_cursor_monitor_;
-  protocol::CursorShapeStub* cursor_shape_stub_;
+  std::unique_ptr<protocol::MouseCursorMonitor> mouse_cursor_monitor_;
+  raw_ptr<protocol::CursorShapeStub> cursor_shape_stub_;
 
-  base::RepeatingTimer capture_timer_;
-  webrtc::MouseCursorMonitor::Callback* callback_ = nullptr;
-
-  DISALLOW_COPY_AND_ASSIGN(MouseShapePump);
+  bool send_cursor_position_to_client_ = false;
 };
 
 }  // namespace remoting

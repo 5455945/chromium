@@ -1,4 +1,4 @@
-// Copyright 2014 The Chromium Authors. All rights reserved.
+// Copyright 2014 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -9,9 +9,9 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
-#include "base/macros.h"
-#include "base/memory/ref_counted.h"
+#include "base/memory/scoped_refptr.h"
 #include "components/policy/core/browser/browser_policy_connector_base.h"
 #include "components/policy/policy_export.h"
 
@@ -32,6 +32,8 @@ class PolicyStatisticsCollector;
 // subclasses.
 class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
  public:
+  BrowserPolicyConnector(const BrowserPolicyConnector&) = delete;
+  BrowserPolicyConnector& operator=(const BrowserPolicyConnector&) = delete;
   ~BrowserPolicyConnector() override;
 
   // Finalizes the initialization of the connector. This call can be skipped on
@@ -57,6 +59,14 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
     return device_management_service_.get();
   }
 
+  DeviceManagementService* GetTestDeviceManagementService();
+
+  // Allows setting a mock DeviceManagementService for tests. Does not take
+  // ownership, and should be reset to nullptr at the end of the test.
+  // Set this before an instance is built for a Profile.
+  static void SetDeviceManagementServiceForTesting(
+      DeviceManagementService* device_management_service);
+
   // Returns the URL for the device management service endpoint.
   std::string GetDeviceManagementUrl() const;
 
@@ -66,15 +76,8 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   // Returns the URL for the encrypted reporting service endpoint.
   std::string GetEncryptedReportingUrl() const;
 
-  // Check whether a user is known to be non-enterprise. Domains such as
-  // gmail.com and googlemail.com are known to not be managed. Also returns
-  // false if the username is empty.
-  static bool IsNonEnterpriseUser(const std::string& username);
-
-  // Allows to register domain for tests that is recognized as non-enterprise.
-  // Note that |domain| basically needs to live until this method is invoked
-  // with a nullptr.
-  static void SetNonEnterpriseDomainForTesting(const char* domain);
+  // Returns the URL for the File Storage Server endpoint for uploads.
+  std::string GetFileStorageServerUploadUrl() const;
 
   // Registers refresh rate prefs.
   static void RegisterPrefs(PrefRegistrySimple* registry);
@@ -97,11 +100,15 @@ class POLICY_EXPORT BrowserPolicyConnector : public BrowserPolicyConnectorBase {
   bool ProviderHasPolicies(const ConfigurationPolicyProvider* provider) const;
 
  private:
+  // Helper function to read URL overriding flags. If `flag` isn't set or if the
+  // Chrome channel doesn't allowing overriding, `default_value` is returned
+  // instead.
+  std::string GetUrlOverride(const char* flag,
+                             std::string_view default_value) const;
+
   std::unique_ptr<PolicyStatisticsCollector> policy_statistics_collector_;
 
   std::unique_ptr<DeviceManagementService> device_management_service_;
-
-  DISALLOW_COPY_AND_ASSIGN(BrowserPolicyConnector);
 };
 
 }  // namespace policy

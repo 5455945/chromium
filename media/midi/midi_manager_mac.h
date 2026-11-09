@@ -1,4 +1,4 @@
-// Copyright (c) 2013 The Chromium Authors. All rights reserved.
+// Copyright 2013 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -7,14 +7,11 @@
 
 #include <CoreMIDI/MIDIServices.h>
 #include <stdint.h>
+
 #include <vector>
 
-#include "base/callback.h"
-#include "base/compiler_specific.h"
-#include "base/macros.h"
 #include "base/synchronization/lock.h"
 #include "base/thread_annotations.h"
-#include "base/threading/thread.h"
 #include "media/midi/midi_export.h"
 #include "media/midi/midi_manager.h"
 #include "media/midi/midi_service.mojom.h"
@@ -26,6 +23,10 @@ class MidiService;
 class MIDI_EXPORT MidiManagerMac final : public MidiManager {
  public:
   explicit MidiManagerMac(MidiService* service);
+
+  MidiManagerMac(const MidiManagerMac&) = delete;
+  MidiManagerMac& operator=(const MidiManagerMac&) = delete;
+
   ~MidiManagerMac() override;
 
   // MidiManager implementation.
@@ -36,8 +37,7 @@ class MIDI_EXPORT MidiManagerMac final : public MidiManager {
                             base::TimeTicks timestamp) override;
 
  private:
-  // Initializes CoreMIDI on |client_thread_| asynchronously. Called from
-  // StartInitialization().
+  // Initializes CoreMIDI asynchronously. Called from StartInitialization().
   void InitializeCoreMIDI();
 
   // Completes CoreMIDI initialization and asks the thread that ran
@@ -53,11 +53,10 @@ class MIDI_EXPORT MidiManagerMac final : public MidiManager {
   // CoreMIDI callback for MIDI data.
   // Each callback can contain multiple packets, each of which can contain
   // multiple MIDI messages.
-  static void ReadMidiDispatch(const MIDIPacketList* packet_list,
-                               void* read_proc_refcon,
-                               void* src_conn_refcon);
+  void ReceiveMidiEventList(uint32_t port_index,
+                            const MIDIEventList* event_list);
 
-  // An internal callback that runs on MidiSendThread.
+  // An internal callback that runs on kClientTaskRunner.
   void SendMidiData(MidiManagerClient* client,
                     uint32_t port_index,
                     const std::vector<uint8_t>& data,
@@ -81,8 +80,6 @@ class MIDI_EXPORT MidiManagerMac final : public MidiManager {
 
   // Keeps track of all destinations.
   std::vector<MIDIEndpointRef> destinations_;
-
-  DISALLOW_COPY_AND_ASSIGN(MidiManagerMac);
 };
 
 }  // namespace midi

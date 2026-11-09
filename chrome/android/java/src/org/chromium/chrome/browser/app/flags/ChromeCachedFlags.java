@@ -1,4 +1,4 @@
-// Copyright 2020 The Chromium Authors. All rights reserved.
+// Copyright 2020 The Chromium Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
@@ -6,47 +6,111 @@ package org.chromium.chrome.browser.app.flags;
 
 import android.text.TextUtils;
 
-import org.chromium.base.annotations.RemovableInRelease;
-import org.chromium.chrome.browser.compositor.layouts.content.TabContentManager;
-import org.chromium.chrome.browser.customtabs.CustomTabActivity;
+import androidx.annotation.AnyThread;
+import androidx.annotation.VisibleForTesting;
+
+import org.jni_zero.CalledByNative;
+import org.jni_zero.JniType;
+
+import org.chromium.base.FeatureMap;
+import org.chromium.build.BuildConfig;
+import org.chromium.build.annotations.NullMarked;
 import org.chromium.chrome.browser.firstrun.FirstRunUtils;
-import org.chromium.chrome.browser.flags.CachedFeatureFlags;
-import org.chromium.chrome.browser.flags.CachedFieldTrialParameter;
 import org.chromium.chrome.browser.flags.ChromeFeatureList;
-import org.chromium.chrome.browser.lens.LensFeature;
-import org.chromium.chrome.browser.merchant_viewer.MerchantViewerConfig;
-import org.chromium.chrome.browser.notifications.chime.ChimeFeatures;
-import org.chromium.chrome.browser.page_annotations.PageAnnotationsServiceConfig;
-import org.chromium.chrome.browser.paint_preview.StartupPaintPreviewHelper;
-import org.chromium.chrome.browser.subscriptions.CommerceSubscriptionsServiceConfig;
-import org.chromium.chrome.browser.tasks.ConditionalTabStripUtils;
-import org.chromium.chrome.browser.tasks.ReturnToChromeExperimentsUtil;
-import org.chromium.chrome.browser.tasks.tab_management.PriceTrackingUtilities;
-import org.chromium.chrome.browser.tasks.tab_management.TabUiFeatureUtilities;
-import org.chromium.chrome.browser.toolbar.adaptive.AdaptiveToolbarFeatures;
-import org.chromium.chrome.features.start_surface.StartSurfaceConfiguration;
+import org.chromium.chrome.browser.flags.ChromeFeatureMap;
+import org.chromium.chrome.browser.preferences.ChromePreferenceKeys;
+import org.chromium.chrome.browser.preferences.ChromeSharedPreferences;
+import org.chromium.components.browser_ui.media.MediaFeatureList;
+import org.chromium.components.browser_ui.media.MediaFeatureMap;
+import org.chromium.components.browser_ui.modaldialog.ModalDialogFeatureMap;
+import org.chromium.components.browser_ui.notifications.NotificationFeatureMap;
+import org.chromium.components.cached_flags.CachedFeatureParam;
+import org.chromium.components.cached_flags.CachedFlag;
+import org.chromium.components.cached_flags.CachedFlagUtils;
+import org.chromium.components.cached_flags.CachedFlagsSafeMode;
+import org.chromium.components.omnibox.OmniboxFeatureMap;
+import org.chromium.components.omnibox.OmniboxFeatures;
+import org.chromium.components.permissions.PermissionsAndroidFeatureList;
+import org.chromium.components.permissions.PermissionsAndroidFeatureMap;
+import org.chromium.components.signin.SigninFeatureMap;
+import org.chromium.content_public.browser.ContentFeatureList;
+import org.chromium.content_public.browser.ContentFeatureMap;
+import org.chromium.content_public.browser.JavalessRenderersFeatureList;
+import org.chromium.ui.base.UiAndroidFeatureList;
+import org.chromium.ui.base.UiAndroidFeatureMap;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
-/**
- * Caches the flags that Chrome might require before native is loaded in a later next run.
- */
+/** Caches the flags that Chrome might require before native is loaded in a later next run. */
+@NullMarked
 public class ChromeCachedFlags {
-    private boolean mIsFinishedCachingNativeFlags;
-
     private static final ChromeCachedFlags INSTANCE = new ChromeCachedFlags();
 
+    @VisibleForTesting
+    static final List<FeatureMap> LIST_OF_FEATURE_MAPS =
+            List.of(
+                    ChromeFeatureMap.getInstance(),
+                    ContentFeatureMap.getInstance(),
+                    OmniboxFeatureMap.getInstance(),
+                    ModalDialogFeatureMap.getInstance(),
+                    UiAndroidFeatureMap.getInstance(),
+                    SigninFeatureMap.getInstance(),
+                    MediaFeatureMap.getInstance(),
+                    PermissionsAndroidFeatureMap.getInstance(),
+                    NotificationFeatureMap.getInstance());
+
+    // The list of cached flags should be derived from the list of feature maps above.
+    static final List<List<CachedFlag>> LISTS_OF_CACHED_FLAGS_FULL_BROWSER =
+            List.of(
+                    ChromeFeatureList.sFlagsCachedFullBrowser,
+                    JavalessRenderersFeatureList.sCachedFlags,
+                    ContentFeatureList.sCachedFlags,
+                    OmniboxFeatures.getFlagsToCache(),
+                    ModalDialogFeatureMap.sCachedFlags,
+                    UiAndroidFeatureList.sFlagsCachedUiAndroid,
+                    SigninFeatureMap.sCachedFlags,
+                    MediaFeatureList.getAllCachedFlags(),
+                    NotificationFeatureMap.sCachedFlags);
+    static final List<List<CachedFlag>> LISTS_OF_CACHED_FLAGS_MINIMAL_BROWSER =
+            List.of(ChromeFeatureList.sFlagsCachedInMinimalBrowser);
+
+    static final List<List<CachedFlag>> LISTS_OF_CACHED_FLAGS =
+            List.of(
+                    ChromeFeatureList.sFlagsCachedFullBrowser,
+                    JavalessRenderersFeatureList.sCachedFlags,
+                    ContentFeatureList.sCachedFlags,
+                    OmniboxFeatures.getFlagsToCache(),
+                    ModalDialogFeatureMap.sCachedFlags,
+                    ChromeFeatureList.sFlagsCachedInMinimalBrowser,
+                    UiAndroidFeatureList.sFlagsCachedUiAndroid,
+                    MediaFeatureList.getAllCachedFlags(),
+                    NotificationFeatureMap.sCachedFlags);
+
+    // The list of feature params should be derived from the list of feature maps above.
+    static final List<List<CachedFeatureParam<?>>> LISTS_OF_FEATURE_PARAMS_FULL_BROWSER =
+            List.of(
+                    ChromeFeatureList.sParamsCached,
+                    OmniboxFeatures.getFeatureParamsToCache(),
+                    PermissionsAndroidFeatureList.getFeatureParamsToCache(),
+                    UiAndroidFeatureList.sParamsCached);
+
     /**
-     * A list of field trial parameters that will be cached when starting minimal browser mode. See
+     * A list of feature parameters that will be cached when starting minimal browser mode. See
      * {@link #cacheMinimalBrowserFlags()}.
      */
-    private static final List<CachedFieldTrialParameter> MINIMAL_BROWSER_FIELD_TRIALS =
-            Arrays.asList(
-                    // This is used by CustomTabsConnection implementation, which does not
-                    // necessarily start chrome.
-                    CustomTabActivity.EXPERIMENTS_FOR_AGSA_PARAMS);
+    static final List<List<CachedFeatureParam<?>>> LISTS_OF_FEATURE_PARAMS_MINIMAL_BROWSER =
+            List.of();
+
+    static final List<List<CachedFeatureParam<?>>> LISTS_OF_FEATURE_PARAMS =
+            List.of(
+                    ChromeFeatureList.sParamsCached,
+                    OmniboxFeatures.getFeatureParamsToCache(),
+                    PermissionsAndroidFeatureList.getFeatureParamsToCache(),
+                    UiAndroidFeatureList.sParamsCached);
+
+    private boolean mIsFinishedCachingNativeFlags;
 
     /**
      * @return The {@link ChromeCachedFlags} singleton.
@@ -56,140 +120,96 @@ public class ChromeCachedFlags {
     }
 
     /**
+     * Pass the full list of CachedFlags and CachedFeatureParams to CachedFlagUtils. This is needed
+     * before calling CachedFlagUtils.cacheNativeFlagsImmediately() and
+     * CachedFlagUtils.cacheFeatureParamsImmediately().
+     */
+    public void setFullListOfFlags() {
+        CachedFlagUtils.setFullListOfFlags(LISTS_OF_CACHED_FLAGS);
+        CachedFlagUtils.setFullListOfFeatureParams(LISTS_OF_FEATURE_PARAMS);
+    }
+
+    /**
      * Caches flags that are needed by Activities that launch before the native library is loaded
      * and stores them in SharedPreferences. Because this function is called during launch after the
-     * library has loaded, they won't affect the next launch until Chrome is restarted.
+     * library has loaded, any flags that have already been accessed won't reflect the most recent
+     * server configuration state until the next launch after Chrome is restarted.
      */
     public void cacheNativeFlags() {
         if (mIsFinishedCachingNativeFlags) return;
         FirstRunUtils.cacheFirstRunPrefs();
 
-        // clang-format off
-        List<String> featuresToCache = Arrays.asList(
-                ChromeFeatureList.ADAPTIVE_BUTTON_IN_TOP_TOOLBAR,
-                ChromeFeatureList.ANDROID_PARTNER_CUSTOMIZATION_PHENOTYPE,
-                ChromeFeatureList.APP_MENU_MOBILE_SITE_OPTION,
-                ChromeFeatureList.APP_TO_WEB_ATTRIBUTION,
-                ChromeFeatureList.BOOKMARK_BOTTOM_SHEET,
-                ChromeFeatureList.CCT_INCOGNITO,
-                ChromeFeatureList.CCT_INCOGNITO_AVAILABLE_TO_THIRD_PARTY,
-                ChromeFeatureList.CCT_REMOVE_REMOTE_VIEW_IDS,
-                ChromeFeatureList.CLIPBOARD_SUGGESTION_CONTENT_HIDDEN,
-                ChromeFeatureList.CLOSE_TAB_SUGGESTIONS,
-                ChromeFeatureList.CRITICAL_PERSISTED_TAB_DATA,
-                ChromeFeatureList.COMMAND_LINE_ON_NON_ROOTED,
-                ChromeFeatureList.CONDITIONAL_TAB_STRIP_ANDROID,
-                ChromeFeatureList.DOWNLOADS_AUTO_RESUMPTION_NATIVE,
-                ChromeFeatureList.DYNAMIC_COLOR_ANDROID,
-                ChromeFeatureList.EARLY_LIBRARY_LOAD,
-                ChromeFeatureList.IMMERSIVE_UI_MODE,
-                ChromeFeatureList.INSTANT_START,
-                ChromeFeatureList.INTEREST_FEED_V2,
-                ChromeFeatureList.LENS_CAMERA_ASSISTED_SEARCH,
-                ChromeFeatureList.NEW_WINDOW_APP_MENU,
-                ChromeFeatureList.OFFLINE_MEASUREMENTS_BACKGROUND_TASK,
-                ChromeFeatureList.OPTIMIZATION_GUIDE_PUSH_NOTIFICATIONS,
-                ChromeFeatureList.PAINT_PREVIEW_DEMO,
-                ChromeFeatureList.PAINT_PREVIEW_SHOW_ON_STARTUP,
-                ChromeFeatureList.PRIORITIZE_BOOTSTRAP_TASKS,
-                ChromeFeatureList.READ_LATER,
-                ChromeFeatureList.START_SURFACE_ANDROID,
-                ChromeFeatureList.STORE_HOURS,
-                ChromeFeatureList.SWAP_PIXEL_FORMAT_TO_FIX_CONVERT_FROM_TRANSLUCENT,
-                ChromeFeatureList.TAB_GRID_LAYOUT_ANDROID,
-                ChromeFeatureList.TAB_GROUPS_ANDROID,
-                ChromeFeatureList.TAB_GROUPS_CONTINUATION_ANDROID,
-                ChromeFeatureList.TAB_TO_GTS_ANIMATION,
-                ChromeFeatureList.THEME_REFACTOR_ANDROID,
-                ChromeFeatureList.TOOLBAR_USE_HARDWARE_BITMAP_DRAW,
-                ChromeFeatureList.USE_CHIME_ANDROID_SDK);
-        // clang-format on
-        CachedFeatureFlags.cacheNativeFlags(featuresToCache);
-        CachedFeatureFlags.cacheAdditionalNativeFlags();
+        CachedFlagUtils.cacheNativeFlags(LISTS_OF_CACHED_FLAGS_FULL_BROWSER);
 
-        // clang-format off
-        List<CachedFieldTrialParameter> fieldTrialsToCache = Arrays.asList(
-                AdaptiveToolbarFeatures.MODE_PARAM,
-                ChimeFeatures.ALWAYS_REGISTER,
-                ConditionalTabStripUtils.CONDITIONAL_TAB_STRIP_INFOBAR_LIMIT,
-                ConditionalTabStripUtils.CONDITIONAL_TAB_STRIP_INFOBAR_PERIOD,
-                ConditionalTabStripUtils.CONDITIONAL_TAB_STRIP_SESSION_TIME_MS,
-                LensFeature.DISABLE_LENS_CAMERA_ASSISTED_SEARCH_ON_INCOGNITO,
-                LensFeature.ENABLE_LENS_CAMERA_ASSISTED_SEARCH_ON_LOW_END_DEVICE,
-                LensFeature.ENABLE_LENS_CAMERA_ASSISTED_SEARCH_ON_TABLET,
-                LensFeature.SEARCH_BOX_START_VARIANT_LENS_CAMERA_ASSISTED_SEARCH,
-                LensFeature.MIN_AGSA_VERSION_LENS_CAMERA_ASSISTED_SEARCH,
-                MerchantViewerConfig.DEFAULT_TRUST_SIGNALS_MESSAGE_DELAY,
-                MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_USE_RATING_BAR,
-                MerchantViewerConfig.TRUST_SIGNALS_MESSAGE_WINDOW_DURATION_SECONDS,
-                MerchantViewerConfig.TRUST_SIGNALS_SHEET_USE_PAGE_TITLE,
-                PageAnnotationsServiceConfig.PAGE_ANNOTATIONS_BASE_URL,
-                ReturnToChromeExperimentsUtil.TAB_SWITCHER_ON_RETURN_MS,
-                StartSurfaceConfiguration.HOME_BUTTON_ON_GRID_TAB_SWITCHER,
-                StartSurfaceConfiguration.NEW_SURFACE_FROM_HOME_BUTTON,
-                StartSurfaceConfiguration.OMNIBOX_FOCUSED_ON_NEW_TAB,
-                StartSurfaceConfiguration.SHOW_TABS_IN_MRU_ORDER,
-                StartSurfaceConfiguration.START_SURFACE_EXCLUDE_MV_TILES,
-                StartSurfaceConfiguration.START_SURFACE_HIDE_INCOGNITO_SWITCH_NO_TAB,
-                StartSurfaceConfiguration.START_SURFACE_LAST_ACTIVE_TAB_ONLY,
-                StartSurfaceConfiguration.START_SURFACE_OPEN_NTP_INSTEAD_OF_START,
-                StartSurfaceConfiguration.SHOW_NTP_TILES_ON_OMNIBOX,
-                StartSurfaceConfiguration.START_SURFACE_VARIATION,
-                StartSurfaceConfiguration.SUPPORT_ACCESSIBILITY,
-                StartupPaintPreviewHelper.ACCESSIBILITY_SUPPORT_PARAM,
-                CommerceSubscriptionsServiceConfig.STALE_TAB_LOWER_BOUND_SECONDS,
-                CommerceSubscriptionsServiceConfig.SUBSCRIPTIONS_SERVICE_BASE_URL,
-                PriceTrackingUtilities.ENABLE_PRICE_NOTIFICATION,
-                PriceTrackingUtilities.ENABLE_PRICE_TRACKING,
-                TabContentManager.ALLOW_TO_REFETCH_TAB_THUMBNAIL_VARIATION,
-                TabUiFeatureUtilities.ENABLE_LAUNCH_BUG_FIX,
-                TabUiFeatureUtilities.ENABLE_LAUNCH_POLISH,
-                TabUiFeatureUtilities.ENABLE_SEARCH_CHIP,
-                TabUiFeatureUtilities.ENABLE_SEARCH_CHIP_ADAPTIVE,
-                TabUiFeatureUtilities.ENABLE_TAB_GROUP_AUTO_CREATION,
-                TabUiFeatureUtilities.ZOOMING_MIN_MEMORY,
-                TabUiFeatureUtilities.ZOOMING_MIN_SDK,
-                TabUiFeatureUtilities.SKIP_SLOW_ZOOMING,
-                TabUiFeatureUtilities.TAB_GRID_LAYOUT_ANDROID_NEW_TAB_TILE,
-                TabUiFeatureUtilities.THUMBNAIL_ASPECT_RATIO);
-        // clang-format on
-        tryToCatchMissingParameters(fieldTrialsToCache);
-        CachedFeatureFlags.cacheFieldTrialParameters(fieldTrialsToCache);
+        tryToCatchMissingParameters();
+        CachedFlagUtils.cacheFeatureParams(LISTS_OF_FEATURE_PARAMS_FULL_BROWSER);
 
+        CachedFlagsSafeMode.getInstance().onEndCheckpoint();
         mIsFinishedCachingNativeFlags = true;
     }
 
-    @RemovableInRelease
-    private void tryToCatchMissingParameters(List<CachedFieldTrialParameter> listed) {
-        // All instances of CachedFieldTrialParameter should be manually passed to
-        // CachedFeatureFlags.cacheFieldTrialParameters(). The following checking is a best-effort
+    private void tryToCatchMissingParameters() {
+        if (!BuildConfig.ENABLE_ASSERTS) return;
+
+        var paramsFullBrowser = new ArrayList<CachedFeatureParam<?>>();
+        for (List<CachedFeatureParam<?>> list : LISTS_OF_FEATURE_PARAMS_FULL_BROWSER) {
+            paramsFullBrowser.addAll(list);
+        }
+        var paramsMinimalBrowser = new ArrayList<CachedFeatureParam<?>>();
+        for (List<CachedFeatureParam<?>> list : LISTS_OF_FEATURE_PARAMS_MINIMAL_BROWSER) {
+            paramsMinimalBrowser.addAll(list);
+        }
+
+        // All instances of CachedFeatureParam should be manually passed to
+        // CachedFeatureFlags.cacheFeatureParams(). The following checking is a best-effort
         // attempt to try to catch accidental omissions. It cannot replace the list because some
         // instances might not be instantiated if the classes they belong to are not accessed yet.
         List<String> omissions = new ArrayList<>();
-        for (CachedFieldTrialParameter trial : CachedFieldTrialParameter.getAllInstances()) {
-            if (listed.contains(trial)) continue;
-            if (MINIMAL_BROWSER_FIELD_TRIALS.contains(trial)) continue;
-            omissions.add(trial.getFeatureName() + ":" + trial.getParameterName());
+        Set<CachedFeatureParam<?>> params = CachedFeatureParam.getAllInstances();
+        assert params != null;
+        for (CachedFeatureParam<?> param : params) {
+            if (paramsFullBrowser.contains(param)) continue;
+            if (paramsMinimalBrowser.contains(param)) continue;
+            omissions.add(param.getFeatureName() + ":" + param.getName());
         }
         assert omissions.isEmpty()
-            : "The following trials are not correctly cached: "
-                + TextUtils.join(", ", omissions);
+                : "The following params are not correctly cached: "
+                        + TextUtils.join(", ", omissions);
     }
 
     /**
-     * Caches flags that are enabled in minimal browser mode and must take effect on startup but
-     * are set via native code. This function needs to be called in minimal browser mode to mark
-     * these field trials as active, otherwise histogram data recorded in minimal browser mode
-     * won't be tagged with their corresponding field trial experiments.
+     * Caches flags that are enabled in minimal browser mode and must take effect on startup but are
+     * set via native code. This function needs to be called in minimal browser mode to mark these
+     * field trials as active, otherwise histogram data recorded in minimal browser mode won't be
+     * tagged with their corresponding field trial experiments.
      */
     public void cacheMinimalBrowserFlags() {
-        CachedFeatureFlags.cacheMinimalBrowserFlagsTimeFromNativeTime();
+        cacheMinimalBrowserFlagsTimeFromNativeTime();
+        CachedFlagUtils.cacheNativeFlags(LISTS_OF_CACHED_FLAGS_MINIMAL_BROWSER);
+        CachedFlagUtils.cacheFeatureParams(LISTS_OF_FEATURE_PARAMS_MINIMAL_BROWSER);
+    }
 
-        // TODO(crbug.com/995355): Move other related flags from cacheNativeFlags() to here.
-        CachedFeatureFlags.cacheNativeFlags(Arrays.asList(ChromeFeatureList.EXPERIMENTS_FOR_AGSA,
-                ChromeFeatureList.SERVICE_MANAGER_FOR_DOWNLOAD,
-                ChromeFeatureList.SERVICE_MANAGER_FOR_BACKGROUND_PREFETCH));
+    @VisibleForTesting
+    static void cacheMinimalBrowserFlagsTimeFromNativeTime() {
+        ChromeSharedPreferences.getInstance()
+                .writeLong(
+                        ChromePreferenceKeys.FLAGS_LAST_CACHED_MINIMAL_BROWSER_FLAGS_TIME_MILLIS,
+                        System.currentTimeMillis());
+    }
 
-        CachedFeatureFlags.cacheFieldTrialParameters(MINIMAL_BROWSER_FIELD_TRIALS);
+    public static long getLastCachedMinimalBrowserFlagsTimeMillis() {
+        return ChromeSharedPreferences.getInstance()
+                .readLong(
+                        ChromePreferenceKeys.FLAGS_LAST_CACHED_MINIMAL_BROWSER_FLAGS_TIME_MILLIS,
+                        0);
+    }
+
+    @CalledByNative
+    @AnyThread
+    static boolean isEnabled(@JniType("std::string") String featureName) {
+        CachedFlag cachedFlag = ChromeFeatureList.sAllCachedFlags.get(featureName);
+        assert cachedFlag != null;
+
+        return cachedFlag.isEnabled();
     }
 }
